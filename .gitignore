@@ -1,0 +1,42 @@
+# Swift build artifacts
+.build/
+*.o
+*.d
+*.swp
+*.lock
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+*.moved-aside
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+xcuserdata/
+*.xccheckout
+*.xcscmblueprint
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+
+# App bundle (built artifact, not source)
+*.app/
+
+# Mission Control coordination folder (runtime, not source)
+.mission-control/
+
+# Claude Code session files
+.claude/settings.local.json
