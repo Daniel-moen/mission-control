@@ -26,6 +26,18 @@ final class Settings: ObservableObject {
     @Published var lastLaunchDir: String {
         didSet { defaults.set(lastLaunchDir, forKey: Keys.lastLaunchDir) }
     }
+    /// Which terminal app the user wants new agents launched in. Stored as the
+    /// `LaunchTerminal` raw value; see `launchTerminal` for the typed accessor.
+    @Published var launchTerminalID: String {
+        didSet { defaults.set(launchTerminalID, forKey: Keys.launchTerminalID) }
+    }
+
+    /// Typed view of the user's chosen launch terminal, defaulting to the
+    /// always-present Terminal.app when nothing's been picked yet.
+    var launchTerminal: TerminalBridge.LaunchTerminal {
+        get { TerminalBridge.LaunchTerminal(rawValue: launchTerminalID) ?? .terminal }
+        set { launchTerminalID = newValue.rawValue }
+    }
 
     private let defaults = UserDefaults.standard
     private enum Keys {
@@ -35,6 +47,7 @@ final class Settings: ObservableObject {
         static let playSound = "playSound"
         static let expandFeeds = "expandFeeds"
         static let lastLaunchDir = "lastLaunchDir"
+        static let launchTerminalID = "launchTerminalID"
     }
 
     private init() {
@@ -49,5 +62,6 @@ final class Settings: ObservableObject {
         playSound = bool(Keys.playSound, default: true)
         expandFeeds = bool(Keys.expandFeeds, default: false)
         lastLaunchDir = store.string(forKey: Keys.lastLaunchDir) ?? ""
+        launchTerminalID = store.string(forKey: Keys.launchTerminalID) ?? TerminalBridge.LaunchTerminal.terminal.rawValue
     }
 }

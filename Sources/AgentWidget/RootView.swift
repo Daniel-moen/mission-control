@@ -25,14 +25,16 @@ struct RootView: View {
     @EnvironmentObject var manager: AgentManager
     @EnvironmentObject var settings: Settings
     @State private var tab: RootTab = .fleet
+    @State private var breathe = false
+    @Namespace private var tabNS
 
     /// The whole app is tinted by the fleet's dominant mood — green while
     /// burning, amber when something waits on you, blue when all's done.
     private var fleetTint: Color {
         let s = manager.summary
-        if s.active > 0 { return Color(red: 0.20, green: 0.92, blue: 0.55) }
-        if s.attention > 0 { return Color(red: 1.0, green: 0.80, blue: 0.18) }
-        if s.total > 0 { return Color(red: 0.40, green: 0.55, blue: 0.95) }
+        if s.active > 0 { return AgentRun.workingTint }
+        if s.attention > 0 { return AgentRun.waitingTint }
+        if s.total > 0 { return AgentRun.doneTint }
         return .purple
     }
 
@@ -41,11 +43,23 @@ struct RootView: View {
         return min(1, Double(manager.summary.active) / Double(manager.summary.total))
     }
 
+    /// Is the fleet doing anything worth animating for? Drives whether the
+    /// continuous Canvas effects (aurora, equalizers) actually tick or freeze.
+    private var fleetBusy: Bool {
+        manager.summary.active > 0 || manager.summary.tokensPerSec > 0
+    }
+
     var body: some View {
         ZStack {
             AuroraBackground(tint: tab == .burn ? .orange : fleetTint,
-                             energy: tab == .burn ? max(0.5, fleetEnergy) : fleetEnergy)
+                             energy: tab == .burn ? max(0.5, fleetEnergy) : fleetEnergy,
+                             animate: manager.popoverVisible && fleetBusy)
                 .ignoresSafeArea()
+            // Legibility scrim — deepens top (brand/tabs) and bottom edges so
+            // text stays crisp over the translucent aurora glass.
+            LinearGradient(colors: [.black.opacity(0.26), .clear, .clear, .black.opacity(0.34)],
+                           startPoint: .top, endPoint: .bottom)
+                .ignoresSafeArea().allowsHitTesting(false)
             VStack(spacing: 0) {
                 brandBar
                 tabBar
@@ -56,40 +70,71 @@ struct RootView: View {
                     case .burn:   BurnView()
                     }
                 }
-                .transition(.opacity)
+                .transition(.opacity.combined(with: .scale(scale: 0.985)))
             }
             Celebration(trigger: manager.lastFinishAt)
                 .allowsHitTesting(false)
         }
         .frame(width: 460, height: 700)
         .animation(.easeInOut(duration: 0.8), value: fleetTint)
+        .onAppear { syncBreath() }
+        .onChange(of: manager.popoverVisible) { _ in syncBreath() }
+    }
+
+    /// Gentle "breathing" on the brand mark — only animates while the popover is
+    /// actually visible, so it respects the app's idle/hidden gating.
+    private func syncBreath() {
+        withAnimation(manager.popoverVisible
+                      ? .easeInOut(duration: 2.4).repeatForever(autoreverses: true)
+                      : .easeOut(duration: 0.3)) {
+            breathe = manager.popoverVisible
+        }
     }
 
     // MARK: Brand bar
 
     private var brandBar: some View {
-        HStack(spacing: 9) {
-            ZStack {
-                Circle().fill(LinearGradient(colors: [fleetTint, .purple],
-                                             startPoint: .topLeading, endPoint: .bottomTrailing))
-                    .frame(width: 24, height: 24)
-                    .shadow(color: fleetTint.opacity(0.6), radius: 6)
-                Image(systemName: "dot.radiowaves.left.and.right")
-                    .font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
-            }
-            VStack(alignment: .leading, spacing: 0) {
-                Text("Mission Control").font(.headline)
-                Text(headline).font(.system(size: 9)).foregroundStyle(.secondary)
+        HStack(spacing: 10) {
+            brandMark
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Mission Control")
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                Text(headline)
+                    .font(.system(size: 9)).foregroundStyle(.secondary)
+                    .contentTransition(.opacity)
             }
             Spacer()
             Equalizer(color: fleetTint, active: manager.summary.active > 0,
-                      intensity: fleetEnergy, bars: 9)
+                      intensity: fleetEnergy, bars: 9, animate: manager.popoverVisible)
                 .frame(width: 38, height: 18)
                 .opacity(0.9)
             settingsMenu
             iconButton("power", help: "Quit") { NSApplication.shared.terminate(nil) }
         }
-        .padding(.horizontal, 12).padding(.top, 9).padding(.bottom, 7)
+        .padding(.horizontal, 14).padding(.top, 11).padding(.bottom, 8)
+    }
+
+    /// The living brand mark: a gradient disc that gently breathes and emits a
+    /// soft expanding halo while the popover is open.
+    private var brandMark: some View {
+        ZStack {
+            Circle()
+                .stroke(fleetTint.opacity(0.5), lineWidth: 1)
+                .frame(width: 26, height: 26)
+                .scaleEffect(breathe ? 1.55 : 1)
+                .opacity(breathe ? 0 : 0.6)
+            Circle()
+                .fill(LinearGradient(colors: [fleetTint, .purple],
+                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+                .frame(width: 26, height: 26)
+                .overlay(
+                    Circle().stroke(LinearGradient(colors: [.white.opacity(0.5), .clear],
+                                                   startPoint: .top, endPoint: .bottom), lineWidth: 1))
+                .shadow(color: fleetTint.opacity(0.6), radius: breathe ? 10 : 6)
+                .scaleEffect(breathe ? 1.05 : 0.97)
+            Image(systemName: "dot.radiowaves.left.and.right")
+                .font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
+        }
     }
 
     private var headline: String {
@@ -107,12 +152,19 @@ struct RootView: View {
             ForEach(RootTab.allCases) { t in
                 TabPill(tab: t, selected: tab == t,
                         tint: t == .burn ? .orange : fleetTint,
-                        live: t == .burn && manager.summary.tokensPerSec > 0) {
-                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { tab = t }
+                        live: t == .burn && manager.summary.tokensPerSec > 0,
+                        ns: tabNS) {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) { tab = t }
                 }
             }
         }
-        .padding(.horizontal, 12).padding(.bottom, 8)
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(.ultraThinMaterial).opacity(0.55)
+                .overlay(RoundedRectangle(cornerRadius: 14)
+                    .stroke(.white.opacity(0.06), lineWidth: 1)))
+        .padding(.horizontal, 12).padding(.bottom, 9)
     }
 
     private func iconButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
@@ -151,6 +203,7 @@ struct TabPill: View {
     let selected: Bool
     let tint: Color
     var live: Bool = false
+    var ns: Namespace.ID
     let action: () -> Void
 
     var body: some View {
@@ -161,17 +214,20 @@ struct TabPill: View {
             }
             .foregroundStyle(selected ? .white : .secondary)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(selected ? AnyShapeStyle(LinearGradient(colors: [tint, tint.opacity(0.7)],
-                                                                  startPoint: .top, endPoint: .bottom))
-                                   : AnyShapeStyle(Color.secondary.opacity(0.10)))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(selected ? tint.opacity(0.6) : .clear, lineWidth: 1))
-            .shadow(color: selected ? tint.opacity(0.4) : .clear, radius: 5, y: 1)
+            .padding(.vertical, 7)
+            .background {
+                if selected {
+                    // A single shared highlight that glides between tabs.
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(LinearGradient(colors: [tint, tint.opacity(0.72)],
+                                             startPoint: .top, endPoint: .bottom))
+                        .overlay(RoundedRectangle(cornerRadius: 10)
+                            .stroke(LinearGradient(colors: [.white.opacity(0.4), .clear],
+                                                   startPoint: .top, endPoint: .bottom), lineWidth: 1))
+                        .shadow(color: tint.opacity(0.45), radius: 8, y: 2)
+                        .matchedGeometryEffect(id: "tabSelection", in: ns)
+                }
+            }
         }
         .buttonStyle(.plain)
     }

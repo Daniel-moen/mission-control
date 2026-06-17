@@ -2,7 +2,10 @@ import SwiftUI
 
 /// The "watch it burn" tab: a live wall of fire whose ferocity tracks the
 /// fleet's real token throughput, a glowing running total, and a leaderboard of
-/// who's spending the most.
+/// who's spending the most. Styled in the shared "Aurora Glass" language —
+/// translucent panels with a hairline top highlight and a tinted hairline
+/// stroke — but with the fire palette and the bolder, hotter glows this tab
+/// alone is allowed.
 struct BurnView: View {
     @EnvironmentObject var manager: AgentManager
 
@@ -29,12 +32,14 @@ struct BurnView: View {
     }
 
     @State private var counterPop: CGFloat = 1.0
+    @State private var appeared = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            FireView(intensity: fireIntensity, level: summary.totalTokens)
+            FireView(intensity: fireIntensity, level: summary.totalTokens,
+                     animate: manager.popoverVisible && (summary.active > 0 || tps > 0))
                 .allowsHitTesting(false)
-            VStack(spacing: 14) {
+            VStack(spacing: 13) {
                 counter
                 liveRate
                 statRow
@@ -43,8 +48,14 @@ struct BurnView: View {
                 Spacer(minLength: 0)
             }
             .padding(16)
+            // Aurora-glass entrance: the stack lifts and fades in.
+            .scaleEffect(appeared ? 1 : 0.96)
+            .opacity(appeared ? 1 : 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) { appeared = true }
+        }
     }
 
     // MARK: Big counter
@@ -65,7 +76,7 @@ struct BurnView: View {
                 .shadow(color: .red.opacity(0.5), radius: 28)
                 .shadow(color: .red.opacity(0.2), radius: 44)
                 .contentTransition(.numericText())
-                .animation(.spring(response: 0.5), value: summary.totalTokens)
+                .animation(.spring(response: 0.5, dampingFraction: 0.8), value: summary.totalTokens)
                 .scaleEffect(counterPop)
                 .onChange(of: summary.totalTokens) { _ in
                     withAnimation(.spring(response: 0.15, dampingFraction: 0.45)) {
@@ -80,21 +91,10 @@ struct BurnView: View {
                 .foregroundStyle(.orange.opacity(0.9))
                 .shadow(color: .orange.opacity(0.55), radius: 5)
         }
-        .padding(.vertical, 8).padding(.horizontal, 14)
-        .background(
-            RoundedRectangle(cornerRadius: 14)
-                .fill(Color.black.opacity(0.28))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(
-                    LinearGradient(
-                        colors: [.yellow.opacity(0.45), .orange.opacity(0.25), .red.opacity(0.15)],
-                        startPoint: .topLeading, endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 1
-                )
-        )
+        .padding(.vertical, 11).padding(.horizontal, 20)
+        .frame(maxWidth: .infinity)
+        .modifier(FireGlass(radius: 18, tint: .orange, material: .ultraThinMaterial,
+                            fillOpacity: 0.30, strokeOpacity: 0.4, glow: 0.16))
         .padding(.top, 6)
     }
 
@@ -112,6 +112,8 @@ struct BurnView: View {
                         LinearGradient(colors: [.yellow, .orange], startPoint: .leading, endPoint: .trailing)
                     )
                     .shadow(color: .orange.opacity(0.8), radius: 6)
+                    .contentTransition(.numericText())
+                    .animation(.spring(response: 0.45, dampingFraction: 0.8), value: Int(tps))
                 Text("tok/s")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.orange.opacity(0.75))
@@ -124,17 +126,22 @@ struct BurnView: View {
         .background(Capsule().fill(.ultraThinMaterial))
         .overlay(
             Capsule()
+                .stroke(LinearGradient(colors: [.white.opacity(0.16), .clear],
+                                       startPoint: .top, endPoint: .bottom), lineWidth: 1)
+        )
+        .overlay(
+            Capsule()
                 .stroke(
                     LinearGradient(
                         colors: tps > 0
-                            ? [Color.yellow.opacity(0.65), Color.orange.opacity(0.45)]
-                            : [Color.orange.opacity(0.15), Color.orange.opacity(0.15)],
+                            ? [Color.yellow.opacity(0.65), Color.orange.opacity(0.4)]
+                            : [Color.orange.opacity(0.14), Color.orange.opacity(0.14)],
                         startPoint: .leading, endPoint: .trailing
                     ),
                     lineWidth: 1.5
                 )
         )
-        .shadow(color: tps > 0 ? .orange.opacity(0.4) : .clear, radius: tps > 0 ? 12 : 0)
+        .shadow(color: tps > 0 ? .orange.opacity(0.4) : .clear, radius: tps > 0 ? 13 : 0)
         .animation(.easeInOut(duration: 0.4), value: tps > 0)
     }
 
@@ -157,18 +164,8 @@ struct BurnView: View {
             Text(label).font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity).padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 12).fill(.ultraThinMaterial))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(
-                    LinearGradient(
-                        colors: [tint.opacity(0.55), tint.opacity(0.1)],
-                        startPoint: .topLeading, endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 1
-                )
-        )
-        .shadow(color: tint.opacity(0.18), radius: 7)
+        .modifier(FireGlass(radius: 14, tint: tint, material: .ultraThinMaterial,
+                            fillOpacity: 0, strokeOpacity: 0.45, glow: 0.18))
     }
 
     // MARK: Composition bar (input / output / cache)
@@ -198,6 +195,9 @@ struct BurnView: View {
                 Spacer()
             }
         }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .modifier(FireGlass(radius: 14, tint: .orange, material: .ultraThinMaterial,
+                            fillOpacity: 0, strokeOpacity: 0.2, glow: 0))
         .animation(.spring(response: 0.6, dampingFraction: 0.8), value: outputTotal)
         .animation(.spring(response: 0.6, dampingFraction: 0.8), value: inputTotal)
         .animation(.spring(response: 0.6, dampingFraction: 0.8), value: cacheTotal)
@@ -256,6 +256,7 @@ struct BurnView: View {
                               isLeader: index == 0)
                 }
             }
+            .animation(.spring(response: 0.45, dampingFraction: 0.8), value: leaders.map(\.id))
         } else {
             VStack(spacing: 8) {
                 ZStack {
@@ -301,6 +302,7 @@ struct BurnView: View {
                     .font(.system(size: 10.5, weight: .bold, design: .rounded)).monospacedDigit()
                     .foregroundStyle(.orange)
                     .shadow(color: .orange.opacity(isLeader ? 0.85 : 0.3), radius: isLeader ? 6 : 2)
+                    .contentTransition(.numericText())
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
@@ -309,26 +311,61 @@ struct BurnView: View {
                         .fill(LinearGradient(colors: barColors, startPoint: .leading, endPoint: .trailing))
                         .frame(width: max(4, geo.size.width * CGFloat(fraction)))
                         .shadow(color: .orange.opacity(isLeader ? 0.85 : 0.4), radius: isLeader ? 7 : 3)
-                        .animation(.spring(response: 0.7, dampingFraction: 0.75), value: fraction)
+                        .animation(.spring(response: 0.7, dampingFraction: 0.8), value: fraction)
                 }
             }
             .frame(height: 7)
         }
         .padding(.horizontal, 10).padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(isLeader ? Color.orange.opacity(0.09) : Color.black.opacity(0.2))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(
-                    isLeader
-                        ? LinearGradient(colors: [.yellow.opacity(0.45), .orange.opacity(0.2)],
-                                         startPoint: .topLeading, endPoint: .bottomTrailing)
-                        : LinearGradient(colors: [.clear], startPoint: .topLeading, endPoint: .bottomTrailing),
-                    lineWidth: 1
-                )
-        )
+        .modifier(FireGlass(radius: 9, tint: isLeader ? .orange : .clear,
+                            material: .ultraThinMaterial,
+                            fillOpacity: isLeader ? 0.10 : 0.0,
+                            strokeOpacity: isLeader ? 0.4 : 0.0,
+                            glow: isLeader ? 0.18 : 0))
+    }
+}
+
+// MARK: - Glass panel treatment
+
+/// The Aurora-Glass panel chrome for the Burn tab: a translucent material fill
+/// (optionally darkened a touch for legibility over the fire), a hairline white
+/// top highlight, a 1px tinted hairline stroke, and an optional soft tint glow
+/// for live/featured elements. Kept file-private to avoid colliding with the
+/// shared visual primitives Worker 1 owns.
+private struct FireGlass: ViewModifier {
+    var radius: CGFloat
+    var tint: Color
+    var material: Material = .ultraThinMaterial
+    /// Extra black fill under the material to keep big numerics readable over
+    /// the brightest part of the fire (0 = pure glass).
+    var fillOpacity: Double = 0
+    var strokeOpacity: Double = 0.3
+    var glow: Double = 0
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .fill(material)
+            )
+            .background(
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .fill(Color.black.opacity(fillOpacity))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .stroke(LinearGradient(colors: [.white.opacity(0.14), .clear],
+                                           startPoint: .top, endPoint: .bottom),
+                            lineWidth: 1)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .stroke(LinearGradient(colors: [tint.opacity(strokeOpacity),
+                                                    tint.opacity(strokeOpacity * 0.35)],
+                                           startPoint: .topLeading, endPoint: .bottomTrailing),
+                            lineWidth: 1)
+            )
+            .shadow(color: glow > 0 ? tint.opacity(glow) : .clear, radius: glow > 0 ? 14 : 0)
     }
 }
 

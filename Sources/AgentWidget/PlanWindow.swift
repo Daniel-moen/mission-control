@@ -27,6 +27,11 @@ final class PlanWindowController {
         window.isMovableByWindowBackground = true
         window.title = "Plan · \(agent.folderName)"
         window.isReleasedWhenClosed = false
+        // Lock to the deep-space obsidian look so the glass + aurora read the
+        // same as the menu-bar popover regardless of the system appearance, and
+        // so the markdown stays light-on-dark and legible.
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.backgroundColor = NSColor(calibratedRed: 0.04, green: 0.05, blue: 0.08, alpha: 1)
         window.center()
         window.contentViewController = NSHostingController(rootView: PlanView(agent: agent))
 
@@ -60,33 +65,50 @@ struct PlanView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            if let plan {
-                ScrollView {
-                    PlanMarkdown(plan.text)
-                        .padding(18)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+        ZStack {
+            // Deep obsidian base + a faint, static aurora so the window feels
+            // like part of the app. Static (animate: false) — no always-on
+            // canvas churning while the window sits beside your work.
+            LinearGradient(colors: [Color(red: 0.05, green: 0.06, blue: 0.10),
+                                    Color(red: 0.02, green: 0.02, blue: 0.05)],
+                           startPoint: .top, endPoint: .bottom)
+            AuroraBackground(tint: agent.accent, energy: 0.3, animate: false)
+                .opacity(0.35)
+                .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                header
+                if let plan {
+                    ScrollView {
+                        PlanMarkdown(plan.text, accent: agent.accent)
+                            .padding(18)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    footer(plan)
+                } else {
+                    Spacer()
+                    Text("This agent hasn't proposed a plan yet.")
+                        .foregroundStyle(.secondary)
+                    Spacer()
                 }
-                footer(plan)
-            } else {
-                Spacer()
-                Text("This agent hasn't proposed a plan yet.")
-                    .foregroundStyle(.secondary)
-                Spacer()
             }
         }
         .frame(minWidth: 420, minHeight: 360)
-        .background(Color(NSColor.textBackgroundColor))
     }
 
     private var header: some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "list.clipboard.fill")
-                .font(.system(size: 18))
-                .foregroundStyle(LinearGradient(colors: [.purple, .blue],
-                                                startPoint: .top, endPoint: .bottom))
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(agent.accent.opacity(0.18))
+                    .frame(width: 34, height: 34)
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(agent.accent.opacity(0.4), lineWidth: 1))
+                Image(systemName: "list.clipboard.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(LinearGradient(colors: [agent.accent, agent.accent.opacity(0.6)],
+                                                    startPoint: .top, endPoint: .bottom))
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(agent.prompt.isEmpty ? "Proposed plan" : agent.prompt)
                     .font(.headline).lineLimit(2)
@@ -99,7 +121,13 @@ struct PlanView: View {
             Spacer()
             if agent.plans.count > 1 { revisionPicker }
         }
-        .padding(14)
+        .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 12)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .bottom) {
+            LinearGradient(colors: [agent.accent.opacity(0.4), .white.opacity(0.06), .clear],
+                           startPoint: .leading, endPoint: .trailing)
+                .frame(height: 1)
+        }
     }
 
     /// When an agent revises its plan, let you flip between revisions; the most
@@ -131,6 +159,11 @@ struct PlanView: View {
         }
         .padding(.horizontal, 14).padding(.vertical, 8)
         .background(.ultraThinMaterial)
+        .overlay(alignment: .top) {
+            LinearGradient(colors: [.clear, .white.opacity(0.06), .clear],
+                           startPoint: .leading, endPoint: .trailing)
+                .frame(height: 1)
+        }
     }
 }
 
@@ -142,7 +175,11 @@ struct PlanView: View {
 /// style each, leaning on `Text(.init:)` for the inline pass within a line.
 struct PlanMarkdown: View {
     let blocks: [Block]
-    init(_ source: String) { blocks = PlanMarkdown.parse(source) }
+    var accent: Color = .purple
+    init(_ source: String, accent: Color = .purple) {
+        blocks = PlanMarkdown.parse(source)
+        self.accent = accent
+    }
 
     enum Block {
         case heading(level: Int, text: String)
@@ -164,21 +201,24 @@ struct PlanMarkdown: View {
                         .padding(.top, level <= 2 ? 8 : 4)
                 case let .bullet(text, indent):
                     HStack(alignment: .firstTextBaseline, spacing: 7) {
-                        Text("•").foregroundStyle(.purple)
+                        Text("•").foregroundStyle(accent)
                         Text(inline(text)).fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(.leading, CGFloat(indent) * 16)
                 case let .numbered(number, text):
                     HStack(alignment: .firstTextBaseline, spacing: 7) {
-                        Text(number).foregroundStyle(.purple).monospacedDigit()
+                        Text(number).foregroundStyle(accent).monospacedDigit()
                         Text(inline(text)).fixedSize(horizontal: false, vertical: true)
                     }
                 case let .code(text):
                     Text(text)
                         .font(.system(size: 11.5, design: .monospaced))
-                        .padding(10)
+                        .padding(11)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.12)))
+                        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.ultraThinMaterial))
+                        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.black.opacity(0.25)))
+                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(accent.opacity(0.18), lineWidth: 1))
                 case let .paragraph(text):
                     Text(inline(text)).fixedSize(horizontal: false, vertical: true)
                 case .rule:

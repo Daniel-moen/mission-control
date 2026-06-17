@@ -32,13 +32,16 @@ struct AgentCard: View {
             controlRow
             replyBox
         }
-        .padding(12)
+        .padding(13)
         .background(cardBackground)
         .overlay(
-            RoundedRectangle(cornerRadius: 13)
-                .stroke(tint.opacity(agent.isLive ? 0.55 : 0.16),
-                        lineWidth: agent.isLive ? 1.3 : 1))
-        .shadow(color: agent.isLive ? tint.opacity(0.22) : .clear, radius: 10, y: 2)
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(LinearGradient(
+                    colors: [tint.opacity(agent.isLive ? 0.6 : 0.2), tint.opacity(agent.isLive ? 0.22 : 0.08)],
+                    startPoint: .top, endPoint: .bottom),
+                    lineWidth: agent.isLive ? 1.3 : 1))
+        .shadow(color: agent.isLive ? tint.opacity(0.26) : .black.opacity(0.18),
+                radius: agent.isLive ? 14 : 7, y: 3)
         .onAppear { if !didInitFeed { showFeed = settings.expandFeeds; didInitFeed = true } }
         .confirmationDialog("Destroy this agent?", isPresented: $confirmDestroy, titleVisibility: .visible) {
             Button("Destroy agent", role: .destructive) { manager.destroy(agent) }
@@ -49,12 +52,17 @@ struct AgentCard: View {
     }
 
     private var cardBackground: some View {
-        RoundedRectangle(cornerRadius: 13)
+        RoundedRectangle(cornerRadius: 14)
             .fill(.ultraThinMaterial)
-            .overlay(
-                RoundedRectangle(cornerRadius: 13)
-                    .fill(LinearGradient(colors: [tint.opacity(agent.isLive ? 0.10 : 0.04), .clear],
+            .overlay(  // state-tinted wash, stronger while live
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(LinearGradient(colors: [tint.opacity(agent.isLive ? 0.14 : 0.05), .clear],
                                          startPoint: .topLeading, endPoint: .bottomTrailing)))
+            .overlay(  // hairline top highlight — the signature glass sheen
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(LinearGradient(colors: [.white.opacity(0.16), .clear],
+                                           startPoint: .top, endPoint: .center), lineWidth: 1)
+                    .blendMode(.plusLighter))
     }
 
     // MARK: Rows
@@ -62,7 +70,7 @@ struct AgentCard: View {
     private var titleRow: some View {
         HStack(alignment: .top, spacing: 10) {
             StatusRing(progress: agent.progress, color: tint, active: agent.isLive,
-                       glyph: agent.status.glyph, size: 30)
+                       glyph: agent.status.glyph, size: 30, animate: manager.popoverVisible)
             VStack(alignment: .leading, spacing: 3) {
                 Text(agent.prompt.isEmpty ? "(session \(agent.sessionId.prefix(8)))" : agent.prompt)
                     .font(.system(size: 12.5, weight: .semibold))
@@ -74,7 +82,8 @@ struct AgentCard: View {
             VStack(alignment: .trailing, spacing: 5) {
                 statusBadge
                 if agent.isLive {
-                    Equalizer(color: tint, active: true, intensity: agent.intensity, bars: 10)
+                    Equalizer(color: tint, active: true, intensity: agent.intensity, bars: 10,
+                              animate: manager.popoverVisible)
                         .frame(width: 40, height: 14)
                 }
             }
@@ -85,8 +94,9 @@ struct AgentCard: View {
         Text(agent.status.label.uppercased())
             .font(.system(size: 8.5, weight: .bold))
             .foregroundStyle(tint)
-            .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(Capsule().fill(tint.opacity(0.18)))
+            .padding(.horizontal, 7).padding(.vertical, 2.5)
+            .background(Capsule().fill(tint.opacity(0.16)))
+            .overlay(Capsule().stroke(tint.opacity(0.35), lineWidth: 0.5))
     }
 
     private var metaRow: some View {
@@ -170,8 +180,9 @@ struct AgentCard: View {
                     .foregroundStyle(latestColor).lineLimit(1).truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 8).padding(.vertical, 5)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.85)))
+            .padding(.horizontal, 9).padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 9).fill(Color.black.opacity(0.78)))
+            .overlay(RoundedRectangle(cornerRadius: 9).stroke(.white.opacity(0.06), lineWidth: 1))
             .animation(.easeInOut(duration: 0.15), value: agent.log.last?.id)
         }
         .buttonStyle(.plain).help("Show recent activity")
@@ -192,7 +203,9 @@ struct AgentCard: View {
                 .padding(8)
             }
             .frame(height: 140)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.88)))
+            .background(RoundedRectangle(cornerRadius: 9).fill(Color.black.opacity(0.82)))
+            .overlay(RoundedRectangle(cornerRadius: 9).stroke(.white.opacity(0.06), lineWidth: 1))
+            .transition(.opacity.combined(with: .move(edge: .top)))
             .onChange(of: agent.log.last?.id) { id in
                 guard let id else { return }
                 withAnimation { proxy.scrollTo(id, anchor: .bottom) }

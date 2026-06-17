@@ -5,12 +5,18 @@ import SwiftUI
 extension AgentRun {
     var accent: Color {
         switch status {
-        case .active: return Color(red: 0.20, green: 0.92, blue: 0.55)   // electric green
-        case .idle:   return wasActive ? Color(red: 1.0, green: 0.80, blue: 0.18)   // amber: was busy
-                                       : Color(red: 1.0, green: 0.55, blue: 0.25)   // orange: just sitting
-        case .done:   return Color(red: 0.40, green: 0.55, blue: 0.95)   // calm blue: finished
+        case .active: return AgentRun.workingTint                                   // emerald: burning
+        case .idle:   return wasActive ? AgentRun.waitingTint                       // amber: was busy
+                                       : Color(red: 1.0, green: 0.56, blue: 0.30)   // orange: just sitting
+        case .done:   return AgentRun.doneTint                                      // periwinkle: finished
         }
     }
+
+    /// The four-state palette, in one place so the brand bar, dashboard chips,
+    /// aurora tint and per-card accents all sing from the same harmonised hues.
+    static let workingTint = Color(red: 0.24, green: 0.94, blue: 0.62)   // emerald
+    static let waitingTint = Color(red: 1.0,  green: 0.78, blue: 0.26)   // warm amber
+    static let doneTint    = Color(red: 0.46, green: 0.60, blue: 1.0)    // periwinkle
 
     /// Whether this card should run its live, energy-burning animations.
     var isLive: Bool { status == .active }

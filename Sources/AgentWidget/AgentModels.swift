@@ -41,6 +41,39 @@ enum AgentStatus: Equatable {
     }
 }
 
+/// A coordinated launch tracked as one expandable item in the fleet list.
+/// We don't get to know a session's id at launch time — sessions only surface
+/// once they write a transcript — so membership is correlated after the fact:
+/// a freshly discovered session whose working dir matches this launch's, within
+/// a short window, is claimed as a member (see `AgentManager.assignFleetMembership`).
+struct FleetGroup: Identifiable, Equatable {
+    let id = UUID()
+    let mission: String
+    let dir: String
+    /// True for a manager-led fleet (one manager + workers); false for a
+    /// leaderless parallel launch.
+    let hasManager: Bool
+    /// How many sessions this launch will spin up — the claim ceiling.
+    let expectedCount: Int
+    let createdAt = Date()
+
+    /// Symlink-resolved working dir, matched against each discovered session's.
+    var resolvedDir: String { (dir as NSString).resolvingSymlinksInPath }
+
+    /// A fleet keeps claiming new sessions until it's full or this window lapses,
+    /// so a slow-booting agent still lands in its group.
+    func isOpen(now: Date, claimed: Int) -> Bool {
+        claimed < expectedCount && now.timeIntervalSince(createdAt) < 600
+    }
+
+    /// First line of the mission, trimmed — the collapsed row's headline.
+    var title: String {
+        let line = mission.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? mission
+        let t = line.trimmingCharacters(in: .whitespaces)
+        return t.count > 90 ? String(t.prefix(90)) + "…" : t
+    }
+}
+
 /// Live, observed state of one Claude Code session discovered on disk.
 final class AgentRun: ObservableObject, Identifiable {
     let sessionId: String
@@ -50,6 +83,9 @@ final class AgentRun: ObservableObject, Identifiable {
     @Published var workingDir: String = ""
     @Published var prompt: String = ""
     @Published var status: AgentStatus = .active
+    /// Set once this session has been claimed into a launched `FleetGroup`. nil
+    /// for solo sessions and any agent we merely discovered (not launched here).
+    @Published var fleetId: UUID? = nil
     @Published var todos: [AgentTodo] = []
     /// Every plan this agent has proposed, oldest first.
     @Published var plans: [CapturedPlan] = []
@@ -108,6 +144,10 @@ final class AgentRun: ObservableObject, Identifiable {
         if status == .done { return 1 }
         return Double(completedSteps) / Double(totalSteps)
     }
+
+    /// Whether this session was launched as the fleet's MANAGER — detected from
+    /// the seeded prompt so the grouped view can crown it and list it first.
+    var isManager: Bool { prompt.hasPrefix("You are the MANAGER") }
 
     /// Human label for the folder the agent is working in.
     var folderName: String {

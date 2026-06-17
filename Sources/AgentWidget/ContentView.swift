@@ -31,6 +31,39 @@ struct ContentView: View {
         return list
     }
 
+    /// One entry in the fleet list: either a standalone agent or a launched
+    /// group of them. Groups slot in at the position of their first visible
+    /// member so the chosen sort order still reads naturally.
+    private enum Row: Identifiable {
+        case solo(AgentRun)
+        case group(FleetGroup, [AgentRun])
+        var id: String {
+            switch self {
+            case .solo(let a):     return "solo-\(a.id)"
+            case .group(let f, _): return "group-\(f.id.uuidString)"
+            }
+        }
+    }
+
+    private var rows: [Row] {
+        let list = visible
+        // Bucket visible agents by the fleet they belong to.
+        var byFleet: [UUID: [AgentRun]] = [:]
+        for a in list { if let fid = a.fleetId { byFleet[fid, default: []].append(a) } }
+        var out: [Row] = []
+        var emitted = Set<UUID>()
+        for a in list {
+            if let fid = a.fleetId, let members = byFleet[fid], members.count >= 2,
+               let fleet = manager.fleet(for: fid) {
+                if emitted.insert(fid).inserted { out.append(.group(fleet, members)) }
+            } else {
+                // No fleet, or the group has only one visible member — show solo.
+                out.append(.solo(a))
+            }
+        }
+        return out
+    }
+
     private func matchesFilter(_ a: AgentRun) -> Bool {
         switch filter {
         case .all:     return true
@@ -46,9 +79,9 @@ struct ContentView: View {
 
     private var fleetTint: Color {
         let s = manager.summary
-        if s.active > 0 { return Color(red: 0.20, green: 0.92, blue: 0.55) }
-        if s.attention > 0 { return Color(red: 1.0, green: 0.80, blue: 0.18) }
-        if s.total > 0 { return Color(red: 0.40, green: 0.55, blue: 0.95) }
+        if s.active > 0 { return AgentRun.workingTint }
+        if s.attention > 0 { return AgentRun.waitingTint }
+        if s.total > 0 { return AgentRun.doneTint }
         return .purple
     }
 
@@ -67,11 +100,11 @@ struct ContentView: View {
     private var dashboard: some View {
         HStack(spacing: 7) {
             StatChip(count: manager.summary.active, label: "working",
-                     color: Color(red: 0.20, green: 0.92, blue: 0.55), pulse: manager.summary.active > 0)
+                     color: AgentRun.workingTint, pulse: manager.summary.active > 0)
             StatChip(count: manager.summary.attention, label: "waiting",
-                     color: Color(red: 1.0, green: 0.80, blue: 0.18), pulse: manager.summary.attention > 0)
+                     color: AgentRun.waitingTint, pulse: manager.summary.attention > 0)
             StatChip(count: manager.summary.done, label: "done",
-                     color: Color(red: 0.40, green: 0.55, blue: 0.95), pulse: false)
+                     color: AgentRun.doneTint, pulse: false)
             Spacer()
             if manager.summary.totalTurns > 0 || manager.summary.totalCost > 0 {
                 VStack(alignment: .trailing, spacing: 0) {
@@ -132,8 +165,11 @@ struct ContentView: View {
                     .buttonStyle(.borderless).foregroundStyle(.tertiary)
             }
         }
-        .padding(.horizontal, 10).padding(.vertical, 5)
-        .background(RoundedRectangle(cornerRadius: 7).fill(.ultraThinMaterial))
+        .padding(.horizontal, 11).padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 9).fill(.ultraThinMaterial)
+                .overlay(RoundedRectangle(cornerRadius: 9)
+                    .stroke(.white.opacity(0.07), lineWidth: 1)))
         .padding(.horizontal, 12).padding(.bottom, 7)
     }
 
@@ -148,17 +184,24 @@ struct ContentView: View {
                     Text(search.isEmpty ? "Nothing in “\(filter.rawValue)”." : "No agents match “\(search)”.")
                         .font(.callout).foregroundStyle(.secondary).padding(.top, 50)
                 } else {
-                    ForEach(visible) { agent in
-                        AgentCard(agent: agent)
-                            .environmentObject(manager).environmentObject(settings)
-                            .transition(.asymmetric(
-                                insertion: .scale(scale: 0.94).combined(with: .opacity),
-                                removal: .scale(scale: 0.9).combined(with: .opacity)))
+                    ForEach(rows) { row in
+                        Group {
+                            switch row {
+                            case .solo(let agent):
+                                AgentCard(agent: agent)
+                            case .group(let fleet, let members):
+                                FleetGroupCard(fleet: fleet, members: members)
+                            }
+                        }
+                        .environmentObject(manager).environmentObject(settings)
+                        .transition(.asymmetric(
+                            insertion: .scale(scale: 0.94).combined(with: .opacity),
+                            removal: .scale(scale: 0.9).combined(with: .opacity)))
                     }
                 }
             }
             .padding(12)
-            .animation(.spring(response: 0.38, dampingFraction: 0.82), value: visible.map(\.id))
+            .animation(.spring(response: 0.38, dampingFraction: 0.82), value: rows.map(\.id))
         }
     }
 
@@ -223,19 +266,30 @@ struct StatChip: View {
     let color: Color
     let pulse: Bool
 
+    private var lit: Bool { count > 0 }
+
     var body: some View {
         HStack(spacing: 5) {
             PulsingDot(color: color, active: pulse)
             RollingNumber(value: Double(count), size: 13)
-                .foregroundStyle(count > 0 ? .primary : .secondary)
+                .foregroundStyle(lit ? .primary : .secondary)
             Text(label).font(.system(size: 10)).foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 8).padding(.vertical, 4)
-        .background(RoundedRectangle(cornerRadius: 7)
-            .fill(color.opacity(count > 0 ? 0.14 : 0.05)))
-        .overlay(RoundedRectangle(cornerRadius: 7)
-            .stroke(color.opacity(count > 0 ? 0.35 : 0), lineWidth: 1))
-        .animation(.spring(response: 0.4), value: count)
+        .padding(.horizontal, 9).padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(.ultraThinMaterial)
+                .overlay(RoundedRectangle(cornerRadius: 10)
+                    .fill(color.opacity(lit ? 0.16 : 0.04)))
+                .overlay(  // hairline top sheen
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(LinearGradient(colors: [.white.opacity(0.14), .clear],
+                                               startPoint: .top, endPoint: .bottom), lineWidth: 1))
+        )
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .stroke(color.opacity(lit ? 0.38 : 0.08), lineWidth: 1))
+        .shadow(color: pulse ? color.opacity(0.28) : .clear, radius: 8)
+        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: count)
     }
 }
 
@@ -250,9 +304,14 @@ struct FilterPill: View {
             Text(title)
                 .font(.system(size: 10.5, weight: selected ? .semibold : .regular))
                 .foregroundStyle(selected ? .white : .secondary)
-                .padding(.horizontal, 10).padding(.vertical, 4)
+                .padding(.horizontal, 11).padding(.vertical, 5)
                 .background(
-                    Capsule().fill(selected ? AnyShapeStyle(tint) : AnyShapeStyle(Color.secondary.opacity(0.12))))
+                    Capsule().fill(selected
+                        ? AnyShapeStyle(LinearGradient(colors: [tint, tint.opacity(0.78)],
+                                                       startPoint: .top, endPoint: .bottom))
+                        : AnyShapeStyle(.ultraThinMaterial)))
+                .overlay(Capsule().stroke(selected ? tint.opacity(0.5) : .white.opacity(0.07), lineWidth: 1))
+                .shadow(color: selected ? tint.opacity(0.35) : .clear, radius: 6, y: 1)
         }
         .buttonStyle(.plain)
     }

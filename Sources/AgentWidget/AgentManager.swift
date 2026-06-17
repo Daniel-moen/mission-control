@@ -23,10 +23,25 @@ struct FleetSummary: Equatable {
 
 final class AgentManager: ObservableObject {
     @Published var agents: [AgentRun] = []
+    /// Coordinated launches, each grouping several `agents` under one item.
+    @Published var fleets: [FleetGroup] = []
     /// Aggregate fleet state, refreshed every tick.
     @Published var summary = FleetSummary()
     /// Set the instant an agent finishes — the UI watches this to fire confetti.
     @Published var lastFinishAt: Date?
+    /// Whether the dashboard popover is currently on screen. Drives the poll
+    /// cadence: fast while someone's watching the live feed, lazy while hidden so
+    /// the constant directory-walk isn't burning CPU for nobody. Tracked by the
+    /// AppDelegate via NSPopoverDelegate.
+    @Published var popoverVisible: Bool = false {
+        didSet {
+            guard popoverVisible != oldValue else { return }
+            // On open, refresh immediately so the feed isn't stale for up to a
+            // full slow-cadence interval, then switch to the matching cadence.
+            if popoverVisible { tick() }
+            scheduleTimer()
+        }
+    }
 
     private let home = NSHomeDirectory()
     private lazy var projectsDir = "\(home)/.claude/projects"
@@ -50,10 +65,23 @@ final class AgentManager: ObservableObject {
 
     init() { start() }
 
+    /// Fast cadence while the popover is open so the activity feed reads as live.
+    private let openInterval: TimeInterval = 0.7
+    /// Lazy cadence while the popover is closed — the menu-bar icon only needs
+    /// summary-level freshness when nobody's looking at the feed.
+    private let closedInterval: TimeInterval = 4.0
+
     func start() {
         tick()
-        // Poll quickly so the activity feed reads as live.
-        let t = Timer.scheduledTimer(withTimeInterval: 0.7, repeats: true) { [weak self] _ in
+        scheduleTimer()
+    }
+
+    /// (Re)arm the poll timer at the cadence appropriate for the current popover
+    /// visibility. Called on launch and whenever `popoverVisible` flips.
+    private func scheduleTimer() {
+        timer?.invalidate()
+        let interval = popoverVisible ? openInterval : closedInterval
+        let t = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             self?.tick()
         }
         RunLoop.main.add(t, forMode: .common)
@@ -169,25 +197,42 @@ final class AgentManager: ObservableObject {
         var prompt: String
     }
 
-    /// Spin up one fresh `claude` session per spec, each in its own new Terminal
-    /// window rooted at `dir`. We stagger them slightly so Terminal doesn't trip
-    /// over a burst of simultaneous `do script` activations. They appear in the
-    /// fleet automatically as soon as they write their first transcript line.
+    /// Terminals installed on this machine, for the launcher's "open in" picker.
+    /// Resolved once — a terminal installed mid-session shows up after a restart.
+    lazy var installedTerminals: [TerminalBridge.LaunchTerminal] = term.installedTerminals()
+
+    /// Spin up one fresh `claude` session per spec, each in its own new window of
+    /// the user's chosen terminal, rooted at `dir`. We stagger them slightly so a
+    /// burst of simultaneous launches doesn't trip the terminal up. They appear in
+    /// the fleet automatically as soon as they write their first transcript line.
     func launchSessions(_ specs: [LaunchSpec], in dir: String) {
         let folder = dir.isEmpty ? home : (dir as NSString).expandingTildeInPath
+        let terminal = settings.launchTerminal
         for (i, spec) in specs.enumerated() {
             let cmd = launchCommand(dir: folder, model: spec.model, prompt: spec.prompt)
             DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.5) { [weak self] in
-                self?.term.launchInTerminal(command: cmd)
+                self?.term.launch(command: cmd, in: terminal)
             }
         }
     }
 
     private func launchCommand(dir: String, model: String, prompt: String) -> String {
         let q = TerminalBridge.shellQuote
-        var c = "cd \(q(dir))"
+        // A launched agent MUST run as an independent, top-level session. When the
+        // app (or the terminal it spawns) was itself started from inside a Claude
+        // session, the new shell inherits CLAUDE_CODE_* / CLAUDECODE env vars that
+        // put `claude` into nested "child session" mode — in which it writes no
+        // discoverable transcript under ~/.claude/projects and never registers in
+        // ~/.claude/sessions, so it can never show up in the fleet. Scrub every
+        // CLAUDE_CODE* marker first; this is the actual fix for "agents launched
+        // from the menu aren't tracked".
+        var c = #"unset $(env | sed -n 's/^\(CLAUDE_CODE[A-Za-z_]*\)=.*/\1/p') CLAUDECODE AI_AGENT 2>/dev/null"#
+        c += "; cd \(q(dir))"
         c += " && claude"
         if !model.isEmpty { c += " --model \(model)" }
+        // Run unattended ("auto mode"): skip per-tool permission prompts so the
+        // agent — and coordinated workers' polling loops — start working at once.
+        c += " --dangerously-skip-permissions"
         c += " \(q(prompt))"
         return c
     }
@@ -215,6 +260,13 @@ final class AgentManager: ObservableObject {
         let dir = plan.dir.isEmpty ? home : (plan.dir as NSString).expandingTildeInPath
         let coordinated = plan.managerModel != nil
         if coordinated { setupCoordination(dir: dir, mission: plan.mission) }
+
+        // A multi-agent launch is tracked as one expandable group; its members
+        // are claimed as their sessions surface (see assignFleetMembership).
+        if plan.agentCount >= 2 {
+            fleets.append(FleetGroup(mission: plan.mission, dir: dir,
+                                     hasManager: coordinated, expectedCount: plan.agentCount))
+        }
 
         var specs: [LaunchSpec] = []
         let n = plan.workerModels.count
@@ -247,6 +299,38 @@ final class AgentManager: ObservableObject {
         try? mission.write(toFile: "\(coord)/mission.md", atomically: true, encoding: .utf8)
     }
 
+    /// Look up the group a member belongs to.
+    func fleet(for id: UUID) -> FleetGroup? { fleets.first { $0.id == id } }
+
+    /// Currently-tracked members of a fleet, in display order (manager first,
+    /// then by status then recency — matching the global sort).
+    func members(of fleet: FleetGroup) -> [AgentRun] {
+        agents.filter { $0.fleetId == fleet.id }
+    }
+
+    /// Correlate freshly discovered sessions to a launched fleet. A session is
+    /// claimed when its (symlink-resolved) working dir matches an open fleet's
+    /// and it was first seen at/after that launch — so pre-existing agents in the
+    /// same folder are never swept in. Fleets that age out without ever gaining a
+    /// member, or whose members have all departed, are dropped.
+    private func assignFleetMembership(now: Date) {
+        guard !fleets.isEmpty else { return }
+        for run in agents where run.fleetId == nil && !run.workingDir.isEmpty {
+            let rdir = resolved(run.workingDir)
+            for fleet in fleets where fleet.resolvedDir == rdir {
+                let claimed = agents.lazy.filter { $0.fleetId == fleet.id }.count
+                guard fleet.isOpen(now: now, claimed: claimed),
+                      run.firstSeen >= fleet.createdAt.addingTimeInterval(-2) else { continue }
+                run.fleetId = fleet.id
+                break
+            }
+        }
+        fleets.removeAll { fleet in
+            let hasMembers = agents.contains { $0.fleetId == fleet.id }
+            return !hasMembers && !fleet.isOpen(now: now, claimed: 0)
+        }
+    }
+
     private func modelLabel(_ flag: String) -> String {
         switch flag {
         case "opus":   return "Opus"
@@ -265,6 +349,8 @@ final class AgentManager: ObservableObject {
         return """
         You are the MANAGER agent leading a fleet of \(workerModels.count) worker agent(s) on a shared mission. Your instructions are AUTHORITATIVE — the workers defer to you.
 
+        YOUR ROLE IS PURELY ORCHESTRATION. You do NOT write or edit code yourself. You decompose the mission, tell each worker exactly which files to modify and what their task is, watch their progress, course-correct, and reconcile their work into one result. The workers do the hands-on changes; you direct them.
+
         The mission is recorded in \(coordDirName)/mission.md:
 
         \(mission)
@@ -273,8 +359,8 @@ final class AgentManager: ObservableObject {
         \(roster)
 
         COORDINATION PROTOCOL — the workers follow this exact protocol, so use it:
-        1. Decompose the mission into clear, self-contained assignments — one per worker.
-        2. Write each worker's assignment to \(coordDirName)/worker-<k>.md (e.g. \(coordDirName)/worker-1.md). Be specific: scope, files to touch, constraints, and a clear definition of done. Each worker is BLOCKED until this file appears and will do exactly what it says.
+        1. Decompose the mission into clear, self-contained assignments — one per worker. Partition the work so two workers never edit the same file at once.
+        2. Write each worker's assignment to \(coordDirName)/worker-<k>.md (e.g. \(coordDirName)/worker-1.md). Be specific: the exact files to touch, the task, constraints, and a clear definition of done. Each worker is BLOCKED until this file appears and will do exactly what it says.
         3. Workers post progress and results to \(coordDirName)/worker-<k>.outbox.md — read these to track them.
         4. To send follow-ups or corrections, append a section headed "## UPDATE <short note>" to that worker's worker-<k>.md; workers re-read it after each chunk of work and obey the latest instructions.
         5. Track the whole effort with TodoWrite. When every worker is done, review and reconcile their outboxes, resolve conflicts, and synthesize one coherent, verified result — write the final summary to \(coordDirName)/RESULT.md.
@@ -338,8 +424,15 @@ final class AgentManager: ObservableObject {
                 byId[sid] = run
                 agents.append(run)
             }
+            // Only open a FileHandle + seek when the transcript has actually
+            // been written since we last read it. An unchanged file has nothing
+            // new to parse, so skip the I/O entirely — but a brand-new run that
+            // hasn't had its first parse yet must always be tailed once.
+            let previousMtime = run.lastModified
             run.lastModified = mtime
-            tail(run)
+            if !run.didInitialParse || mtime > previousMtime {
+                tail(run)
+            }
             updateStatus(run, now: now)
         }
 
@@ -351,6 +444,7 @@ final class AgentManager: ObservableObject {
         // Kick off a liveness scan; it reaps departed sessions on completion.
         refreshLivenessIfNeeded()
 
+        assignFleetMembership(now: now)
         sortAgents()
         detectTransitions()
         recomputeSummary()

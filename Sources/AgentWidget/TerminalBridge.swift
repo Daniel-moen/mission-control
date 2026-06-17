@@ -110,13 +110,97 @@ final class TerminalBridge {
 
     // MARK: Launch
 
-    /// Open a brand-new Terminal.app window and run `command` in it (a fresh
-    /// login shell, so the user's PATH — and therefore `claude` — is available).
-    /// Returns true if AppleScript reported success. Used by the Launch tab to
-    /// spin up agents; they then show up in the fleet on their own.
+    /// A terminal emulator the launcher can open a fresh agent session in.
+    /// Detection and launching are generic — apps are found by bundle id through
+    /// LaunchServices, never by hardcoded paths — so this works on any machine
+    /// and any install location.
+    enum LaunchTerminal: String, CaseIterable, Identifiable {
+        case terminal, iterm2, wezterm, ghostty, kitty, alacritty
+
+        var id: String { rawValue }
+
+        var name: String {
+            switch self {
+            case .terminal:  return "Terminal"
+            case .iterm2:    return "iTerm2"
+            case .wezterm:   return "WezTerm"
+            case .ghostty:   return "Ghostty"
+            case .kitty:     return "kitty"
+            case .alacritty: return "Alacritty"
+            }
+        }
+
+        /// LaunchServices bundle identifier — how we both detect and target it.
+        var bundleID: String {
+            switch self {
+            case .terminal:  return "com.apple.Terminal"
+            case .iterm2:    return "com.googlecode.iterm2"
+            case .wezterm:   return "com.github.wez.wezterm"
+            case .ghostty:   return "com.mitchellh.ghostty"
+            case .kitty:     return "net.kovidgoyal.kitty"
+            case .alacritty: return "org.alacritty"
+            }
+        }
+    }
+
+    /// The terminals actually installed on this machine, in menu order. Empty
+    /// never happens in practice — Terminal.app ships with macOS.
+    func installedTerminals() -> [LaunchTerminal] {
+        LaunchTerminal.allCases.filter { appURL(for: $0) != nil }
+    }
+
+    private func appURL(for t: LaunchTerminal) -> URL? {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: t.bundleID)
+    }
+
+    /// Open a brand-new window of `terminal` and run `command` in it, inside a
+    /// fresh login shell so the user's PATH — and therefore `claude` — resolves
+    /// exactly as it does when they run it by hand. Launching into the wrong shell
+    /// environment is why an agent could silently fail to start and so never show
+    /// up in the fleet. Returns true if the launch was dispatched.
     @discardableResult
-    func launchInTerminal(command: String) -> Bool {
-        osascript(terminalLaunchScript, [command])?.contains("ok") == true
+    func launch(command: String, in terminal: LaunchTerminal) -> Bool {
+        switch terminal {
+        case .terminal:
+            return osascript(terminalLaunchScript, [command])?.contains("ok") == true
+        case .iterm2:
+            return osascript(itermLaunchScript, [command])?.contains("ok") == true
+        // CLI-style terminals take the program to run as command-line arguments.
+        // We hand them the login shell so rc files load, then the agent command.
+        case .wezterm:
+            return openLaunch(.wezterm, args: ["start", "--", loginShell, "-lc", keepOpen(command)])
+        case .ghostty:
+            return openLaunch(.ghostty, args: ["-e", loginShell, "-lc", keepOpen(command)])
+        case .alacritty:
+            return openLaunch(.alacritty, args: ["-e", loginShell, "-lc", keepOpen(command)])
+        case .kitty:
+            return openLaunch(.kitty, args: [loginShell, "-lc", keepOpen(command)])
+        }
+    }
+
+    /// The user's interactive login shell, so launched agents inherit their
+    /// profile (PATH, node version managers, etc.).
+    private var loginShell: String {
+        ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+    }
+
+    /// Keep the window on an interactive shell after the agent exits, instead of
+    /// the window vanishing the instant it does.
+    private func keepOpen(_ command: String) -> String {
+        "\(command); exec \(loginShell) -l"
+    }
+
+    /// Launch a new instance of a CLI-style terminal through `open`, passing it
+    /// the program to run as arguments. `-n` forces a fresh instance so the args
+    /// are honored even when the app is already running.
+    private func openLaunch(_ t: LaunchTerminal, args: [String]) -> Bool {
+        guard let url = appURL(for: t) else { return false }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        p.arguments = ["-na", url.path, "--args"] + args
+        do { try p.run() } catch { return false }
+        p.waitUntilExit()
+        return p.terminationStatus == 0
     }
 
     /// Wrap a shell command so a single token is safe to pass through
@@ -130,6 +214,17 @@ final class TerminalBridge {
       tell application "Terminal"
         activate
         do script (item 1 of argv)
+      end tell
+      return "ok"
+    end run
+    """
+
+    private let itermLaunchScript = """
+    on run argv
+      tell application "iTerm2"
+        activate
+        set w to (create window with default profile)
+        tell current session of w to write text (item 1 of argv)
       end tell
       return "ok"
     end run

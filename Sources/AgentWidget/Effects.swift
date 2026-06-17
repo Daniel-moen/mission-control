@@ -2,41 +2,78 @@ import SwiftUI
 
 // MARK: - Aurora background
 
-/// A slow, living gradient that drifts behind the whole window. Its hue is
-/// tinted by the fleet's dominant state, so the app subtly "feels" busy when
-/// agents are working and cools off when they're done.
+/// A slow, living aurora that drifts behind the whole window. Layered obsidian
+/// base + several softly blended light ribbons tinted by the fleet's dominant
+/// state, so the app subtly "feels" busy when agents work and cools when done.
+/// Kept translucent so the frosted-glass popover shows the desktop through it.
 struct AuroraBackground: View {
     var tint: Color
     var energy: Double   // 0…1, scales motion + brightness
+    /// When false the gradient freezes on one frame instead of drifting at
+    /// 20fps — used to stop the blur+drawingGroup churn while the fleet is idle
+    /// or the popover is hidden. Brightness still tracks `energy`, so a paused
+    /// aurora is just a static (still good-looking) backdrop.
+    var animate: Bool = true
+
+    /// Cooler companion hues that keep the aurora from reading as a single flat
+    /// wash — a deep indigo and the brand purple weave through the state tint.
+    private let indigo = Color(red: 0.16, green: 0.20, blue: 0.45)
 
     var body: some View {
-        // Drifts slowly, so 20fps is indistinguishable from 60 and far cheaper.
-        TimelineView(.animation(minimumInterval: 1.0 / 20.0)) { timeline in
-            let t = timeline.date.timeIntervalSinceReferenceDate
-            Canvas { ctx, size in
-                ctx.fill(Path(CGRect(origin: .zero, size: size)),
-                         with: .color(Color.black.opacity(0.001)))   // keep canvas opaque-ish
-                let blobs = 3
-                for i in 0..<blobs {
-                    let phase = Double(i) * 2.1
-                    let speed = 0.18 + Double(i) * 0.05
-                    let cx = size.width  * (0.5 + 0.42 * sin(t * speed + phase))
-                    let cy = size.height * (0.5 + 0.42 * cos(t * speed * 0.8 + phase * 1.3))
-                    let r = size.width * (0.55 + 0.12 * sin(t * 0.3 + phase))
-                    let hue = i == 0 ? tint : (i == 1 ? tint.opacity(0.7) : Color.purple)
-                    let rect = CGRect(x: cx - r, y: cy - r, width: r * 2, height: r * 2)
-                    ctx.fill(
-                        Circle().path(in: rect),
-                        with: .radialGradient(
-                            Gradient(colors: [hue.opacity(0.22 + 0.18 * energy), .clear]),
-                            center: CGPoint(x: cx, y: cy),
-                            startRadius: 0, endRadius: r))
+        ZStack {
+            // Translucent obsidian base: deep at the bottom, a touch of lift up
+            // top so the glass has a sense of an horizon. Partly see-through so
+            // the behind-window blur reads as real glass.
+            LinearGradient(colors: [Color(red: 0.05, green: 0.06, blue: 0.11).opacity(0.62),
+                                    Color(red: 0.02, green: 0.02, blue: 0.05).opacity(0.80)],
+                           startPoint: .top, endPoint: .bottom)
+
+            // Drifts slowly, so 12fps is indistinguishable from 60 and far cheaper
+            // — this whole-window blur+drawingGroup pass is the priciest background
+            // cost, so we redraw it as seldom as the slow motion allows.
+            TimelineView(.animation(minimumInterval: 1.0 / 12.0, paused: !animate)) { timeline in
+                let t = timeline.date.timeIntervalSinceReferenceDate
+                Canvas { ctx, size in
+                    ctx.fill(Path(CGRect(origin: .zero, size: size)),
+                             with: .color(Color.black.opacity(0.001)))   // keep canvas opaque-ish
+                    ctx.addFilter(.blur(radius: 26))
+                    let blobs = 4
+                    for i in 0..<blobs {
+                        let fi = Double(i)
+                        let phase = fi * 1.7
+                        let speed = 0.10 + fi * 0.028
+                        // Gentle Lissajous drift — slower & wider than before.
+                        let cx = size.width  * (0.5 + 0.46 * sin(t * speed + phase))
+                        let cy = size.height * (0.5 + 0.50 * cos(t * speed * 0.7 + phase * 1.2))
+                        let r = size.width * (0.50 + 0.16 * sin(t * 0.22 + phase))
+                        let hue: Color
+                        switch i {
+                        case 0: hue = tint
+                        case 1: hue = tint.opacity(0.8)
+                        case 2: hue = Color.purple
+                        case 3: hue = indigo
+                        default: hue = tint
+                        }
+                        let alpha = 0.16 + 0.20 * energy
+                        let rect = CGRect(x: cx - r, y: cy - r, width: r * 2, height: r * 2)
+                        ctx.fill(
+                            Circle().path(in: rect),
+                            with: .radialGradient(
+                                Gradient(colors: [hue.opacity(alpha), .clear]),
+                                center: CGPoint(x: cx, y: cy),
+                                startRadius: 0, endRadius: r))
+                    }
                 }
             }
-            .blur(radius: 8)
+            .drawingGroup()
+            .blendMode(.plusLighter)
+
+            // Soft corner vignette to seat the glass and deepen the obsidian feel.
+            RadialGradient(colors: [.clear, Color.black.opacity(0.28)],
+                           center: .center, startRadius: 120, endRadius: 460)
+                .blendMode(.multiply)
         }
-        .drawingGroup()
-        .opacity(0.9)
+        .opacity(0.94)
     }
 }
 
@@ -50,25 +87,37 @@ struct Equalizer: View {
     var active: Bool
     var intensity: Double
     var bars: Int = 14
+    /// Extra gate (e.g. popover visibility). The bars only dance while the agent
+    /// is `active` *and* someone's watching; otherwise the TimelineView is paused
+    /// and we render one static frame of flat, dim bars — no 30fps Canvas churn.
+    var animate: Bool = true
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: !(active && animate))) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
             Canvas { ctx, size in
                 let gap: CGFloat = 2
                 let bw = (size.width - gap * CGFloat(bars - 1)) / CGFloat(bars)
                 let amp = active ? (0.25 + 0.75 * intensity) : 0.06
+                // Add the glow once up front rather than re-adding it per bar
+                // (each `addFilter` stacks an offscreen pass onto the context).
+                if active {
+                    ctx.addFilter(.shadow(color: color.opacity(0.5), radius: 2.5))
+                }
                 for i in 0..<bars {
                     let phase = Double(i) * 0.55
-                    let wave = 0.5 + 0.5 * sin(t * (active ? 6.0 : 0) + phase)
+                    // Layer two waves so the dance feels organic, not metronomic.
+                    let wave = 0.5 + 0.35 * sin(t * (active ? 6.0 : 0) + phase)
+                                   + 0.15 * sin(t * (active ? 9.3 : 0) + phase * 1.7)
                     let h = max(2, size.height * CGFloat(0.12 + amp * wave))
                     let x = CGFloat(i) * (bw + gap)
                     let rect = CGRect(x: x, y: size.height - h, width: bw, height: h)
                     let shade = GraphicsContext.Shading.linearGradient(
-                        Gradient(colors: [color.opacity(0.35), color]),
+                        Gradient(colors: [color.opacity(0.30), color, .white.opacity(active ? 0.55 : 0)]),
                         startPoint: CGPoint(x: 0, y: size.height),
-                        endPoint: CGPoint(x: 0, y: 0))
-                    ctx.fill(Path(roundedRect: rect, cornerRadius: bw / 2), with: shade)
+                        endPoint: CGPoint(x: 0, y: size.height - h))
+                    let bar = Path(roundedRect: rect, cornerRadius: bw / 2)
+                    ctx.fill(bar, with: shade)
                 }
             }
         }
@@ -106,9 +155,14 @@ struct Sparkline: View {
             fill.addLine(to: CGPoint(x: 0, y: size.height))
             fill.closeSubpath()
             ctx.fill(fill, with: .linearGradient(
-                Gradient(colors: [color.opacity(0.30), color.opacity(0.02)]),
+                Gradient(colors: [color.opacity(0.34), color.opacity(0.015)]),
                 startPoint: .zero, endPoint: CGPoint(x: 0, y: size.height)))
-            ctx.stroke(line, with: .color(color), style: StrokeStyle(lineWidth: 1.5, lineJoin: .round))
+            // A soft glow under the trace makes it read as live energy, not a chart.
+            ctx.addFilter(.shadow(color: color.opacity(0.55), radius: 2))
+            ctx.stroke(line, with: .linearGradient(
+                Gradient(colors: [color.opacity(0.7), color]),
+                startPoint: .zero, endPoint: CGPoint(x: size.width, y: 0)),
+                style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
         }
     }
 }
@@ -123,16 +177,25 @@ struct StatusRing: View {
     var active: Bool
     var glyph: String
     var size: CGFloat = 30
+    /// Extra gate (e.g. popover visibility). The gradient sweep only spins while
+    /// the agent is `active` *and* visible; otherwise the TimelineView is paused
+    /// so the ring stops redrawing 30×/sec. Data-driven changes (progress, glyph)
+    /// still re-render because SwiftUI re-evaluates the body when they change.
+    var animate: Bool = true
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: !(active && animate))) { timeline in
             let angle = active ? timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2) / 2 * 360 : 0
             ZStack {
-                Circle().stroke(color.opacity(0.18), lineWidth: 3)
+                // Faint tinted disc behind the glyph gives the ring some depth.
+                Circle().fill(
+                    RadialGradient(colors: [color.opacity(active ? 0.22 : 0.10), .clear],
+                                   center: .center, startRadius: 0, endRadius: size * 0.55))
+                Circle().stroke(color.opacity(0.16), lineWidth: 3)
                 if active {
                     Circle()
                         .trim(from: 0, to: 0.85)
-                        .stroke(AngularGradient(colors: [color.opacity(0), color],
+                        .stroke(AngularGradient(colors: [color.opacity(0), color.opacity(0.6), color, .white],
                                                 center: .center),
                                 style: StrokeStyle(lineWidth: 3, lineCap: .round))
                         .rotationEffect(.degrees(angle))
@@ -140,7 +203,9 @@ struct StatusRing: View {
                 if let p = progress {
                     Circle()
                         .trim(from: 0, to: max(0.02, p))
-                        .stroke(color, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .stroke(LinearGradient(colors: Color.gradientPair(color),
+                                               startPoint: .top, endPoint: .bottom),
+                                style: StrokeStyle(lineWidth: 3, lineCap: .round))
                         .rotationEffect(.degrees(-90))
                 }
                 Image(systemName: glyph)
@@ -148,7 +213,7 @@ struct StatusRing: View {
                     .foregroundStyle(color)
             }
             .frame(width: size, height: size)
-            .shadow(color: active ? color.opacity(0.6) : .clear, radius: active ? 6 : 0)
+            .shadow(color: active ? color.opacity(0.55) : .clear, radius: active ? 7 : 0)
         }
     }
 }
