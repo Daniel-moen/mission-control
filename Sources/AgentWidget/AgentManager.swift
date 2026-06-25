@@ -38,7 +38,12 @@ final class AgentManager: ObservableObject {
             guard popoverVisible != oldValue else { return }
             // On open, refresh immediately so the feed isn't stale for up to a
             // full slow-cadence interval, then switch to the matching cadence.
-            if popoverVisible { tick() }
+            // Also force a fresh process scan: while closed we let liveness/terminal
+            // info go stale to save CPU, so re-resolve it the instant someone looks.
+            if popoverVisible {
+                lastLivenessScan = .distantPast
+                tick()
+            }
             scheduleTimer()
         }
     }
@@ -97,8 +102,13 @@ final class AgentManager: ObservableObject {
     private var liveDirs: Set<String> = []
     private var liveScanReady = false
     private var lastLivenessScan = Date.distantPast
-    /// How long after the process disappears before we drop the session.
-    private let livenessScanInterval: TimeInterval = 2.5
+    /// How often we run the (expensive: lsof + a parent-walk of ps forks per
+    /// agent) process scan. Snappy while the popover is open so liveness and
+    /// terminal targeting stay fresh for the live feed; much lazier while it's
+    /// closed, where terminal info is unusable (no focus/reply UI on screen) and
+    /// only coarse liveness matters. This is the app's single biggest idle cost,
+    /// so backing it off when nobody's watching is where most of the CPU goes.
+    private var livenessScanInterval: TimeInterval { popoverVisible ? 2.5 : 12.0 }
 
     private func refreshLivenessIfNeeded() {
         guard Date().timeIntervalSince(lastLivenessScan) > livenessScanInterval else { return }

@@ -63,6 +63,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         spinnerTimer = st
     }
 
+    /// The symbol+tint last drawn into the menu bar, so we only rebuild the
+    /// (relatively costly) NSImage when the state actually changes — not on every
+    /// 8fps spinner frame, where only the title character moves.
+    private var lastRenderedSymbol: String?
+    private var lastRenderedTint: NSColor?
+
     /// Reflect fleet state in the menu bar: a bolt while anything's working, a
     /// pause badge when agents are waiting on you, a calm sparkle when idle, and
     /// the working count alongside it.
@@ -81,12 +87,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             symbol = "sparkles"; tint = nil
         }
 
-        let img = NSImage(systemSymbolName: symbol, accessibilityDescription: "Agents")
-        if let tint, let img {
-            let cfg = NSImage.SymbolConfiguration(paletteColors: [tint])
-            button.image = img.withSymbolConfiguration(cfg)
-        } else {
-            button.image = img
+        // The icon image only depends on (symbol, tint), which change a handful of
+        // times a minute — rebuilding it on every spinner tick would allocate a new
+        // NSImage ~8×/sec for nothing. Skip the rebuild when neither changed.
+        if symbol != lastRenderedSymbol || tint != lastRenderedTint {
+            lastRenderedSymbol = symbol
+            lastRenderedTint = tint
+            let img = NSImage(systemSymbolName: symbol, accessibilityDescription: "Agents")
+            if let tint, let img {
+                let cfg = NSImage.SymbolConfiguration(paletteColors: [tint])
+                button.image = img.withSymbolConfiguration(cfg)
+            } else {
+                button.image = img
+            }
         }
 
         if s.active > 0 {
