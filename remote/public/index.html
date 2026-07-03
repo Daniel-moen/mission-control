@@ -739,6 +739,7 @@
             <div class="setrow"><span class="sk"><b>Relay</b><span>the server this panel talks to</span></span><span class="sv" id="setRelay"></span></div>
             <div class="setrow"><span class="sk"><b>Mac host</b><span>your workstation streaming the fleet</span></span><span class="sv" id="setHost">Offline</span></div>
             <div class="setrow"><span class="sk"><b>Access token</b><span>shared secret for this relay</span></span><span class="sv" id="setToken">—</span></div>
+            <div class="setrow"><span class="sk"><b>Panel build</b><span>this page's version — check it matches the latest</span></span><span class="sv" id="setBuild">—</span></div>
           </div>
           <div class="dsec panel">
             <span class="ptitle">Actions</span>
@@ -1570,9 +1571,11 @@ function doLaunch() {
 setMode('fleet'); renderSoloModels(); renderManager(); renderWorkers(); renderChat();
 
 // ---- settings -----------------------------------------------------------------------
+const PANEL_BUILD = 'build 2026-07-04c · selectors-fixed';
 function renderSettings() {
   document.getElementById('setRelay').textContent = location.host;
   document.getElementById('setToken').textContent = token ? token.slice(0, 4) + '••••••••' : '—';
+  document.getElementById('setBuild').textContent = PANEL_BUILD;
 }
 renderSettings();
 
