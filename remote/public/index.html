@@ -1529,7 +1529,7 @@ function renderWorkers() {
   document.getElementById('workerList').innerHTML = workers.map((w, i) => `
     <div class="workerrow">
       <span class="wnum">${i + 1}</span>
-      <select class="pick" onchange="workers[${i}]=this.value;renderWorkers()">${modelOptions(w)}</select>
+      <select class="pick" onchange="workers[${i}]=this.value">${modelOptions(w)}</select>
       <button class="rm" onclick="workers.splice(${i},1);renderWorkers()" aria-label="Remove worker ${i + 1}">✕</button>
     </div>`).join('');
   renderLaunchBtn();
