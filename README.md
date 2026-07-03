@@ -25,7 +25,7 @@ The fleet dashboard also gives you filter pills (All / Working / Waiting / Done)
 **Launch tab** — Spin up a solo agent or a coordinated fleet in seconds:
 
 - **Solo** — one agent, one mission, pick a model
-- **Fleet** — describe the mission once, toggle a manager on/off (runs on Opus by default, coordinates workers via `.mission-control/`), add up to 8 workers each on the model you choose (Opus / Sonnet / Haiku / Default)
+- **Fleet** — describe the mission once, toggle a manager on/off (runs on Opus by default, coordinates workers via `.mission-control/`), add up to 8 workers each on the model you choose (Fable 5 / Opus 4.8 / Sonnet 5 / Haiku 4.5 / Default)
 - Pick which terminal new sessions open in — Terminal.app, iTerm2, WezTerm, Ghostty, kitty, or Alacritty (only terminals actually installed on your Mac are offered)
 - Recent working directories are remembered and one tap away
 - Hit launch — each agent opens in its own window of your chosen terminal and appears in Fleet automatically (multi-agent launches grouped together)
@@ -38,6 +38,20 @@ The fleet dashboard also gives you filter pills (All / Working / Waiting / Done)
 - Live tok/s readout
 - Token breakdown bar (output / input / cache)
 - Leaderboard of the biggest burners, with animated progress bars
+
+**Remote panel** — a full Mission Control web app for the iPad (or any browser) via a tiny relay you deploy on Railway. Sidebar navigation in landscape, icon rail in portrait, bottom tabs on a phone; tapping any agent anywhere slides in an inspector with the full detail:
+
+- **Dashboard** — fleet strength tiles (active / needs-you / done), burn rate with sparkline, spend, Mac link health, a "needs your call" queue, the live activity feed, and a broadcast bar.
+- **Agents** — live cards mirrored from your Mac ~1×/second: status, current activity, plan progress, runtime/cost/burn. The inspector shows the objective, todo checklist, **a live terminal mirror** (the agent's actual screen, captured by TTY even at an idle prompt), the activity log, reply box + quick presets, and the kill switch.
+- **Tasks** — a kanban board (to do / in progress / done) built live from every agent's `TodoWrite` plan; each card links back to its agent.
+- **Projects** — fleets and working directories rolled up into project cards: member agents, aggregate plan progress, cost and tokens.
+- **Analytics** — fleet-wide tok/s hero counter with a live chart, token breakdown bar (output / input / cache read / cache write, colorblind-safe palette), and a top-agents leaderboard.
+- **Chat** — message any single agent (its transcript rendered as a conversation) or broadcast to all, with dictation via the mic button where the browser supports it.
+- **Launch** — fire a solo agent or a manager-led fleet *from the iPad*: mission, working directory (recent folders one tap away), model per agent (Fable 5 / Opus 4.8 / Sonnet 5 / Haiku 4.5 / Default), up to 8 workers. Terminals open on the Mac as usual and the new agents appear on the board.
+
+An emergency **Stop all** button rides in the header on every screen.
+
+The Mac dials *out* to the relay over a WebSocket — nothing ever connects into your machine — and every connection (Mac and browser alike) must present a shared secret token. Terminal mirroring covers the scriptable terminals (iTerm2, Terminal.app, WezTerm — including quarantine-translocated WezTerm installs). See [Remote panel setup](#remote-panel-ipad) below.
 
 **Menu bar icon** — Glanceable fleet state without opening anything:
 
@@ -98,7 +112,10 @@ Liveness is tracked by scanning `ps` + `lsof` every ~2.5s in a background thread
 
 When you launch two or more agents together, Mission Control registers a **fleet group** and correlates sessions to it after the fact — session IDs aren't known until transcripts appear. A session is claimed when its working directory matches the launch folder and it first appeared after that launch, so pre-existing agents in the same folder aren't swept in.
 
-Groups show as a single collapsible card in the Fleet tab (mission title, working/waiting/done counts, total cost). Expand to see each member's full `AgentCard`, manager listed first.
+Groups show as a single collapsible card in the Fleet tab (mission title, working/waiting/done counts, total cost). Expand it and toggle between two views:
+
+- **Board** (default) — a mission-control task board: a strip of aggregate metrics (combined task progress, live fleet burn rate in tok/s, total turns, spend, elapsed time) above one compact row per worker. Each worker row shows its role (Manager crowned, then Worker 1, 2, …), status, live "what it's doing right now" line, a step progress bar, and its full `TodoWrite` checklist — done (struck through), in-progress (highlighted), and pending — so you can see at a glance what every agent has finished and what it's working on. Fold any worker's checklist away to keep a big squad scannable.
+- **Cards** — each member's full `AgentCard`, manager listed first.
 
 ### Terminal control
 
@@ -143,7 +160,8 @@ Sources/AgentWidget/
   main.swift           AppDelegate: menu bar, popover, spinner
   RootView.swift       Tab container, aurora background, celebration burst
   ContentView.swift    Fleet tab: filter/sort/search, dashboard, broadcast
-  FleetGroupCard.swift Collapsible card for a coordinated launch
+  FleetGroupCard.swift Collapsible card for a coordinated launch (Board/Cards toggle)
+  FleetTaskBoard.swift Expanded fleet task board: aggregate metrics + per-worker todos
   AgentCard.swift      Per-agent card: rings, sparklines, feed, reply
   AgentModels.swift    AgentRun, FleetGroup, FleetSummary, AgentTodo, LogLine
   AgentManager.swift   Discovery loop, transcript tailing, launch, fleet coordination
@@ -152,6 +170,7 @@ Sources/AgentWidget/
   Effects.swift        AuroraBackground, Equalizer, Sparkline, StatusRing, Celebration
   LaunchView.swift     Launch tab: solo/fleet, mission input, terminal picker
   TerminalBridge.swift Terminal discovery (ps/lsof), focus, reply, launch
+  RemoteBridge.swift   WebSocket host: streams snapshots to the relay, runs remote commands
   Notifier.swift       UserNotifications + osascript fallback
   PlanWindow.swift     Plan pop-out window, markdown renderer
   Settings.swift       UserDefaults-backed preferences
@@ -161,6 +180,61 @@ Info.plist             Bundle metadata (id, LSUIElement for menu-bar-only)
 bundle.sh              Build → assemble .app → ad-hoc sign
 Makefile               Convenience targets: build, dev, release, clean
 ```
+
+---
+
+## Remote panel (iPad)
+
+The `remote/` folder is a self-contained relay + web panel:
+
+```
+remote/
+  server.js           Node relay: one "host" (your Mac) + N "viewer" (browser) sockets
+  public/index.html   The panel — a single self-contained page, no build step
+  package.json        One dependency (ws)
+```
+
+### Deploy (Railway)
+
+```bash
+cd remote
+railway init                                 # create a project
+railway up --detach                          # deploy
+railway variables --set "MC_TOKEN=$(openssl rand -hex 24)"   # shared secret
+railway domain                               # mint the public URL
+```
+
+### Point the app at it
+
+The app reads three preferences (also surfaced in the ⚙ settings menu as the
+**Remote panel (iPad)** toggle):
+
+```bash
+defaults write com.agentwidget.mission-control remoteURL "https://<your-domain>.up.railway.app"
+defaults write com.agentwidget.mission-control remoteToken "<your MC_TOKEN>"
+defaults write com.agentwidget.mission-control remoteEnabled -bool true
+```
+
+Restart Mission Control and it dials the relay. On the iPad, open the panel URL —
+the ⚙ menu's **Copy panel link (with token)** gives you a link with the token baked
+in; the panel stores it locally and strips it from the address bar. Add it to the
+Home Screen for a full-screen app feel.
+
+### How it works
+
+- The Mac connects out as the single **host** and streams a JSON fleet snapshot
+  (~1/s while anyone is watching); browsers connect as **viewers**.
+- Viewer commands (`reply`, `broadcast`, `kill`, `launch`) are relayed to the Mac,
+  executed through the same terminal bridge / launcher the local UI uses, and
+  acknowledged back as a toast on the panel.
+- Terminal mirrors are read every ~3s (AppleScript by TTY for iTerm2/Terminal.app,
+  `wezterm cli get-text` for WezTerm), trimmed to the visible tail, and ride along
+  with the snapshot — only while a viewer is connected.
+- While at least one viewer is connected the app polls transcripts at the fast
+  (popover-open) cadence so the remote feed reads as live; it drops back to the
+  lazy cadence when the last viewer leaves.
+- Every socket must present `MC_TOKEN`. No token, no data. The relay keeps no
+  state beyond the last snapshot in memory.
 
 ---
 

@@ -27,7 +27,10 @@ final class TerminalBridge {
 
     /// Map of resolved working directory → terminal info for every running
     /// `claude` process. One scan feeds both liveness and terminal targeting.
-    func scan() -> [String: TerminalInfo] {
+    /// Returns nil when the scan itself failed (shell couldn't run, `ps`
+    /// errored, …) — callers must treat that as "unknown", NOT as "no agents",
+    /// or one hiccup under load marks every live agent dead at once.
+    func scan() -> [String: TerminalInfo]? {
         let script = #"""
         for p in $(ps -axww -o pid=,command= | awk '$2 ~ /(^|\/)claude$/ {print $1}'); do
           cwd=$(lsof -a -p "$p" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
@@ -52,10 +55,14 @@ final class TerminalBridge {
           done
           printf '%s\t%s\t%s\t%s\n' "$cwd" "$tty" "$app" "$appcmd"
         done
+        echo '__MC_SCAN_OK__'
         """#
         let out = runShell(script)
+        // No sentinel ⇒ the script never ran to completion — report failure
+        // rather than an (indistinguishable) empty fleet.
+        guard out.contains("__MC_SCAN_OK__") else { return nil }
         var result: [String: TerminalInfo] = [:]
-        for line in out.split(separator: "\n") {
+        for line in out.split(separator: "\n") where line != "__MC_SCAN_OK__" {
             let parts = line.components(separatedBy: "\t")
             guard parts.count >= 3, !parts[0].isEmpty else { continue }
             let cwd = resolved(parts[0])
@@ -107,6 +114,60 @@ final class TerminalBridge {
     }
 
     enum SendResult { case sent, failed, needsAccessibility }
+
+    // MARK: Screen mirror
+
+    /// The visible contents of the agent's terminal tab/pane — literally what
+    /// you'd see standing at the Mac, including the claude TUI, its prompt and
+    /// any permission dialog. Only scriptable terminals can be read (iTerm2 /
+    /// Terminal.app by TTY via AppleScript, WezTerm via its CLI); returns nil
+    /// for the rest.
+    func screenText(of info: TerminalInfo) -> String? {
+        guard !info.tty.isEmpty else { return nil }
+        switch info.app {
+        case "iTerm2":   return osascript(iTermScreenScript, [info.tty])
+        case "Terminal": return osascript(terminalScreenScript, [info.tty])
+        case "WezTerm":
+            guard let id = weztermPaneId(forTty: info.tty) else { return nil }
+            return weztermCLI(["get-text", "--pane-id", "\(id)"])
+        default:
+            return nil
+        }
+    }
+
+    private let iTermScreenScript = """
+    on run argv
+      set theTty to item 1 of argv
+      tell application "iTerm2"
+        repeat with w in windows
+          repeat with t in tabs of w
+            repeat with s in sessions of t
+              if (tty of s) is theTty then
+                return contents of s
+              end if
+            end repeat
+          end repeat
+        end repeat
+      end tell
+      return ""
+    end run
+    """
+
+    private let terminalScreenScript = """
+    on run argv
+      set theTty to item 1 of argv
+      tell application "Terminal"
+        repeat with w in windows
+          repeat with t in tabs of w
+            if (tty of t) is theTty then
+              return contents of t
+            end if
+          end repeat
+        end repeat
+      end tell
+      return ""
+    end run
+    """
 
     // MARK: Launch
 
@@ -398,21 +459,40 @@ final class TerminalBridge {
         return nil
     }
 
-    private lazy var weztermPath: String? = {
+    /// Resolved CLI path, cached once found. Deliberately NOT `lazy`: a lazy
+    /// var would also cache a miss forever, and the strongest resolution
+    /// strategy (reading the running GUI process's own path) only works while
+    /// WezTerm is actually running — so a miss must be retryable.
+    private var cachedWeztermPath: String?
+    private var weztermPath: String? {
+        if let p = cachedWeztermPath, FileManager.default.isExecutableFile(atPath: p) { return p }
+        let fm = FileManager.default
+        var found: String?
         let candidates = [
             "/opt/homebrew/bin/wezterm", "/usr/local/bin/wezterm",
             "/Applications/WezTerm.app/Contents/MacOS/wezterm",
             "\(home)/Applications/WezTerm.app/Contents/MacOS/wezterm",
         ]
-        if let f = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) { return f }
-        if let items = try? FileManager.default.contentsOfDirectory(atPath: "\(home)/Downloads") {
+        found = candidates.first { fm.isExecutableFile(atPath: $0) }
+        if found == nil {
+            // Derive from the running GUI process: the `wezterm` CLI sits next
+            // to `wezterm-gui` in Contents/MacOS. This is the only path that
+            // works when the app is quarantine-translocated (launched straight
+            // from Downloads/a DMG), where it runs from a random /private/var
+            // AppTranslocation directory no fixed candidate can predict.
+            let derived = runShell(#"ps -axww -o command= | sed -n 's|^\(.*\)/wezterm-gui.*|\1/wezterm|p' | head -1"#)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !derived.isEmpty, fm.isExecutableFile(atPath: derived) { found = derived }
+        }
+        if found == nil, let items = try? fm.contentsOfDirectory(atPath: "\(home)/Downloads") {
             for item in items where item.hasPrefix("WezTerm") {
                 let p = "\(home)/Downloads/\(item)/WezTerm.app/Contents/MacOS/wezterm"
-                if FileManager.default.isExecutableFile(atPath: p) { return p }
+                if fm.isExecutableFile(atPath: p) { found = p; break }
             }
         }
-        return nil
-    }()
+        cachedWeztermPath = found
+        return found
+    }
 
     private var weztermAppBundle: URL? {
         guard let p = weztermPath else { return nil }

@@ -1,0 +1,1658 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0e0f12">
+<title>Mission Control</title>
+<style>
+  :root {
+    --bg: #0e0f12;          /* page plane */
+    --surface: #16171c;     /* panels & chart surface */
+    --surface2: #1d1f26;    /* raised / hover */
+    --inset: #0b0c0f;       /* terminal & chart wells */
+    --line: #262931;        /* hairline */
+    --line2: #363a45;       /* stronger border */
+    --ink: #f0f2f5;
+    --ink2: #9aa1ad;
+    --ink3: #626977;
+    --accent: #3987e5;      /* mission blue */
+    --accent-dim: rgba(57,135,229,0.12);
+    /* status (fixed palette — always paired with a label, never color alone) */
+    --good: #0ca30c;
+    --warn: #fab219;
+    --crit: #d03b3b;
+    --violet: #9085e9;      /* manager chrome */
+    /* telemetry series — validated categorical set on #16171c */
+    --s1: #3987e5;          /* output */
+    --s2: #199e70;          /* input */
+    --s3: #c98500;          /* cache read */
+    --s4: #9085e9;          /* cache write */
+    --sans: -apple-system, system-ui, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --r: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body { background: var(--bg); color: var(--ink); font: 14px/1.5 var(--sans); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+  input, textarea, select { font: inherit; }
+  svg { display: block; }
+
+  /* ================= app frame ================= */
+  .app { display: grid; grid-template-columns: 212px minmax(0, 1fr); min-height: 100dvh; }
+
+  /* ---- sidebar ---- */
+  .side {
+    position: sticky; top: 0; height: 100dvh; z-index: 40;
+    display: flex; flex-direction: column;
+    border-right: 1px solid var(--line); background: var(--bg);
+    padding: calc(14px + env(safe-area-inset-top)) 10px 14px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 4px 10px 16px; }
+  .brand .mark {
+    width: 30px; height: 30px; flex: none; border-radius: 8px; display: grid; place-items: center;
+    background: var(--accent); color: #fff;
+  }
+  .brand .bt { font-size: 14px; font-weight: 700; letter-spacing: 0.01em; line-height: 1.15; }
+  .brand .bs { font-size: 10.5px; color: var(--ink3); }
+  .nav { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: auto; }
+  .nav button {
+    display: flex; align-items: center; gap: 11px; text-align: left;
+    padding: 9px 10px; border-radius: 8px; color: var(--ink2); position: relative;
+    font-size: 13.5px; font-weight: 500; min-height: 40px;
+    transition: background 0.12s, color 0.12s;
+  }
+  .nav button:hover { background: var(--surface); color: var(--ink); }
+  .nav button.active { background: var(--accent-dim); color: var(--accent); font-weight: 600; }
+  .nav button svg { width: 19px; height: 19px; flex: none; }
+  .nav .nbadge {
+    margin-left: auto; min-width: 19px; height: 19px; padding: 0 5px; border-radius: 99px;
+    display: none; place-items: center; background: var(--warn); color: #1a1400;
+    font-size: 11px; font-weight: 700; font-family: var(--mono);
+  }
+  .nav .nbadge.on { display: grid; }
+  .sfoot { border-top: 1px solid var(--line); padding-top: 12px; display: flex; flex-direction: column; gap: 9px; }
+  .conn { display: flex; align-items: center; gap: 9px; padding: 0 10px; min-width: 0; }
+  .conn .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--crit); }
+  body.linked .conn .dot { background: var(--good); }
+  body.relay-only .conn .dot { background: var(--warn); }
+  .conn .ct { min-width: 0; }
+  .conn .c1 { font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+  .conn .c2 { font-size: 10.5px; color: var(--ink3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* ---- main column ---- */
+  .main { min-width: 0; display: flex; flex-direction: column; }
+  .top {
+    position: sticky; top: 0; z-index: 30;
+    display: flex; align-items: center; gap: 12px;
+    background: rgba(14,15,18,0.88); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--line);
+    padding: calc(10px + env(safe-area-inset-top)) 18px 10px;
+  }
+  .top h1 { font-size: 16px; font-weight: 700; flex: none; }
+  .top .headline {
+    flex: 1; min-width: 0; font-size: 12px; color: var(--ink3);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .pill {
+    flex: none; display: flex; align-items: center; gap: 7px;
+    border: 1px solid var(--line2); border-radius: 99px; padding: 4px 11px;
+    font-size: 11.5px; font-weight: 600; color: var(--ink2);
+  }
+  .pill i { width: 7px; height: 7px; border-radius: 50%; background: var(--crit); }
+  body.linked .pill i { background: var(--good); }
+  body.relay-only .pill i { background: var(--warn); }
+  .clock { flex: none; font-family: var(--mono); font-size: 12px; color: var(--ink3); font-variant-numeric: tabular-nums; }
+  .estop {
+    flex: none; display: flex; align-items: center; gap: 6px;
+    border: 1px solid rgba(208,59,59,0.5); border-radius: 8px; padding: 6px 11px;
+    color: var(--crit); font-size: 12px; font-weight: 700; min-height: 32px;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .estop:hover { background: rgba(208,59,59,0.1); border-color: var(--crit); }
+  .estop svg { width: 13px; height: 13px; }
+
+  .content { flex: 1; padding: 16px 18px calc(24px + env(safe-area-inset-bottom)); max-width: 1180px; width: 100%; margin: 0 auto; }
+  .pane { display: none; }
+  .pane.show { display: block; animation: pane-in 0.2s ease-out; }
+  @keyframes pane-in { from { opacity: 0; transform: translateY(4px); } }
+  @media (prefers-reduced-motion: reduce) { .pane.show { animation: none; } }
+
+  /* ================= primitives ================= */
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); }
+  .ptitle { font-size: 12px; font-weight: 700; letter-spacing: 0.02em; color: var(--ink2); text-transform: uppercase; }
+  .btn {
+    border: 1px solid var(--line2); border-radius: 8px; background: var(--surface2); color: var(--ink2);
+    font-size: 13px; font-weight: 600; padding: 9px 15px; min-height: 40px;
+    transition: color 0.12s, border-color 0.12s, background 0.12s, transform 0.08s;
+  }
+  .btn:hover { color: var(--ink); border-color: var(--ink3); }
+  .btn:active { transform: scale(0.97); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+  .btn.primary:hover { background: #4a93ea; }
+  .btn.danger { color: var(--crit); border-color: rgba(208,59,59,0.45); background: rgba(208,59,59,0.07); }
+  .btn.danger:hover { border-color: var(--crit); }
+  .btn:disabled { opacity: 0.4; cursor: default; }
+  .field {
+    background: var(--inset); color: var(--ink); width: 100%;
+    border: 1px solid var(--line); border-radius: 8px;
+    padding: 11px 13px; font-size: 15px; outline: none; min-height: 44px;
+    transition: border-color 0.12s;
+  }
+  .field:focus { border-color: var(--accent); }
+  .field::placeholder { color: var(--ink3); }
+  .statuschip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11px; font-weight: 700; border-radius: 99px; padding: 2px 9px;
+  }
+  .statuschip i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .statuschip.working { background: rgba(12,163,12,0.12); color: #4fd24f; }
+  .statuschip.working i { background: var(--good); }
+  .statuschip.waiting { background: rgba(250,178,25,0.12); color: var(--warn); }
+  .statuschip.waiting i { background: var(--warn); }
+  .statuschip.done { background: rgba(154,161,173,0.1); color: var(--ink2); }
+  .statuschip.done i { background: var(--ink3); }
+  .mgrchip {
+    display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: 0.06em;
+    color: var(--violet); border: 1px solid rgba(144,133,233,0.5); border-radius: 5px; padding: 1px 6px;
+  }
+  .inputrow { display: flex; gap: 8px; }
+  .inputrow .field { flex: 1; min-width: 0; }
+  .micbtn {
+    flex: none; width: 44px; min-height: 44px; border-radius: 8px;
+    border: 1px solid var(--line2); background: var(--surface2); color: var(--ink2);
+    display: grid; place-items: center;
+  }
+  .micbtn svg { width: 17px; height: 17px; }
+  .micbtn.rec { border-color: var(--crit); color: var(--crit); animation: recpulse 1.2s ease-in-out infinite; }
+  @keyframes recpulse { 50% { background: rgba(208,59,59,0.15); } }
+  body.nomic .micbtn { display: none; }
+  .emptybox { text-align: center; padding: 56px 20px; color: var(--ink3); font-size: 13.5px; }
+  .emptybox b { display: block; color: var(--ink2); font-size: 14.5px; margin-bottom: 4px; }
+
+  /* stat tiles */
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .tile {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+    padding: 13px 15px; display: flex; flex-direction: column; gap: 3px; min-width: 0;
+    text-align: left;
+  }
+  .tile .tl { font-size: 12px; color: var(--ink2); }
+  .tile .tv { font-size: 26px; font-weight: 650; line-height: 1.1; letter-spacing: -0.01em; }
+  .tile .tv.good { color: #4fd24f; }
+  .tile .tv.warn { color: var(--warn); }
+  .tile .tv.dim { color: var(--ink2); }
+  .tile .ts { font-size: 11px; color: var(--ink3); }
+  button.tile { cursor: pointer; transition: border-color 0.12s; }
+  button.tile:hover { border-color: var(--line2); }
+  .tile .spark { margin-top: 4px; width: 100%; height: 26px; }
+
+  /* ================= dashboard ================= */
+  .stack { display: flex; flex-direction: column; gap: 12px; }
+  .pane.stack { display: none; }
+  .pane.stack.show { display: flex; }
+  .dsec { padding: 15px 16px; }
+  .dsec .sechead { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; }
+  .live { font-family: var(--mono); font-size: 9px; letter-spacing: 0.14em; color: var(--crit); animation: blink 1.4s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0.2; } }
+  @media (prefers-reduced-motion: reduce) { .live { animation: none; } }
+
+  .attnrow {
+    display: flex; align-items: center; gap: 11px; width: 100%; text-align: left;
+    border: 1px solid rgba(250,178,25,0.35); border-radius: 8px; background: rgba(250,178,25,0.05);
+    padding: 10px 13px; margin-bottom: 7px; transition: border-color 0.12s;
+  }
+  .attnrow:last-child { margin-bottom: 0; }
+  .attnrow:hover { border-color: var(--warn); }
+  .attnrow .an { font-weight: 700; font-size: 13.5px; }
+  .attnrow .aa { font-family: var(--mono); font-size: 11px; color: var(--warn); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .attnrow .abody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .attnrow .chev { color: var(--warn); flex: none; }
+
+  .actfeed { max-height: 300px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .afrow { display: flex; gap: 11px; padding: 7px 2px; border-bottom: 1px solid var(--line); }
+  .afrow:last-child { border-bottom: none; }
+  .aftime { flex: none; width: 56px; padding-top: 2px; font-family: var(--mono); font-size: 10px; color: var(--ink3); font-variant-numeric: tabular-nums; }
+  .afbody { flex: 1; min-width: 0; }
+  .afname { font-size: 11px; font-weight: 700; color: var(--ink2); }
+  .aftext { font-family: var(--mono); font-size: 11.5px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* ================= agents ================= */
+  .toolbar { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }
+  .chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 2px; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chips button {
+    flex: none; border: 1px solid var(--line); border-radius: 99px; background: var(--surface);
+    color: var(--ink2); font-size: 12.5px; font-weight: 600; padding: 6px 13px; min-height: 34px;
+    transition: all 0.12s;
+  }
+  .chips button i { font-style: normal; font-family: var(--mono); font-size: 10.5px; opacity: 0.75; margin-left: 5px; }
+  .chips button:hover { color: var(--ink); }
+  .chips button.sel { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+  .toolbar .search { flex: 1; min-width: 150px; min-height: 36px; padding: 7px 12px; font-size: 13.5px; }
+
+  .agrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
+  .acard {
+    text-align: left; display: flex; flex-direction: column; gap: 8px; min-width: 0;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+    padding: 13px 14px; transition: border-color 0.12s, transform 0.08s;
+  }
+  .acard:hover { border-color: var(--line2); }
+  .acard:active { transform: scale(0.99); }
+  .acard.waiting { border-color: rgba(250,178,25,0.45); }
+  .acard.flash { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .acard .top1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .acard .nm { font-size: 14.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+  .acard .act {
+    font-family: var(--mono); font-size: 11px; color: var(--ink2); min-height: 2.9em;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .acard.working .act { color: #4fd24f; }
+  .acard.waiting .act { color: var(--warn); }
+  .pbar { height: 5px; border-radius: 3px; background: var(--inset); border: 1px solid var(--line); overflow: hidden; }
+  .pbar i { display: block; height: 100%; background: var(--accent); border-radius: 0 3px 3px 0; transition: width 0.5s ease; }
+  .acard .meta { display: flex; gap: 10px; font-family: var(--mono); font-size: 10.5px; color: var(--ink3); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; }
+
+  /* ================= inspector ================= */
+  #scrim { position: fixed; inset: 0; z-index: 55; background: rgba(0,0,0,0.5); opacity: 0; pointer-events: none; transition: opacity 0.22s; }
+  body.insp-open #scrim { opacity: 1; pointer-events: auto; }
+  .inspector {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 60;
+    width: min(460px, 100vw);
+    background: var(--surface); border-left: 1px solid var(--line);
+    transform: translateX(102%); transition: transform 0.25s ease;
+    display: flex; flex-direction: column;
+  }
+  body.insp-open .inspector { transform: none; box-shadow: -18px 0 44px rgba(0,0,0,0.45); }
+  @media (prefers-reduced-motion: reduce) { .inspector, #scrim { transition: none; } }
+  .ihead {
+    display: flex; align-items: center; gap: 10px; flex: none;
+    padding: calc(12px + env(safe-area-inset-top)) 16px 12px; border-bottom: 1px solid var(--line);
+  }
+  .ihead .inm { font-size: 16px; font-weight: 700; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 8px; }
+  .ihead .close { color: var(--ink3); padding: 6px; border-radius: 7px; }
+  .ihead .close:hover { color: var(--ink); background: var(--surface2); }
+  .ibody { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 14px 16px calc(14px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 14px; }
+  .imeta { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 12px; font-size: 12px; }
+  .imeta .k { color: var(--ink3); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .imeta .v { font-family: var(--mono); font-size: 12px; color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .iobj { font-size: 13px; color: var(--ink2); background: var(--inset); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; max-height: 108px; overflow-y: auto; }
+  .isec .sechead { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .term {
+    background: var(--inset); border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
+  }
+  .term pre {
+    margin: 0; padding: 11px 12px; max-height: 300px; overflow: auto;
+    font-family: var(--mono); font-size: 11px; line-height: 1.55; color: #c6ccd6;
+    white-space: pre-wrap; word-break: break-word; -webkit-overflow-scrolling: touch;
+  }
+  .term .noscreen { padding: 12px; font-size: 12.5px; color: var(--ink3); }
+  .todos { display: flex; flex-direction: column; gap: 5px; }
+  .todo { display: flex; gap: 9px; font-size: 13px; align-items: baseline; }
+  .todo .tick { flex: none; font-family: var(--mono); font-size: 11px; width: 15px; color: var(--ink3); }
+  .todo.completed { color: var(--ink3); text-decoration: line-through; }
+  .todo.completed .tick { color: var(--good); text-decoration: none; }
+  .todo.in_progress { color: var(--ink); font-weight: 600; }
+  .todo.in_progress .tick { color: var(--good); }
+  .ifeed {
+    max-height: 180px; overflow-y: auto; background: var(--inset); border: 1px solid var(--line);
+    border-radius: 8px; padding: 9px 11px; font-family: var(--mono); font-size: 11px; line-height: 1.65;
+    -webkit-overflow-scrolling: touch;
+  }
+  .line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink2); }
+  .line.command { color: var(--accent); }
+  .line.tool { color: var(--s3); }
+  .line.text { color: var(--ink); }
+  .line.status { color: var(--ink3); font-style: italic; }
+  .quick { display: flex; gap: 7px; flex-wrap: wrap; }
+  .quick .btn { padding: 8px 13px; min-height: 38px; font-size: 12.5px; }
+  .readonly { font-size: 12.5px; color: var(--ink3); font-style: italic; }
+  .iprog { display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 11px; color: var(--ink2); }
+  .iprog .pbar { flex: 1; }
+
+  /* ================= tasks (board) ================= */
+  .board { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; align-items: start; }
+  .col { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 12px; min-width: 0; }
+  .col .colhead { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; padding: 0 2px; }
+  .col .colhead .cd { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .col .colhead .cn { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--ink2); flex: 1; }
+  .col .colhead .cc { font-family: var(--mono); font-size: 11px; color: var(--ink3); }
+  .tcards { display: flex; flex-direction: column; gap: 7px; max-height: 62dvh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .tcard {
+    text-align: left; width: 100%; background: var(--surface2); border: 1px solid var(--line);
+    border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 7px;
+    transition: border-color 0.12s;
+  }
+  .tcard:hover { border-color: var(--line2); }
+  .tcard .tt { font-size: 12.5px; line-height: 1.4; }
+  .tcard.doneT .tt { color: var(--ink3); }
+  .tcard .who { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--ink3); font-weight: 600; }
+  .tcard .who i { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+  .colempty { font-size: 12px; color: var(--ink3); font-style: italic; padding: 6px 2px; }
+
+  /* ================= projects ================= */
+  .pgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; align-items: start; }
+  .pcard { padding: 15px 16px; display: flex; flex-direction: column; gap: 11px; min-width: 0; }
+  .pcard .ph { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
+  .pcard .pn { font-size: 15px; font-weight: 700; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pcard .ppct { font-family: var(--mono); font-size: 12px; color: var(--ink2); font-variant-numeric: tabular-nums; }
+  .pcard .pdir { font-family: var(--mono); font-size: 10.5px; color: var(--ink3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: -7px; }
+  .pcard .pstats { display: flex; gap: 12px; font-family: var(--mono); font-size: 10.5px; color: var(--ink3); font-variant-numeric: tabular-nums; }
+  .prow {
+    display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+    padding: 7px 9px; border-radius: 7px; border: 1px solid transparent; min-width: 0;
+    transition: background 0.12s;
+  }
+  .prow:hover { background: var(--surface2); }
+  .prow i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .prow .rn { font-size: 12.5px; font-weight: 600; flex: none; max-width: 40%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .prow .ra { font-family: var(--mono); font-size: 10.5px; color: var(--ink3); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .prows { display: flex; flex-direction: column; gap: 2px; margin: -4px -6px; }
+
+  /* ================= analytics ================= */
+  .hero { padding: 16px; }
+  .hero .hv { font-size: 44px; font-weight: 650; line-height: 1.05; letter-spacing: -0.01em; }
+  .hero .hl { font-size: 12px; color: var(--ink2); margin-bottom: 2px; }
+  .chartwrap { position: relative; margin-top: 12px; }
+  .chart { width: 100%; height: 140px; background: var(--inset); border: 1px solid var(--line); border-radius: 8px; }
+  #chartTip {
+    position: absolute; top: -8px; transform: translateX(-50%);
+    background: var(--surface2); border: 1px solid var(--line2); border-radius: 6px;
+    padding: 4px 9px; font-family: var(--mono); font-size: 10.5px; color: var(--ink);
+    pointer-events: none; display: none; white-space: nowrap; z-index: 5;
+  }
+  .stackbar { display: flex; gap: 2px; height: 16px; margin: 12px 0; background: var(--inset); border: 1px solid var(--line); border-radius: 6px; padding: 2px; }
+  .stackbar i { display: block; height: 100%; transition: width 0.5s ease; min-width: 0; border-radius: 2px; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; }
+  .legend .li { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink2); }
+  .legend .li i { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+  .legend .li b { color: var(--ink); font-family: var(--mono); font-weight: 500; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .lrow { display: grid; grid-template-columns: minmax(90px, 150px) 1fr 70px; align-items: center; gap: 11px; margin-bottom: 9px; }
+  .lrow:last-child { margin-bottom: 0; }
+  .lrow .lname { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lrow .lbar { height: 10px; background: var(--inset); border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+  .lrow .lbar i { display: block; height: 100%; background: var(--s1); border-radius: 0 4px 4px 0; transition: width 0.5s ease; }
+  .lrow .lval { font-family: var(--mono); font-size: 11.5px; color: var(--ink2); text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* ================= chat ================= */
+  .chatwrap { display: flex; flex-direction: column; height: calc(100dvh - 210px); min-height: 340px; }
+  .chatlog {
+    flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+    padding: 14px; margin: 10px 0; display: flex; flex-direction: column; gap: 7px;
+  }
+  .msg { max-width: 82%; border-radius: 12px; padding: 8px 12px; font-size: 13.5px; line-height: 1.45; word-break: break-word; }
+  .msg.in { align-self: flex-start; background: var(--surface2); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+  .msg.out { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+  .msg.sys { align-self: center; max-width: 100%; background: none; font-family: var(--mono); font-size: 10.5px; color: var(--ink3); padding: 0 4px; }
+  .msg.toolline { align-self: flex-start; max-width: 100%; background: none; font-family: var(--mono); font-size: 11px; color: var(--s3); padding: 0 4px; }
+
+  /* ================= launch ================= */
+  .lstack { display: flex; flex-direction: column; gap: 12px; max-width: 720px; }
+  .lsec { padding: 15px 16px; }
+  .lsec .ptitle { display: block; margin-bottom: 10px; }
+  .seg { display: flex; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 4px; gap: 4px; }
+  .seg button { flex: 1; border-radius: 7px; padding: 10px 12px; text-align: center; color: var(--ink3); transition: all 0.12s; }
+  .seg button .mt { display: block; font-size: 14px; font-weight: 700; }
+  .seg button .mb { display: block; font-size: 11px; margin-top: 1px; }
+  .seg button.active { background: var(--surface2); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line2); }
+  .seg button.active .mt { color: var(--accent); }
+  textarea#mission { min-height: 96px; resize: vertical; }
+  input#dir { font-family: var(--mono); font-size: 13px; }
+  .dirchips { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 10px; }
+  .dirchips button {
+    border: 1px solid var(--line); background: var(--surface2); color: var(--ink2);
+    border-radius: 7px; padding: 7px 12px; font-size: 12px; font-family: var(--mono); min-height: 34px;
+    transition: all 0.12s;
+  }
+  .dirchips button:hover { color: var(--ink); border-color: var(--line2); }
+  .dirchips button.sel { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+  .modelgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
+  .mcard {
+    display: flex; flex-direction: column; gap: 2px; text-align: left;
+    border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
+    background: var(--surface2); color: var(--ink); min-height: 44px; transition: border-color 0.12s;
+  }
+  .mcard:hover { border-color: var(--line2); }
+  .mcard.sel { border-color: var(--accent); background: var(--accent-dim); }
+  .mcard .mname { font-weight: 700; font-size: 13.5px; }
+  .mcard.sel .mname { color: var(--accent); }
+  .mcard .mblurb { font-size: 11px; color: var(--ink3); line-height: 1.35; }
+  .mgrrow { display: flex; align-items: center; gap: 12px; }
+  select.pick {
+    background: var(--surface2); color: var(--ink); border: 1px solid var(--line2);
+    border-radius: 8px; padding: 9px 30px 9px 12px; font-size: 14px; outline: none; cursor: pointer;
+    min-height: 42px; -webkit-appearance: none; appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%239aa1ad' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 11px center;
+  }
+  select.pick:focus { border-color: var(--accent); }
+  .workerrow {
+    display: flex; align-items: center; gap: 11px; padding: 9px 11px;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--surface2); margin-bottom: 8px;
+  }
+  .workerrow .wnum { flex: none; width: 26px; text-align: center; font-family: var(--mono); font-size: 13px; color: var(--ink3); }
+  .workerrow select { flex: 1; min-width: 0; }
+  .workerrow .rm { flex: none; color: var(--ink3); font-size: 16px; padding: 6px 9px; border-radius: 6px; }
+  .workerrow .rm:hover { color: var(--crit); }
+  .stepper { display: inline-flex; align-items: center; gap: 10px; float: right; }
+  .stepper button { width: 32px; height: 32px; border-radius: 7px; border: 1px solid var(--line2); background: var(--surface2); color: var(--ink); font-size: 16px; }
+  .stepper b { font-family: var(--mono); font-size: 13px; }
+  #launchBtn { width: 100%; padding: 15px; font-size: 16px; border-radius: var(--r); }
+  .launchnote { font-size: 12px; color: var(--ink3); text-align: center; }
+
+  #launchOverlay {
+    position: fixed; inset: 0; z-index: 90; display: none;
+    flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+    background: rgba(9,10,13,0.95);
+  }
+  #launchOverlay.show { display: flex; }
+  #launchOverlay .ring {
+    width: 52px; height: 52px; border-radius: 50%;
+    border: 3px solid var(--line2); border-top-color: var(--accent);
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { #launchOverlay .ring { animation: none; border-top-color: var(--line2); } }
+  #launchMsg { font-size: 16px; font-weight: 700; text-align: center; padding: 0 24px; }
+  #launchMsg.ok { color: #4fd24f; }
+
+  /* ================= settings ================= */
+  .setgrid { display: flex; flex-direction: column; gap: 12px; max-width: 640px; }
+  .setrow { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--line); }
+  .setrow:last-child { border-bottom: none; }
+  .setrow .sk { flex: 1; min-width: 0; }
+  .setrow .sk b { display: block; font-size: 13.5px; font-weight: 600; }
+  .setrow .sk span { font-size: 11.5px; color: var(--ink3); }
+  .setrow .sv { font-family: var(--mono); font-size: 12px; color: var(--ink2); max-width: 50%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* ================= toast & gate ================= */
+  #toast {
+    position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom));
+    transform: translateX(-50%) translateY(14px);
+    background: var(--surface2); border: 1px solid var(--line2); border-left: 4px solid var(--accent);
+    border-radius: 8px; padding: 11px 18px; font-size: 13.5px;
+    opacity: 0; pointer-events: none; z-index: 95; max-width: 90vw;
+    transition: opacity 0.22s, transform 0.22s;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #gate { position: fixed; inset: 0; background: var(--bg); z-index: 100; display: none; align-items: center; justify-content: center; padding: 24px; }
+  #gate.show { display: flex; }
+  #gate .box { max-width: 380px; width: 100%; display: flex; flex-direction: column; gap: 16px; padding: 30px 26px; }
+  #gate h2 { font-size: 19px; }
+  #gate p { color: var(--ink2); font-size: 13.5px; }
+  #gate input { font-family: var(--mono); }
+
+  /* ================= responsive ================= */
+  nav.tabbar { display: none; }
+  @media (max-width: 1099px) {
+    .app { grid-template-columns: 62px minmax(0, 1fr); }
+    .side { padding: calc(14px + env(safe-area-inset-top)) 8px 14px; }
+    .brand { justify-content: center; padding: 4px 0 16px; }
+    .brand .bt, .brand .bs, .nav button .lbl, .conn .ct { display: none; }
+    .nav button { justify-content: center; padding: 10px 0; }
+    .nav .nbadge.on { position: absolute; top: 3px; right: 6px; margin: 0; }
+    .conn { justify-content: center; padding: 0; }
+    .tiles { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 699px) {
+    .app { grid-template-columns: minmax(0, 1fr); }
+    .side { display: none; }
+    .content { padding: 14px 12px calc(86px + env(safe-area-inset-bottom)); }
+    nav.tabbar {
+      display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+      background: rgba(14,15,18,0.94); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+      border-top: 1px solid var(--line);
+      padding: 5px 6px calc(5px + env(safe-area-inset-bottom));
+      overflow-x: auto; scrollbar-width: none;
+    }
+    nav.tabbar::-webkit-scrollbar { display: none; }
+    nav.tabbar button {
+      flex: 1 0 62px; display: flex; flex-direction: column; align-items: center; gap: 2px;
+      padding: 7px 2px 5px; border-radius: 8px; color: var(--ink3);
+      font-size: 10px; font-weight: 600; position: relative;
+    }
+    nav.tabbar button svg { width: 20px; height: 20px; }
+    nav.tabbar button.active { color: var(--accent); }
+    nav.tabbar button .nbadge {
+      display: none; position: absolute; top: 2px; right: calc(50% - 22px);
+      min-width: 16px; height: 16px; padding: 0 4px; border-radius: 99px;
+      place-items: center; background: var(--warn); color: #1a1400;
+      font-size: 10px; font-weight: 700; font-family: var(--mono);
+    }
+    nav.tabbar button .nbadge.on { display: grid; }
+    .top { padding: calc(10px + env(safe-area-inset-top)) 12px 10px; }
+    .top .headline, .clock { display: none; }
+    .board { display: flex; overflow-x: auto; gap: 10px; scroll-snap-type: x mandatory; margin: 0 -12px; padding: 0 12px; }
+    .board .col { flex: 0 0 82vw; scroll-snap-align: start; }
+    .chatwrap { height: calc(100dvh - 260px); }
+    .estop .elbl { display: none; }
+  }
+</style>
+</head>
+<body class="offline">
+
+<div id="gate">
+  <div class="box panel">
+    <h2>Mission Control</h2>
+    <p>Paste your access token to link up and see your fleet live.</p>
+    <input class="field" id="gateToken" type="password" placeholder="Access token" autocomplete="off"
+           onkeydown="if(event.key==='Enter')saveToken()">
+    <button class="btn primary" onclick="saveToken()">Connect</button>
+  </div>
+</div>
+
+<div class="app">
+
+  <!-- ================= sidebar ================= -->
+  <aside class="side">
+    <div class="brand">
+      <div class="mark">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>
+      </div>
+      <div><div class="bt">Mission Control</div><div class="bs">AI operations</div></div>
+    </div>
+    <nav class="nav" id="sideNav"></nav>
+    <div class="sfoot">
+      <div class="conn"><span class="dot"></span><span class="ct"><span class="c1" id="connLabel">Offline</span><br><span class="c2" id="connHost"></span></span></div>
+    </div>
+  </aside>
+
+  <!-- ================= main ================= -->
+  <div class="main">
+    <header class="top">
+      <h1 id="topTitle">Dashboard</h1>
+      <div class="headline" id="headline">connecting…</div>
+      <button class="estop" onclick="emergencyStop()" title="Send “Stop” to every agent">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="10"/></svg>
+        <span class="elbl">Stop all</span>
+      </button>
+      <div class="pill"><i></i><span id="hostLabel">Offline</span></div>
+      <div class="clock" id="clock">--:--:--</div>
+    </header>
+
+    <div class="content">
+
+      <!-- ============ DASHBOARD ============ -->
+      <section class="pane show stack" id="pane-dashboard">
+        <div class="tiles">
+          <button class="tile" onclick="gotoAgents('all')"><span class="tl">Agents</span><span class="tv" id="gTotal">0</span><span class="ts">in session</span></button>
+          <button class="tile" onclick="gotoAgents('working')"><span class="tl">Active</span><span class="tv good" id="gRunning">0</span><span class="ts">working now</span></button>
+          <button class="tile" onclick="gotoAgents('waiting')"><span class="tl">Needs you</span><span class="tv warn" id="gWaiting">0</span><span class="ts">waiting on input</span></button>
+          <button class="tile" onclick="gotoAgents('done')"><span class="tl">Done</span><span class="tv dim" id="gDone">0</span><span class="ts">finished</span></button>
+        </div>
+        <div class="tiles">
+          <div class="tile"><span class="tl">Burn rate</span><span class="tv" id="sysBurn">0</span><span class="ts">tokens / sec</span><svg class="spark" id="spark" viewBox="0 0 100 26" preserveAspectRatio="none" aria-hidden="true"></svg></div>
+          <div class="tile"><span class="tl">Session spend</span><span class="tv" id="sysSpend">$0.00</span><span class="ts">API cost</span></div>
+          <div class="tile"><span class="tl">Turns</span><span class="tv" id="sysTurns">0</span><span class="ts">across all agents</span></div>
+          <div class="tile"><span class="tl">Mac link</span><span class="tv dim" id="sysMac">—</span><span class="ts" id="sysMacSub">host connection</span></div>
+        </div>
+
+        <div class="inputrow">
+          <input class="field" id="dashBroadcast" placeholder="Message every agent…" autocomplete="off"
+                 onkeydown="if(event.key==='Enter')broadcastFrom('dashBroadcast')">
+          <button class="micbtn" onclick="micInto('dashBroadcast', this)" aria-label="Dictate">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2.5" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+          </button>
+          <button class="btn primary" onclick="broadcastFrom('dashBroadcast')">Send</button>
+        </div>
+
+        <div class="dsec panel" id="attnCard" style="display:none">
+          <div class="sechead"><span class="ptitle">Needs your call</span></div>
+          <div id="attnList"></div>
+        </div>
+
+        <div class="dsec panel">
+          <div class="sechead"><span class="ptitle">Live activity</span><span class="live" id="dashLive" style="display:none">● LIVE</span></div>
+          <div class="actfeed" id="actFeed"><div class="emptybox" style="padding:20px">Standing by — no activity yet.</div></div>
+        </div>
+      </section>
+
+      <!-- ============ AGENTS ============ -->
+      <section class="pane" id="pane-agents">
+        <div class="toolbar">
+          <div class="chips" id="filterChips">
+            <button data-f="all" class="sel" onclick="setFilter('all')">All<i id="fcAll"></i></button>
+            <button data-f="working" onclick="setFilter('working')">Active<i id="fcWorking"></i></button>
+            <button data-f="waiting" onclick="setFilter('waiting')">Needs you<i id="fcWaiting"></i></button>
+            <button data-f="done" onclick="setFilter('done')">Done<i id="fcDone"></i></button>
+          </div>
+          <input class="field search" id="agentSearch" placeholder="Search agents…" autocomplete="off" oninput="renderAgents()">
+        </div>
+        <div class="agrid" id="agentGrid"></div>
+        <div class="emptybox" id="agentsEmpty" style="display:none"><b>No agents on the board</b>Send one out from Launch — it will appear here automatically.</div>
+      </section>
+
+      <!-- ============ TASKS ============ -->
+      <section class="pane" id="pane-tasks">
+        <div class="board" id="board"></div>
+        <div class="emptybox" id="tasksEmpty" style="display:none"><b>No task plans yet</b>Agents publish their plans here as they work.</div>
+      </section>
+
+      <!-- ============ PROJECTS ============ -->
+      <section class="pane" id="pane-projects">
+        <div class="pgrid" id="projGrid"></div>
+        <div class="emptybox" id="projEmpty" style="display:none"><b>No active projects</b>Projects appear when agents are working in a directory.</div>
+      </section>
+
+      <!-- ============ ANALYTICS ============ -->
+      <section class="pane stack" id="pane-analytics">
+        <div class="hero panel">
+          <div class="hl">Fleet burn rate — tokens / second</div>
+          <div class="hv" id="heroTps">0</div>
+          <div class="chartwrap">
+            <svg class="chart" id="chart" viewBox="0 0 600 140" preserveAspectRatio="none" aria-hidden="true"></svg>
+            <div id="chartTip"></div>
+          </div>
+        </div>
+        <div class="tiles">
+          <div class="tile"><span class="tl">Total tokens</span><span class="tv" id="bTotal">0</span></div>
+          <div class="tile"><span class="tl">Output tokens</span><span class="tv" id="bOutput">0</span></div>
+          <div class="tile"><span class="tl">Turns</span><span class="tv" id="bTurns">0</span></div>
+          <div class="tile"><span class="tl">Spend</span><span class="tv" id="bCost">$0</span></div>
+        </div>
+        <div class="dsec panel">
+          <span class="ptitle">Token breakdown</span>
+          <div class="stackbar" id="stackbar">
+            <i style="background:var(--s1)"></i><i style="background:var(--s2)"></i><i style="background:var(--s3)"></i><i style="background:var(--s4)"></i>
+          </div>
+          <div class="legend">
+            <span class="li"><i style="background:var(--s1)"></i>Output <b id="lgOut">0</b></span>
+            <span class="li"><i style="background:var(--s2)"></i>Input <b id="lgIn">0</b></span>
+            <span class="li"><i style="background:var(--s3)"></i>Cache read <b id="lgCr">0</b></span>
+            <span class="li"><i style="background:var(--s4)"></i>Cache write <b id="lgCw">0</b></span>
+          </div>
+        </div>
+        <div class="dsec panel">
+          <span class="ptitle">Top agents — total tokens</span>
+          <div id="leaderRows" style="margin-top:12px"></div>
+        </div>
+      </section>
+
+      <!-- ============ CHAT ============ -->
+      <section class="pane" id="pane-chat">
+        <div class="chips" id="chatChips"></div>
+        <div class="chatwrap">
+          <div class="chatlog" id="chatLog"></div>
+          <div class="inputrow">
+            <input class="field" id="chatInput" placeholder="Message all agents…" autocomplete="off"
+                   onkeydown="if(event.key==='Enter')chatSend()">
+            <button class="micbtn" onclick="micInto('chatInput', this)" aria-label="Dictate">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2.5" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+            </button>
+            <button class="btn primary" onclick="chatSend()">Send</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ LAUNCH ============ -->
+      <section class="pane" id="pane-launch">
+        <div class="lstack">
+          <div class="seg">
+            <button id="modeSolo" onclick="setMode('solo')"><span class="mt">Solo</span><span class="mb">One agent, one mission</span></button>
+            <button id="modeFleet" class="active" onclick="setMode('fleet')"><span class="mt">Fleet</span><span class="mb">A manager directs a crew</span></button>
+          </div>
+          <div class="lsec panel">
+            <span class="ptitle">Mission</span>
+            <textarea class="field" id="mission" placeholder="Describe the mission — the manager will split it into assignments…"></textarea>
+          </div>
+          <div class="lsec panel">
+            <span class="ptitle">Working directory</span>
+            <input class="field" id="dir" placeholder="~/path/to/project" autocomplete="off">
+            <div class="dirchips" id="dirchips"></div>
+          </div>
+          <div class="lsec panel" id="soloSection" style="display:none">
+            <span class="ptitle">Model</span>
+            <div class="modelgrid" id="soloModels"></div>
+          </div>
+          <div id="fleetSections" class="stack">
+            <div class="lsec panel">
+              <div class="mgrrow">
+                <span class="mgrchip">MGR</span>
+                <div style="flex:1;min-width:0">
+                  <div style="font-weight:700;font-size:14px">Manager</div>
+                  <div style="font-size:11.5px;color:var(--ink3)">Plans, assigns, reconciles — never touches code itself.</div>
+                </div>
+                <select class="pick" id="managerModel" onchange="managerModel=this.value"></select>
+              </div>
+            </div>
+            <div class="lsec panel">
+              <span class="ptitle" style="display:inline">Workers</span>
+              <span class="stepper"><button onclick="stepWorkers(-1)" aria-label="Remove a worker">−</button><b id="workerCount">2</b><button onclick="stepWorkers(1)" aria-label="Add a worker">+</button></span>
+              <div id="workerList" style="margin-top:12px"></div>
+            </div>
+          </div>
+          <button class="btn primary" id="launchBtn" onclick="doLaunch()">Launch fleet · 3 agents</button>
+          <p class="launchnote">Agents open in your chosen terminal on the Mac and appear on the Agents board automatically.</p>
+        </div>
+      </section>
+
+      <!-- ============ SETTINGS ============ -->
+      <section class="pane" id="pane-settings">
+        <div class="setgrid">
+          <div class="dsec panel">
+            <span class="ptitle">Connection</span>
+            <div class="setrow"><span class="sk"><b>Relay</b><span>the server this panel talks to</span></span><span class="sv" id="setRelay"></span></div>
+            <div class="setrow"><span class="sk"><b>Mac host</b><span>your workstation streaming the fleet</span></span><span class="sv" id="setHost">Offline</span></div>
+            <div class="setrow"><span class="sk"><b>Access token</b><span>shared secret for this relay</span></span><span class="sv" id="setToken">—</span></div>
+          </div>
+          <div class="dsec panel">
+            <span class="ptitle">Actions</span>
+            <div class="setrow"><span class="sk"><b>Change token</b><span>re-enter the access token</span></span><button class="btn" onclick="changeToken()">Change</button></div>
+            <div class="setrow"><span class="sk"><b>Disconnect</b><span>forget the token on this device</span></span><button class="btn danger" onclick="forgetToken()">Forget</button></div>
+          </div>
+          <div class="dsec panel">
+            <span class="ptitle">About</span>
+            <p style="font-size:12.5px;color:var(--ink2);margin-top:8px;line-height:1.6">
+              Mission Control is the command center for the AI agents running on your Mac.
+              All computation happens on the workstation — this panel monitors, directs and
+              launches agents from anywhere. Live data only: every number here comes straight
+              from the fleet snapshot.
+            </p>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<!-- bottom tab bar (phones / narrow) -->
+<nav class="tabbar" id="tabbar"></nav>
+
+<!-- ================= inspector ================= -->
+<div id="scrim" onclick="closeInspector()"></div>
+<aside class="inspector" id="inspector" role="dialog" aria-label="Agent detail">
+  <div class="ihead">
+    <div class="inm"><span id="iName">Agent</span><span class="mgrchip" id="iMgr" style="display:none">MGR</span></div>
+    <span class="statuschip done" id="iStatus"><i></i><span>—</span></span>
+    <button class="close" onclick="closeInspector()" aria-label="Close">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="ibody">
+    <div class="imeta">
+      <span><span class="k">Directory</span><br><span class="v" id="iDir">—</span></span>
+      <span><span class="k">Runtime</span><br><span class="v" id="iUptime">—</span></span>
+      <span><span class="k">Cost</span><br><span class="v" id="iCost">—</span></span>
+      <span><span class="k">Tokens · turns</span><br><span class="v" id="iTokens">—</span></span>
+    </div>
+    <div class="isec" id="iObjSec">
+      <div class="sechead"><span class="ptitle">Objective</span></div>
+      <div class="iobj" id="iPrompt"></div>
+    </div>
+    <div class="isec" id="iPlanSec" style="display:none">
+      <div class="sechead"><span class="ptitle">Plan</span><span style="font-family:var(--mono);font-size:11px;color:var(--ink3)" id="iPlanCt"></span></div>
+      <div class="iprog" style="margin-bottom:8px"><div class="pbar"><i id="iProgBar"></i></div><span id="iProgTxt"></span></div>
+      <div class="todos" id="iTodos"></div>
+    </div>
+    <div class="isec">
+      <div class="sechead"><span class="ptitle">Terminal</span><span class="live" id="iLive" style="display:none">● LIVE</span></div>
+      <div class="term"><pre id="iScreen"></pre><div class="noscreen" id="iNoScreen" style="display:none"></div></div>
+    </div>
+    <div class="isec">
+      <div class="sechead"><span class="ptitle">Activity</span></div>
+      <div class="ifeed" id="iFeed"></div>
+    </div>
+    <div class="quick" id="iQuick">
+      <button class="btn" onclick="inspReply('Continue')">Continue</button>
+      <button class="btn" onclick="inspReply('Yes')">Yes</button>
+      <button class="btn" onclick="inspReply('Approve plan')">Approve plan</button>
+      <button class="btn" onclick="inspReply('Run tests')">Run tests</button>
+      <button class="btn danger" onclick="inspReply('Stop')">■ Stop</button>
+    </div>
+    <div class="inputrow" id="iReplyRow">
+      <input class="field" id="iReply" placeholder="Message this agent…" autocomplete="off"
+             onkeydown="if(event.key==='Enter')inspSend()">
+      <button class="micbtn" onclick="micInto('iReply', this)" aria-label="Dictate">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2.5" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>
+      </button>
+      <button class="btn primary" onclick="inspSend()">Send</button>
+    </div>
+    <div class="readonly" id="iReadonly" style="display:none">Read-only — this agent’s terminal can’t be driven remotely.</div>
+    <button class="btn danger" id="iKill" onclick="inspKill()">Kill agent</button>
+  </div>
+</aside>
+
+<div id="launchOverlay" role="status">
+  <div class="ring"></div>
+  <div id="launchMsg">Launching…</div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+'use strict';
+
+// ---- token handling ---------------------------------------------------------
+const params = new URLSearchParams(location.search);
+if (params.get('token')) {
+  localStorage.setItem('mc_token', params.get('token'));
+  history.replaceState(null, '', location.pathname + location.hash);
+}
+let token = localStorage.getItem('mc_token') || '';
+if (!token) document.getElementById('gate').classList.add('show');
+
+function saveToken() {
+  const t = document.getElementById('gateToken').value.trim();
+  if (!t) return;
+  localStorage.setItem('mc_token', t);
+  token = t;
+  document.getElementById('gate').classList.remove('show');
+  renderSettings();
+  connect();
+}
+function changeToken() {
+  document.getElementById('gateToken').value = '';
+  document.getElementById('gate').classList.add('show');
+}
+function forgetToken() {
+  if (!confirm('Forget the access token on this device?')) return;
+  localStorage.removeItem('mc_token');
+  location.reload();
+}
+
+// ---- navigation -------------------------------------------------------------
+const ICONS = {
+  dashboard: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="5" rx="1.5"/><rect x="13" y="10" width="8" height="11" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/></svg>',
+  agents: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4M8 4h8"/><circle cx="9" cy="13.5" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="13.5" r="1" fill="currentColor" stroke="none"/><path d="M9.5 17h5"/></svg>',
+  tasks: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h5v16H4zM15 4h5v10h-5z"/></svg>',
+  projects: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+  analytics: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 20V13M12 20V6M19 20v-4"/></svg>',
+  chat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z"/></svg>',
+  launch: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>',
+  settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8h10M18 8h2M4 16h2M10 16h10"/><circle cx="16" cy="8" r="2.2"/><circle cx="8" cy="16" r="2.2"/></svg>',
+};
+const NAV = [
+  ['dashboard', 'Dashboard'], ['agents', 'Agents'], ['tasks', 'Tasks'], ['projects', 'Projects'],
+  ['analytics', 'Analytics'], ['chat', 'Chat'], ['launch', 'Launch'], ['settings', 'Settings'],
+];
+let tab = 'dashboard';
+
+function navHTML() {
+  return NAV.map(([id, label]) => `
+    <button data-tab="${id}" onclick="setTab('${id}')" aria-label="${label}">
+      ${ICONS[id]}<span class="lbl">${label}</span>
+      ${id === 'agents' ? '<span class="nbadge" data-badge></span>' : ''}
+    </button>`).join('');
+}
+document.getElementById('sideNav').innerHTML = navHTML();
+document.getElementById('tabbar').innerHTML = navHTML();
+
+function setTab(name) {
+  tab = name;
+  document.querySelectorAll('[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.pane').forEach(p => p.classList.toggle('show', p.id === 'pane-' + name));
+  document.getElementById('topTitle').textContent = (NAV.find(n => n[0] === name) || ['', ''])[1];
+  window.scrollTo({ top: 0 });
+  if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
+}
+{ // deep-link (#agents / ?tab=chat); old bookmarks (#fleet/#burn) still land right
+  const alias = { fleet: 'agents', burn: 'analytics', dash: 'dashboard' };
+  let want = NAV.map(n => n[0]).find(t => location.hash === '#' + t || params.get('tab') === t);
+  if (!want) {
+    const legacy = (location.hash || '').slice(1);
+    want = alias[legacy] || alias[params.get('tab')];
+  }
+  if (want) setTab(want);
+}
+function gotoAgents(f) { setTab('agents'); setFilter(f); }
+
+// ---- clock ------------------------------------------------------------------
+function tickClock() {
+  const d = new Date(), p = n => String(n).padStart(2, '0');
+  document.getElementById('clock').textContent = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+tickClock(); setInterval(tickClock, 1000);
+
+// ---- websocket --------------------------------------------------------------
+let ws = null, retry = 0, hostOnline = false, relayUp = false, lastSnapshotAt = 0;
+let snap = null;               // latest snapshot
+let agents = [];               // sorted agent list from the latest snapshot
+
+function connect() {
+  if (!token) return;
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws?role=viewer&token=${encodeURIComponent(token)}`);
+  ws.onopen = () => { retry = 0; relayUp = true; renderLink(); setHeadline('linked to relay — waiting for your Mac…'); };
+  ws.onmessage = (e) => {
+    let msg; try { msg = JSON.parse(e.data); } catch { return; }
+    if (msg.type === 'snapshot') { lastSnapshotAt = Date.now(); render(msg); }
+    else if (msg.type === 'hostState') { hostOnline = msg.online; renderLink(); }
+    else if (msg.type === 'ack') handleAck(msg);
+  };
+  ws.onclose = (e) => {
+    relayUp = false; hostOnline = false; renderLink();
+    if (e.code === 4001 || e.code === 1008) return;
+    setHeadline('reconnecting…');
+    setTimeout(connect, Math.min(15000, 800 * Math.pow(2, retry++)));
+  };
+  ws.onerror = () => ws.close();
+}
+
+function cmd(obj) {
+  if (!ws || ws.readyState !== 1) { toast('Not connected'); return false; }
+  if (!hostOnline) { toast('Your Mac is offline'); return false; }
+  ws.send(JSON.stringify(obj));
+  return true;
+}
+
+function handleAck(msg) {
+  if (msg.cmd === 'launch' && msg.ok) { runLaunchOverlay(msg.detail || 'Launching…'); return; }
+  toast(msg.ok ? (msg.detail || 'Delivered') : `Failed — ${msg.detail || 'unknown error'}`);
+}
+
+let launchTimers = [];
+function runLaunchOverlay(detail) {
+  const overlay = document.getElementById('launchOverlay');
+  const msg = document.getElementById('launchMsg');
+  launchTimers.forEach(clearTimeout); launchTimers = [];
+  msg.textContent = detail; msg.classList.remove('ok');
+  overlay.classList.add('show');
+  launchTimers.push(setTimeout(() => { msg.textContent = 'Deployed — agents incoming'; msg.classList.add('ok'); }, 1400));
+  launchTimers.push(setTimeout(() => { overlay.classList.remove('show'); setTab('agents'); }, 2400));
+}
+
+// ---- commands ---------------------------------------------------------------
+function broadcastFrom(id) {
+  const el = document.getElementById(id);
+  const text = el.value.trim();
+  if (!text) return;
+  if (cmd({ type: 'broadcast', text })) { el.value = ''; toast('Broadcast to all agents'); }
+}
+function emergencyStop() {
+  const n = agents.filter(a => a.status !== 'done').length;
+  if (!n) { toast('Nothing to stop'); return; }
+  if (confirm(`Send “Stop” to all agents? ${n} still running or waiting.`)) {
+    cmd({ type: 'broadcast', text: 'Stop' });
+  }
+}
+
+// ---- dictation (Web Speech, hidden when unsupported) --------------------------
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (!SR) document.body.classList.add('nomic');
+let activeRec = null;
+function micInto(inputId, btn) {
+  if (!SR) return;
+  if (activeRec) { activeRec.stop(); return; }
+  const input = document.getElementById(inputId);
+  const rec = new SR();
+  rec.lang = navigator.language || 'en-US';
+  rec.interimResults = false;
+  rec.onresult = (e) => {
+    const said = Array.from(e.results).map(r => r[0].transcript).join(' ').trim();
+    input.value = (input.value ? input.value + ' ' : '') + said;
+  };
+  rec.onend = () => { activeRec = null; btn.classList.remove('rec'); input.focus(); };
+  rec.onerror = () => { activeRec = null; btn.classList.remove('rec'); };
+  activeRec = rec;
+  btn.classList.add('rec');
+  rec.start();
+}
+
+// ---- helpers ------------------------------------------------------------------
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function fmtTokens(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+  return String(n ?? 0);
+}
+function statusClass(s) { return s === 'active' ? 'working' : (s === 'idle' ? 'waiting' : 'done'); }
+function statusRank(s) { return s === 'active' ? 0 : (s === 'idle' ? 1 : 2); }
+function statusLabel(c) { return c === 'working' ? 'Working' : (c === 'waiting' ? 'Needs you' : 'Done'); }
+function statusColor(c) { return c === 'working' ? 'var(--good)' : (c === 'waiting' ? 'var(--warn)' : 'var(--ink3)'); }
+function setHeadline(t) { document.getElementById('headline').textContent = t; }
+
+function renderLink() {
+  document.body.classList.remove('linked', 'relay-only', 'offline');
+  let label, mac, macSub;
+  if (hostOnline) { document.body.classList.add('linked'); label = 'Mac linked'; mac = 'Online'; macSub = 'streaming live'; }
+  else if (relayUp) { document.body.classList.add('relay-only'); label = 'Relay only'; mac = 'Offline'; macSub = 'relay up, Mac not connected'; }
+  else { document.body.classList.add('offline'); label = 'Offline'; mac = '—'; macSub = 'no connection'; }
+  document.getElementById('hostLabel').textContent = label;
+  document.getElementById('connLabel').textContent = label;
+  document.getElementById('sysMac').textContent = mac;
+  document.getElementById('sysMac').className = 'tv ' + (hostOnline ? 'good' : (relayUp ? 'warn' : 'dim'));
+  document.getElementById('sysMacSub').textContent = macSub;
+  document.getElementById('setHost').textContent = label;
+  if (relayUp && !hostOnline) setHeadline('relay up — Mission Control on your Mac isn’t connected');
+}
+
+// ---- terminal mirror scrubbing ------------------------------------------------
+// The raw screen includes the Claude Code TUI chrome: the spinner/"thinking"
+// line, tips, the bordered input box, and the "auto mode on…" footer. Cut all
+// of that so the terminal mirror shows only the conversation.
+const SPINNER_RX = /^\s*[✢✳✶✻✽·∗＊+*]\s*\S+…/;
+const BOXTOP_RX = /^\s*[╭┌][─┄╌]/;
+const RULE_RX = /^[\s]*[─━_]{8,}[\s]*$/;
+const FOOTER_RX = /auto mode on|shift\+tab to cycle|esc to interrupt|\? for shortcuts|accept edits|bypass permissions|plan mode on|for agents$/i;
+
+function cleanScreen(raw) {
+  if (!raw) return raw;
+  const lines = String(raw).replace(/\s+$/, '').split('\n');
+  const win = Math.max(0, lines.length - 16);   // chrome lives at the bottom of the screen
+  let cut = lines.length;
+  for (let i = win; i < lines.length; i++) {
+    if (SPINNER_RX.test(lines[i])) { cut = i; break; }
+  }
+  if (cut === lines.length) {
+    for (let i = win; i < lines.length; i++) {
+      if (BOXTOP_RX.test(lines[i]) || RULE_RX.test(lines[i])) { cut = i; break; }
+    }
+  }
+  let kept = lines.slice(0, cut);
+  const tail = Math.max(0, kept.length - 8);
+  kept = kept.filter((l, i) => i < tail || (!FOOTER_RX.test(l) && !/^\s*[❯>]\s*$/.test(l)));
+  while (kept.length && !kept[kept.length - 1].trim()) kept.pop();
+  return kept.join('\n');
+}
+
+// ---- activity feed (client-side, from activity changes) -----------------------
+const lastActivity = new Map();   // sessionId → last activity string we logged
+const activityFeed = [];          // { t, folder, text }, newest last
+
+function trackActivity(a) {
+  const act = (a.activity || '').trim();
+  if (!act || act === '—') return;
+  if (lastActivity.get(a.id) === act) return;
+  lastActivity.set(a.id, act);
+  activityFeed.push({ t: Date.now(), folder: a.folder, text: act });
+  if (activityFeed.length > 60) activityFeed.shift();
+}
+function clockOf(t) {
+  const d = new Date(t), p = n => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+// ---- dashboard ----------------------------------------------------------------
+const tpsHistory = [];   // rolling fleet tok/s, one sample per snapshot
+
+function renderDash(s, counts) {
+  document.getElementById('gTotal').textContent = s.total ?? agents.length;
+  document.getElementById('gRunning').textContent = counts.working;
+  document.getElementById('gWaiting').textContent = counts.waiting;
+  document.getElementById('gDone').textContent = counts.done;
+  document.getElementById('sysBurn').textContent = Math.round(s.tokensPerSec ?? 0).toLocaleString();
+  document.getElementById('sysSpend').textContent = '$' + (s.totalCost ?? 0).toFixed(2);
+  document.getElementById('sysTurns').textContent = (s.totalTurns ?? 0).toLocaleString();
+  drawSpark();
+
+  const waiting = agents.filter(a => statusClass(a.status) === 'waiting');
+  document.getElementById('attnCard').style.display = waiting.length ? '' : 'none';
+  document.getElementById('attnList').innerHTML = waiting.map(a => `
+    <button class="attnrow" data-agent="${esc(a.id)}">
+      <span class="abody"><span class="an">${esc(a.folder)}</span><span class="aa">${esc(a.activity || 'waiting for you')}</span></span>
+      <span class="chev"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></span>
+    </button>`).join('');
+
+  document.getElementById('dashLive').style.display = counts.working > 0 ? '' : 'none';
+  const feed = document.getElementById('actFeed');
+  feed.innerHTML = activityFeed.length
+    ? [...activityFeed].reverse().map(e => `
+        <div class="afrow">
+          <span class="aftime">${clockOf(e.t)}</span>
+          <span class="afbody"><span class="afname">${esc(e.folder)}</span><br><span class="aftext">${esc(e.text)}</span></span>
+        </div>`).join('')
+    : '<div class="emptybox" style="padding:20px">Standing by — no activity yet.</div>';
+}
+
+// 12-point sparkline on the burn tile — de-emphasis line, accent end-dot
+function drawSpark() {
+  const el = document.getElementById('spark');
+  const data = tpsHistory.slice(-12);
+  if (data.length < 2) { el.innerHTML = ''; return; }
+  const W = 100, H = 26, P = 3;
+  const max = Math.max(...data, 1);
+  const pts = data.map((v, i) => [
+    P + (W - 2 * P) * i / (data.length - 1),
+    H - P - (H - 2 * P) * (v / max),
+  ]);
+  const line = pts.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+  const [ex, ey] = pts[pts.length - 1];
+  el.innerHTML = `
+    <polyline points="${line}" fill="none" stroke="var(--ink3)" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${ex}" cy="${ey}" r="2.6" fill="var(--accent)" stroke="var(--surface)" stroke-width="1.5"/>`;
+}
+
+// ---- agents grid ---------------------------------------------------------------
+let filter = 'all';
+
+function setFilter(f) {
+  filter = f;
+  document.querySelectorAll('#filterChips button').forEach(b => b.classList.toggle('sel', b.dataset.f === f));
+  renderAgents();
+}
+
+function updateCounts() {
+  const c = { working: 0, waiting: 0, done: 0 };
+  for (const a of agents) c[statusClass(a.status)]++;
+  document.getElementById('fcAll').textContent = agents.length || '';
+  document.getElementById('fcWorking').textContent = c.working || '';
+  document.getElementById('fcWaiting').textContent = c.waiting || '';
+  document.getElementById('fcDone').textContent = c.done || '';
+  document.querySelectorAll('[data-badge]').forEach(b => {
+    b.textContent = c.waiting || '';
+    b.classList.toggle('on', c.waiting > 0);
+  });
+  return c;
+}
+
+function agentCardHTML(a) {
+  const cls = statusClass(a.status);
+  let prog = '';
+  if (a.todos && a.todos.length) {
+    const done = a.todos.filter(t => t.status === 'completed').length;
+    prog = `<div class="pbar"><i style="width:${Math.round(100 * done / a.todos.length)}%"></i></div>`;
+  }
+  const tail = cls === 'working'
+    ? `${Math.round(a.tokensPerSec ?? 0).toLocaleString()} tok/s`
+    : `${fmtTokens(a.tokens ?? 0)} tok`;
+  return `
+    <button class="acard ${cls}" data-agent="${esc(a.id)}" id="card-${esc(a.id)}">
+      <span class="top1">
+        <span class="nm">${esc(a.folder)}</span>
+        ${a.isManager ? '<span class="mgrchip">MGR</span>' : ''}
+        <span class="statuschip ${cls}"><i></i><span>${statusLabel(cls)}</span></span>
+      </span>
+      <span class="act">${esc(a.activity || '—')}</span>
+      ${prog}
+      <span class="meta"><span>${esc(a.uptime || '')}</span><span>$${(a.cost ?? 0).toFixed(2)}</span><span>${tail}</span></span>
+    </button>`;
+}
+
+function renderAgents() {
+  const q = (document.getElementById('agentSearch').value || '').trim().toLowerCase();
+  const list = agents.filter(a => {
+    const cls = statusClass(a.status);
+    if (filter !== 'all' && cls !== filter) return false;
+    if (q && !String(a.folder).toLowerCase().includes(q) && !String(a.activity || '').toLowerCase().includes(q)) return false;
+    return true;
+  });
+  document.getElementById('agentGrid').innerHTML = list.map(agentCardHTML).join('');
+  document.getElementById('agentsEmpty').style.display = agents.length ? 'none' : '';
+}
+
+// ---- inspector -----------------------------------------------------------------
+let inspectorId = null;
+
+function openInspector(id) {
+  inspectorId = id;
+  document.body.classList.add('insp-open');
+  renderInspector();
+}
+function closeInspector() {
+  inspectorId = null;
+  document.body.classList.remove('insp-open');
+}
+function inspReply(text) { if (inspectorId) cmd({ type: 'reply', sessionId: inspectorId, text }); }
+function inspSend() {
+  const el = document.getElementById('iReply');
+  const text = el.value.trim();
+  if (!text || !inspectorId) return;
+  if (cmd({ type: 'reply', sessionId: inspectorId, text })) el.value = '';
+}
+function inspKill() {
+  const a = agents.find(x => x.id === inspectorId);
+  if (!a) return;
+  if (confirm(`Kill the agent in “${a.folder}”? This terminates its claude process.`)) {
+    cmd({ type: 'kill', sessionId: inspectorId });
+    closeInspector();
+  }
+}
+
+function renderInspector() {
+  if (!inspectorId) return;
+  const a = agents.find(x => x.id === inspectorId);
+  if (!a) { closeInspector(); return; }
+  const cls = statusClass(a.status);
+
+  document.getElementById('iName').textContent = a.folder;
+  document.getElementById('iMgr').style.display = a.isManager ? '' : 'none';
+  const st = document.getElementById('iStatus');
+  st.className = 'statuschip ' + cls;
+  st.querySelector('span').textContent = statusLabel(cls);
+  document.getElementById('iDir').textContent = a.dir || '—';
+  document.getElementById('iUptime').textContent = a.uptime || '—';
+  document.getElementById('iCost').textContent = '$' + (a.cost ?? 0).toFixed(2);
+  document.getElementById('iTokens').textContent = `${fmtTokens(a.tokens ?? 0)} · ${a.turns ?? 0}`;
+
+  document.getElementById('iObjSec').style.display = a.prompt ? '' : 'none';
+  document.getElementById('iPrompt').textContent = a.prompt || '';
+
+  const planSec = document.getElementById('iPlanSec');
+  if (a.todos && a.todos.length) {
+    const done = a.todos.filter(t => t.status === 'completed').length;
+    planSec.style.display = '';
+    document.getElementById('iPlanCt').textContent = `${done}/${a.todos.length}`;
+    document.getElementById('iProgBar').style.width = Math.round(100 * done / a.todos.length) + '%';
+    document.getElementById('iProgTxt').textContent = Math.round(100 * done / a.todos.length) + '%';
+    document.getElementById('iTodos').innerHTML = a.todos.map(t => `
+      <div class="todo ${esc(t.status)}">
+        <span class="tick">${t.status === 'completed' ? '✓' : (t.status === 'in_progress' ? '▶' : '○')}</span>
+        <span>${esc(t.status === 'in_progress' && t.activeForm ? t.activeForm : t.content)}</span>
+      </div>`).join('');
+  } else planSec.style.display = 'none';
+
+  document.getElementById('iLive').style.display = a.status === 'active' ? '' : 'none';
+  const pre = document.getElementById('iScreen');
+  const noscreen = document.getElementById('iNoScreen');
+  const screen = cleanScreen(a.screen);
+  if (screen) {
+    noscreen.style.display = 'none';
+    pre.style.display = '';
+    if (pre.textContent !== screen) {
+      const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 30;
+      pre.textContent = screen;
+      if (atBottom || !pre.dataset.touched) pre.scrollTop = pre.scrollHeight;
+    }
+  } else {
+    pre.style.display = 'none';
+    noscreen.style.display = '';
+    noscreen.textContent = a.controllable
+      ? 'Mirror warming up…'
+      : 'This terminal can’t be mirrored (only iTerm2, Terminal.app and WezTerm can).';
+  }
+
+  const feed = document.getElementById('iFeed');
+  const wasAtBottom = feed.scrollTop + feed.clientHeight >= feed.scrollHeight - 24;
+  feed.innerHTML = (a.log || []).map(l => `<div class="line ${esc(l.kind)}">${esc(l.text)}</div>`).join('')
+    || '<div class="line status">No activity yet.</div>';
+  if (wasAtBottom) feed.scrollTop = feed.scrollHeight;
+
+  const controllable = !!a.controllable;
+  document.getElementById('iQuick').style.display = controllable ? '' : 'none';
+  document.getElementById('iReplyRow').style.display = controllable ? '' : 'none';
+  document.getElementById('iReadonly').style.display = controllable ? 'none' : '';
+}
+
+// ---- tasks board ----------------------------------------------------------------
+function renderTasks() {
+  const cols = { pending: [], in_progress: [], completed: [] };
+  for (const a of agents) {
+    for (const t of (a.todos || [])) {
+      const bucket = cols[t.status] ? t.status : 'pending';
+      cols[bucket].push({ ...t, agent: a });
+    }
+  }
+  const total = cols.pending.length + cols.in_progress.length + cols.completed.length;
+  document.getElementById('tasksEmpty').style.display = total ? 'none' : '';
+  const spec = [
+    ['pending', 'To do', 'var(--ink3)'],
+    ['in_progress', 'In progress', 'var(--good)'],
+    ['completed', 'Done', 'var(--accent)'],
+  ];
+  document.getElementById('board').innerHTML = total ? spec.map(([key, name, color]) => `
+    <div class="col">
+      <div class="colhead"><span class="cd" style="background:${color}"></span><span class="cn">${name}</span><span class="cc">${cols[key].length}</span></div>
+      <div class="tcards">
+        ${cols[key].map(t => `
+          <button class="tcard ${key === 'completed' ? 'doneT' : ''}" data-agent="${esc(t.agent.id)}">
+            <span class="tt">${esc(key === 'in_progress' && t.activeForm ? t.activeForm : t.content)}</span>
+            <span class="who"><i style="background:${statusColor(statusClass(t.agent.status))}"></i>${esc(t.agent.folder)}</span>
+          </button>`).join('') || '<div class="colempty">Nothing here.</div>'}
+      </div>
+    </div>`).join('') : '';
+}
+
+// ---- projects ---------------------------------------------------------------------
+function renderProjects() {
+  const fleets = snap && snap.fleets ? snap.fleets : [];
+  const byFleet = new Map(fleets.map(f => [f.id, { ...f, members: [] }]));
+  const byDir = new Map();
+  for (const a of agents) {
+    if (a.fleetId && byFleet.has(a.fleetId)) byFleet.get(a.fleetId).members.push(a);
+    else {
+      const key = a.dir || a.folder;
+      if (!byDir.has(key)) byDir.set(key, { title: a.folder, dir: a.dir || '', members: [] });
+      byDir.get(key).members.push(a);
+    }
+  }
+  const projects = [...byFleet.values()].filter(p => p.members.length), solos = [...byDir.values()];
+  const all = [...projects, ...solos];
+  document.getElementById('projEmpty').style.display = all.length ? 'none' : '';
+  document.getElementById('projGrid').innerHTML = all.map(p => {
+    let done = 0, total = 0, cost = 0, tokens = 0;
+    for (const m of p.members) {
+      cost += m.cost ?? 0; tokens += m.tokens ?? 0;
+      for (const t of (m.todos || [])) { total++; if (t.status === 'completed') done++; }
+    }
+    const pct = total ? Math.round(100 * done / total) : null;
+    return `
+      <div class="pcard panel">
+        <div class="ph"><span class="pn">${esc(p.title)}</span><span class="ppct">${pct === null ? '' : pct + '%'}</span></div>
+        ${p.dir ? `<div class="pdir">${esc(p.dir)}</div>` : ''}
+        ${pct === null ? '' : `<div class="pbar"><i style="width:${pct}%"></i></div>`}
+        <div class="pstats"><span>${p.members.length} agent${p.members.length === 1 ? '' : 's'}</span><span>$${cost.toFixed(2)}</span><span>${fmtTokens(tokens)} tok</span></div>
+        <div class="prows">
+          ${p.members.map(m => `
+            <button class="prow" data-agent="${esc(m.id)}">
+              <i style="background:${statusColor(statusClass(m.status))}"></i>
+              <span class="rn">${esc(m.folder)}${m.isManager ? ' · MGR' : ''}</span>
+              <span class="ra">${esc(m.activity || statusLabel(statusClass(m.status)))}</span>
+            </button>`).join('')}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// ---- analytics ----------------------------------------------------------------------
+function renderAnalytics(s) {
+  document.getElementById('heroTps').textContent = Math.round(s.tokensPerSec ?? 0).toLocaleString();
+  document.getElementById('bTotal').textContent = fmtTokens(s.totalTokens ?? 0);
+  document.getElementById('bOutput').textContent = fmtTokens(s.outputTokens ?? 0);
+  document.getElementById('bTurns').textContent = (s.totalTurns ?? 0).toLocaleString();
+  document.getElementById('bCost').textContent = '$' + (s.totalCost ?? 0).toFixed(2);
+  drawChart();
+
+  const parts = [s.outputTokens ?? 0, s.inputTokens ?? 0, s.cacheReadTokens ?? 0, s.cacheCreateTokens ?? 0];
+  const total = Math.max(parts.reduce((a, b) => a + b, 0), 1);
+  const segs = document.querySelectorAll('#stackbar i');
+  parts.forEach((v, i) => { segs[i].style.width = (100 * v / total) + '%'; });
+  document.getElementById('lgOut').textContent = fmtTokens(parts[0]);
+  document.getElementById('lgIn').textContent = fmtTokens(parts[1]);
+  document.getElementById('lgCr').textContent = fmtTokens(parts[2]);
+  document.getElementById('lgCw').textContent = fmtTokens(parts[3]);
+
+  const sorted = [...agents].sort((a, b) => (b.tokens ?? 0) - (a.tokens ?? 0)).slice(0, 8);
+  const lmax = Math.max(...sorted.map(a => a.tokens ?? 0), 1);
+  document.getElementById('leaderRows').innerHTML = sorted.map(a => `
+    <div class="lrow">
+      <span class="lname">${esc(a.folder)}${a.isManager ? ' · MGR' : ''}</span>
+      <span class="lbar"><i style="width:${Math.max(2, 100 * (a.tokens ?? 0) / lmax)}%"></i></span>
+      <span class="lval">${fmtTokens(a.tokens ?? 0)}</span>
+    </div>`).join('') || '<div style="color:var(--ink3);font-size:13px">Nothing burning yet.</div>';
+}
+
+// burn-rate trace: 2px line + 10% area wash, crosshair + tooltip
+const chartEl = document.getElementById('chart');
+const chartTip = document.getElementById('chartTip');
+let chartHoverIdx = -1;
+
+function chartPoints() {
+  const W = 600, H = 140, PX = 8, PY = 12;
+  const max = Math.max(...tpsHistory, 1);
+  const n = tpsHistory.length;
+  return tpsHistory.map((v, i) => [
+    n === 1 ? W - PX : PX + (W - 2 * PX) * i / (n - 1),
+    H - PY - (H - 2 * PY) * (v / max),
+  ]);
+}
+
+function drawChart() {
+  const W = 600, H = 140;
+  let grid = '';
+  for (let y = 35; y < H; y += 35) grid += `<line x1="0" y1="${y}" x2="${W}" y2="${y}"/>`;
+  const pts = chartPoints();
+  const n = pts.length;
+  let trace = '', area = '', hover = '';
+  if (n > 1) {
+    const line = pts.map(p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+    area = `<polygon points="${pts[0][0].toFixed(1)},${H} ${line} ${pts[n - 1][0].toFixed(1)},${H}" fill="rgba(57,135,229,0.10)"/>`;
+    trace = `<polyline points="${line}" fill="none" stroke="#3987e5" stroke-width="2"
+             stroke-linejoin="round" stroke-linecap="round"/>`;
+  }
+  if (chartHoverIdx >= 0 && chartHoverIdx < n) {
+    const [hx, hy] = pts[chartHoverIdx];
+    hover = `<line x1="${hx}" y1="0" x2="${hx}" y2="${H}" stroke="rgba(255,255,255,0.16)" stroke-width="1"/>
+             <circle cx="${hx}" cy="${hy}" r="4.5" fill="#3987e5" stroke="#0b0c0f" stroke-width="2"/>`;
+  }
+  chartEl.innerHTML = `
+    <g stroke="rgba(255,255,255,0.05)" stroke-width="1">${grid}</g>
+    ${area}${trace}${hover}`;
+}
+drawChart();
+
+chartEl.parentElement.addEventListener('pointermove', (e) => {
+  const n = tpsHistory.length;
+  if (n < 2) return;
+  const r = chartEl.getBoundingClientRect();
+  const frac = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+  chartHoverIdx = Math.round(frac * (n - 1));
+  chartTip.style.display = '';
+  chartTip.style.left = (frac * r.width) + 'px';
+  chartTip.textContent = Math.round(tpsHistory[chartHoverIdx]).toLocaleString() + ' tok/s';
+  drawChart();
+});
+chartEl.parentElement.addEventListener('pointerleave', () => {
+  chartHoverIdx = -1;
+  chartTip.style.display = 'none';
+  drawChart();
+});
+
+// ---- chat ---------------------------------------------------------------------------
+let chatTarget = 'all';
+
+function setChatTarget(id) {
+  chatTarget = id;
+  document.getElementById('chatInput').placeholder =
+    id === 'all' ? 'Message all agents…' : 'Message ' + ((agents.find(a => a.id === id) || {}).folder || 'agent') + '…';
+  renderChat();
+}
+
+function renderChatChips() {
+  const chips = [`<button data-target="all" class="${chatTarget === 'all' ? 'sel' : ''}">All agents</button>`]
+    .concat(agents.map(a => `
+      <button data-target="${esc(a.id)}" class="${chatTarget === a.id ? 'sel' : ''}">
+        <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${statusColor(statusClass(a.status))};margin-right:6px"></span>${esc(a.folder)}
+      </button>`));
+  document.getElementById('chatChips').innerHTML = chips.join('');
+}
+
+function renderChat() {
+  renderChatChips();
+  const log = document.getElementById('chatLog');
+  const wasAtBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+  let html;
+  if (chatTarget === 'all') {
+    html = activityFeed.length
+      ? [...activityFeed].map(e => `<div class="msg sys">${clockOf(e.t)} · <b>${esc(e.folder)}</b> — ${esc(e.text)}</div>`).join('')
+      : '<div class="msg sys">Broadcasts go to every agent. Live agent activity shows here.</div>';
+  } else {
+    const a = agents.find(x => x.id === chatTarget);
+    if (!a) { setChatTarget('all'); return; }
+    html = (a.log || []).map(l => {
+      if (l.kind === 'command') return `<div class="msg out">${esc(l.text)}</div>`;
+      if (l.kind === 'text') return `<div class="msg in">${esc(l.text)}</div>`;
+      if (l.kind === 'tool') return `<div class="msg toolline">⚙ ${esc(l.text)}</div>`;
+      return `<div class="msg sys">${esc(l.text)}</div>`;
+    }).join('') || '<div class="msg sys">No conversation yet.</div>';
+    if (!a.controllable) html += '<div class="msg sys">Read-only — this agent’s terminal can’t be driven remotely.</div>';
+  }
+  if (log.dataset.html !== html) {
+    log.dataset.html = html;
+    log.innerHTML = html;
+    if (wasAtBottom) log.scrollTop = log.scrollHeight;
+  }
+}
+
+function chatSend() {
+  const el = document.getElementById('chatInput');
+  const text = el.value.trim();
+  if (!text) return;
+  const ok = chatTarget === 'all'
+    ? cmd({ type: 'broadcast', text })
+    : cmd({ type: 'reply', sessionId: chatTarget, text });
+  if (ok) el.value = '';
+}
+
+// ---- launch --------------------------------------------------------------------------
+const FALLBACK_MODELS = [
+  { flag: 'claude-fable-5', label: 'Fable 5', short: 'Fable', blurb: 'Frontier intelligence — the apex model' },
+  { flag: 'opus', label: 'Opus 4.8', short: 'Opus', blurb: 'Deepest reasoning — the heavy lifter' },
+  { flag: 'claude-sonnet-5', label: 'Sonnet 5', short: 'Sonnet', blurb: 'Near-Opus smarts at Sonnet speed' },
+  { flag: 'haiku', label: 'Haiku 4.5', short: 'Haiku', blurb: 'Fast & cheap — quick passes' },
+  { flag: 'default', label: 'Default', short: 'Default', blurb: 'Whatever your CLI defaults to' },
+];
+let models = FALLBACK_MODELS;
+let mode = 'fleet';
+let soloModel = 'opus';
+let managerModel = 'opus';
+let workers = ['claude-sonnet-5', 'claude-sonnet-5'];
+let knownDirs = [], dirsKey = '', modelsKey = '';
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('modeSolo').classList.toggle('active', m === 'solo');
+  document.getElementById('modeFleet').classList.toggle('active', m === 'fleet');
+  document.getElementById('soloSection').style.display = m === 'solo' ? '' : 'none';
+  document.getElementById('fleetSections').style.display = m === 'fleet' ? '' : 'none';
+  document.getElementById('mission').placeholder = m === 'solo'
+    ? 'Describe the task for your agent…'
+    : 'Describe the mission — the manager will split it into assignments…';
+  renderLaunchBtn();
+}
+
+function renderSoloModels() {
+  document.getElementById('soloModels').innerHTML = models.map(m => `
+    <button class="mcard ${m.flag === soloModel ? 'sel' : ''}"
+            onclick="soloModel='${m.flag}';renderSoloModels()">
+      <span class="mname">${esc(m.short)}</span><span class="mblurb">${esc(m.blurb)}</span>
+    </button>`).join('');
+}
+
+function modelOptions(sel) {
+  return models.map(m => `<option value="${m.flag}" ${m.flag === sel ? 'selected' : ''}>${esc(m.label)}</option>`).join('');
+}
+
+function renderManager() {
+  document.getElementById('managerModel').innerHTML = modelOptions(managerModel);
+}
+
+function renderWorkers() {
+  document.getElementById('workerCount').textContent = workers.length;
+  document.getElementById('workerList').innerHTML = workers.map((w, i) => `
+    <div class="workerrow">
+      <span class="wnum">${i + 1}</span>
+      <select class="pick" onchange="workers[${i}]=this.value;renderWorkers()">${modelOptions(w)}</select>
+      <button class="rm" onclick="workers.splice(${i},1);renderWorkers()" aria-label="Remove worker ${i + 1}">✕</button>
+    </div>`).join('');
+  renderLaunchBtn();
+}
+
+function stepWorkers(d) {
+  if (d > 0 && workers.length < 8) workers.push(workers[workers.length - 1] || 'claude-sonnet-5');
+  if (d < 0 && workers.length > 0) workers.pop();
+  renderWorkers();
+}
+
+function renderLaunchBtn() {
+  const n = mode === 'solo' ? 1 : 1 + workers.length;
+  document.getElementById('launchBtn').textContent = mode === 'solo'
+    ? 'Launch agent' : `Launch fleet · ${n} agents`;
+}
+
+function renderDirChips() {
+  const cur = document.getElementById('dir').value;
+  document.getElementById('dirchips').innerHTML = knownDirs.map(d => {
+    const name = d.split('/').filter(Boolean).pop() || d;
+    return `<button class="${d === cur ? 'sel' : ''}" onclick="document.getElementById('dir').value='${d.replace(/'/g, "\\'")}';renderDirChips()">${esc(name)}</button>`;
+  }).join('');
+}
+
+function doLaunch() {
+  const mission = document.getElementById('mission').value.trim();
+  if (!mission) { toast('Describe the mission first'); return; }
+  const dir = document.getElementById('dir').value.trim();
+  const flagFix = f => f === 'default' ? '' : f;
+  const payload = mode === 'solo'
+    ? { type: 'launch', mission, dir, managerModel: null, workerModels: [flagFix(soloModel)] }
+    : { type: 'launch', mission, dir, managerModel: flagFix(managerModel) || 'opus', workerModels: workers.map(flagFix) };
+  if (mode === 'fleet' && workers.length === 0) { toast('Add at least one worker'); return; }
+  if (cmd(payload)) document.getElementById('mission').value = '';
+}
+
+setMode('fleet'); renderSoloModels(); renderManager(); renderWorkers(); renderChat();
+
+// ---- settings -----------------------------------------------------------------------
+function renderSettings() {
+  document.getElementById('setRelay').textContent = location.host;
+  document.getElementById('setToken').textContent = token ? token.slice(0, 4) + '••••••••' : '—';
+}
+renderSettings();
+
+// ---- main render ----------------------------------------------------------------------
+function render(s) {
+  hostOnline = true;
+  renderLink();
+  snap = s;
+  const sum = s.summary || {};
+  setHeadline(
+    (sum.active ?? 0) > 0 ? `${sum.active} agent${sum.active === 1 ? '' : 's'} working · ${sum.total} in session`
+    : (sum.attention ?? 0) > 0 ? `${sum.attention} waiting on you`
+    : (sum.total ?? 0) > 0 ? `all quiet · ${sum.total} in session`
+    : 'watching for agents…');
+
+  // active first, then needs-you, then done; stable by folder within a band
+  agents = [...(s.agents || [])].sort((a, b) =>
+    statusRank(a.status) - statusRank(b.status) || String(a.folder).localeCompare(String(b.folder)));
+  agents.forEach(trackActivity);
+
+  tpsHistory.push(sum.tokensPerSec ?? 0);
+  if (tpsHistory.length > 150) tpsHistory.shift();
+
+  const counts = updateCounts();
+  renderDash(sum, counts);
+  renderAgents();
+  renderTasks();
+  renderProjects();
+  renderAnalytics(sum);
+  renderChat();
+  renderInspector();
+
+  // launch-tab data (only touch the DOM when it actually changed)
+  const dk = JSON.stringify(s.knownDirs || []);
+  if (dk !== dirsKey) {
+    dirsKey = dk;
+    knownDirs = s.knownDirs || [];
+    renderDirChips();
+  }
+  const dirEl = document.getElementById('dir');
+  if (!dirEl.value && s.lastDir) { dirEl.value = s.lastDir; renderDirChips(); }
+  const mk = JSON.stringify(s.models || []);
+  if (s.models && s.models.length && mk !== modelsKey) {
+    modelsKey = mk;
+    models = s.models;
+    renderSoloModels(); renderManager(); renderWorkers();
+  }
+}
+
+// event delegation: anything tagged data-agent opens the inspector;
+// chat chips are tagged data-target
+document.addEventListener('click', (e) => {
+  const ag = e.target.closest('[data-agent]');
+  if (ag) { openInspector(ag.dataset.agent); return; }
+  const ct = e.target.closest('[data-target]');
+  if (ct) setChatTarget(ct.dataset.target);
+});
+
+// mark terminal panes the user has scrolled, so we stop yanking them down
+document.addEventListener('scroll', (e) => {
+  if (e.target && e.target.tagName === 'PRE') e.target.dataset.touched = '1';
+}, true);
+
+setInterval(() => {
+  if (hostOnline && lastSnapshotAt && Date.now() - lastSnapshotAt > 20000) {
+    setHeadline('no updates from your Mac for a while…');
+  }
+}, 5000);
+
+// ---- toast ------------------------------------------------------------------
+let toastTimer = null;
+function toast(text) {
+  const el = document.getElementById('toast');
+  el.textContent = text;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
+}
+
+connect();
+</script>
+</body>
+</html>

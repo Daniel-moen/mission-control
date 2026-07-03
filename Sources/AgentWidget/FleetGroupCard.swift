@@ -9,6 +9,10 @@ struct FleetGroupCard: View {
     let fleet: FleetGroup
     let members: [AgentRun]
     @State private var expanded = false
+    /// Expanded view mode: the at-a-glance task board, or the full agent cards.
+    @State private var mode: Mode = .board
+
+    private enum Mode: String, CaseIterable { case board = "Board", cards = "Cards" }
 
     /// Manager first, then the incoming (already status/recency-sorted) order —
     /// a stable partition rather than a sort, so siblings keep their order.
@@ -34,10 +38,19 @@ struct FleetGroupCard: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             if expanded {
-                VStack(spacing: 9) {
-                    ForEach(ordered) { agent in
-                        AgentCard(agent: agent)
-                            .environmentObject(manager).environmentObject(settings)
+                VStack(spacing: 10) {
+                    modePicker
+                    switch mode {
+                    case .board:
+                        FleetTaskBoard(fleet: fleet, members: members)
+                            .environmentObject(manager)
+                    case .cards:
+                        VStack(spacing: 9) {
+                            ForEach(ordered) { agent in
+                                AgentCard(agent: agent)
+                                    .environmentObject(manager).environmentObject(settings)
+                            }
+                        }
                     }
                 }
                 .padding(.top, 10)
@@ -98,6 +111,26 @@ struct FleetGroupCard: View {
             }
         }
         .buttonStyle(.plain)
+    }
+
+    /// Segmented toggle between the task board and the full per-agent cards.
+    private var modePicker: some View {
+        HStack(spacing: 4) {
+            ForEach(Mode.allCases, id: \.self) { m in
+                Button { withAnimation(.spring(response: 0.3)) { mode = m } } label: {
+                    Text(m.rawValue)
+                        .font(.system(size: 10, weight: mode == m ? .semibold : .regular))
+                        .foregroundStyle(mode == m ? .white : .secondary)
+                        .frame(maxWidth: .infinity).padding(.vertical, 4)
+                        .background(Capsule().fill(mode == m
+                            ? AnyShapeStyle(tint.opacity(0.5)) : AnyShapeStyle(.clear)))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(3)
+        .background(Capsule().fill(Color.black.opacity(0.22)))
+        .overlay(Capsule().stroke(.white.opacity(0.06), lineWidth: 1))
     }
 
     /// A stack of agent dots crowned when the fleet has a manager.

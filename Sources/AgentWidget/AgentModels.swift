@@ -115,6 +115,9 @@ final class AgentRun: ObservableObject, Identifiable {
     /// we know an interactive session is "done" even though its `claude` process
     /// stays alive at the prompt. Reset whenever work resumes.
     var turnEnded = false
+    /// The user hit Esc mid-turn ("[Request interrupted by user]") — the agent
+    /// is alive at the prompt waiting for input, but didn't finish its turn.
+    var interrupted = false
     /// True once we've seen this agent actively working. Lets us tell "went
     /// quiet, probably waiting on you" apart from "was idle the whole time".
     var wasActive = false

@@ -35,6 +35,9 @@ Icon
 # App bundle (built artifact, not source)
 *.app/
 
+# Remote relay (Node)
+remote/node_modules/
+
 # Mission Control coordination folder (runtime, not source)
 .mission-control/
 

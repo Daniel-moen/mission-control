@@ -47,6 +47,21 @@ final class AgentManager: ObservableObject {
             scheduleTimer()
         }
     }
+    /// True while at least one remote panel (iPad) is watching via RemoteBridge.
+    /// Treated like an open popover for polling purposes so the remote feed
+    /// reads as live even though the Mac's popover is closed.
+    var remoteWatching: Bool = false {
+        didSet {
+            guard remoteWatching != oldValue else { return }
+            if remoteWatching {
+                lastLivenessScan = .distantPast
+                tick()
+            }
+            scheduleTimer()
+        }
+    }
+    /// Someone — local popover or remote panel — is actively watching the feed.
+    private var watched: Bool { popoverVisible || remoteWatching }
 
     private let home = NSHomeDirectory()
     private lazy var projectsDir = "\(home)/.claude/projects"
@@ -62,9 +77,6 @@ final class AgentManager: ObservableObject {
 
     /// Sessions whose transcript changed within this window are shown.
     private let discoveryWindow: TimeInterval = 20 * 60
-    /// Updated more recently than this ⇒ "Working". Generous because extended
-    /// thinking and long tool calls write nothing to the transcript meanwhile.
-    private let activeWindow: TimeInterval = 60
 
     var activeCount: Int { agents.filter { $0.status == .active }.count }
 
@@ -85,7 +97,7 @@ final class AgentManager: ObservableObject {
     /// visibility. Called on launch and whenever `popoverVisible` flips.
     private func scheduleTimer() {
         timer?.invalidate()
-        let interval = popoverVisible ? openInterval : closedInterval
+        let interval = watched ? openInterval : closedInterval
         let t = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             self?.tick()
         }
@@ -108,14 +120,18 @@ final class AgentManager: ObservableObject {
     /// closed, where terminal info is unusable (no focus/reply UI on screen) and
     /// only coarse liveness matters. This is the app's single biggest idle cost,
     /// so backing it off when nobody's watching is where most of the CPU goes.
-    private var livenessScanInterval: TimeInterval { popoverVisible ? 2.5 : 12.0 }
+    private var livenessScanInterval: TimeInterval { watched ? 2.5 : 12.0 }
 
     private func refreshLivenessIfNeeded() {
         guard Date().timeIntervalSince(lastLivenessScan) > livenessScanInterval else { return }
         lastLivenessScan = Date()
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let map = self?.term.scan() ?? [:]
+            let map = self?.term.scan()
             DispatchQueue.main.async {
+                // A failed scan (nil) tells us nothing — keep the previous
+                // liveness picture and, crucially, don't count misses, or a
+                // couple of hiccups under load flip every agent to "done".
+                guard let map else { return }
                 self?.liveTerminals = map
                 self?.liveDirs = Set(map.keys)
                 self?.liveScanReady = true
@@ -155,12 +171,17 @@ final class AgentManager: ObservableObject {
             if liveDirs.contains(resolved(run.workingDir)) {
                 run.livenessMisses = 0
                 run.processAlive = true
+            } else if Date().timeIntervalSince(run.lastModified) < 15 {
+                // The transcript was written moments ago — something is very
+                // much alive in that folder, whatever lsof failed to see.
+                run.livenessMisses = 0
+                run.processAlive = true
             } else {
                 run.livenessMisses += 1
-                // Two misses (~5s) to ride out a transient lsof race before we
-                // call it dead; several more before removing it from the list.
-                if run.livenessMisses >= 2 { run.processAlive = false }
-                if run.livenessMisses >= 5 { gone.append(run) }
+                // Three misses (~8s) to ride out transient per-pid lsof races
+                // before we call it dead; several more before removing it.
+                if run.livenessMisses >= 3 { run.processAlive = false }
+                if run.livenessMisses >= 6 { gone.append(run) }
             }
         }
         guard !gone.isEmpty else { return }
@@ -312,6 +333,10 @@ final class AgentManager: ObservableObject {
     /// Look up the group a member belongs to.
     func fleet(for id: UUID) -> FleetGroup? { fleets.first { $0.id == id } }
 
+    /// Look up a tracked session by its id — used by RemoteBridge to target
+    /// commands arriving from the remote panel.
+    func agent(withSessionId id: String) -> AgentRun? { byId[id] }
+
     /// Currently-tracked members of a fleet, in display order (manager first,
     /// then by status then recency — matching the global sort).
     func members(of fleet: FleetGroup) -> [AgentRun] {
@@ -343,10 +368,11 @@ final class AgentManager: ObservableObject {
 
     private func modelLabel(_ flag: String) -> String {
         switch flag {
-        case "opus":   return "Opus"
-        case "sonnet": return "Sonnet"
-        case "haiku":  return "Haiku"
-        default:       return "Default"
+        case "claude-fable-5":  return "Fable 5"
+        case "opus":            return "Opus"
+        case "claude-sonnet-5", "sonnet": return "Sonnet 5"
+        case "haiku":           return "Haiku"
+        default:                return "Default"
         }
     }
 
@@ -576,22 +602,25 @@ final class AgentManager: ObservableObject {
     }
 
     private func updateStatus(_ run: AgentRun, now: Date) {
-        let recentlyWrote = now.timeIntervalSince(run.lastModified) < activeWindow
-
-        // "Finished" has two forms, and both beat transcript recency:
+        // "Finished" has two forms:
         //  1. the process has exited (one-shot run, or the user quit it), or
         //  2. the last turn ended with end_turn — the agent handed control back
         //     and is waiting for you, even though its REPL stays alive.
-        // Without (2), an interactive agent that just finished reads as "Working"
-        // until its final message ages out — the exact "says it's still running"
-        // complaint. Only an agent that's alive AND mid-turn is Working.
+        // Transcript recency deliberately plays NO part in this: Claude Code
+        // batch-writes transcript lines only when a message or tool call
+        // completes, so extended thinking and long tool calls produce silent
+        // gaps of many minutes. A live process mid-turn is Working no matter
+        // how long it's been quiet — the turn's end, not silence, is the edge
+        // that matters. (A transcript written moments ago also proves the
+        // process is alive, whatever a flaky liveness scan claims.)
         let exited = liveScanReady && !run.workingDir.isEmpty && !run.processAlive
+            && now.timeIntervalSince(run.lastModified) > 15
         if exited || run.turnEnded {
             run.status = .done
-        } else if recentlyWrote {
-            run.status = .active
+        } else if run.interrupted {
+            run.status = .idle          // Esc'd mid-turn — waiting for input
         } else {
-            run.status = .idle
+            run.status = .active
         }
     }
 
@@ -650,6 +679,7 @@ final class AgentManager: ObservableObject {
         guard let type = obj["type"] as? String else { return }
         switch type {
         case "assistant":
+            run.interrupted = false
             guard let message = obj["message"] as? [String: Any],
                   let content = message["content"] as? [[String: Any]] else { return }
             for item in content { handleContentItem(item, run: run) }
@@ -662,11 +692,29 @@ final class AgentManager: ObservableObject {
             }
 
         case "user":
+            // Not everything recorded as a "user" line is the user talking to
+            // the agent. Meta lines (caveats), local commands (/model, /clear)
+            // and their stdout, and compaction summaries land in the transcript
+            // too — none of them start a turn, so none of them may reset
+            // `turnEnded` (that made a finished session read as "Working",
+            // then fire a false "needs you" when it decayed).
+            if (obj["isMeta"] as? Bool) == true { return }
+            if (obj["isCompactSummary"] as? Bool) == true { return }
+            let message = obj["message"] as? [String: Any]
+            if let s = message?["content"] as? String,
+               s.hasPrefix("<command-name>") || s.hasPrefix("<local-command") { return }
+            // Esc mid-turn: the turn is over but nothing finished — the agent
+            // sits at the prompt waiting for input.
+            if isInterruptLine(message) {
+                run.turnEnded = false
+                run.interrupted = true
+                return
+            }
             // Real input or a tool result — either way the agent is working again.
             run.turnEnded = false
+            run.interrupted = false
             capturePromptIfNeeded(obj, run: run)
-            if let message = obj["message"] as? [String: Any],
-               let content = message["content"] as? [[String: Any]] {
+            if let content = message?["content"] as? [[String: Any]] {
                 for item in content where (item["type"] as? String) == "tool_result" {
                     let text = toolResultText(item)
                     if !text.isEmpty { run.append(LogLine(kind: .result, text: text)) }
@@ -700,6 +748,21 @@ final class AgentManager: ObservableObject {
         run.cacheReadTokens += cacheRead
         run.cacheCreateTokens += cacheCreate
         run.recordTokens(delta)
+    }
+
+    /// "[Request interrupted by user]" / "… for tool use]" — written as a user
+    /// line when Esc is pressed. Content may be a plain string or a block array.
+    private func isInterruptLine(_ message: [String: Any]?) -> Bool {
+        guard let message else { return false }
+        if let s = message["content"] as? String {
+            return s.hasPrefix("[Request interrupted")
+        }
+        if let content = message["content"] as? [[String: Any]] {
+            for item in content where (item["type"] as? String) == "text" {
+                if (item["text"] as? String ?? "").hasPrefix("[Request interrupted") { return true }
+            }
+        }
+        return false
     }
 
     private func capturePromptIfNeeded(_ obj: [String: Any], run: AgentRun) {

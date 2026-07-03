@@ -31,6 +31,19 @@ final class Settings: ObservableObject {
     @Published var launchTerminalID: String {
         didSet { defaults.set(launchTerminalID, forKey: Keys.launchTerminalID) }
     }
+    /// Mirror the fleet to the remote panel (Railway relay) so it can be watched
+    /// and steered from another device.
+    @Published var remoteEnabled: Bool {
+        didSet { defaults.set(remoteEnabled, forKey: Keys.remoteEnabled) }
+    }
+    /// Base https:// URL of the deployed relay (e.g. the Railway domain).
+    @Published var remoteURL: String {
+        didSet { defaults.set(remoteURL, forKey: Keys.remoteURL) }
+    }
+    /// Shared secret both the app and the panel present to the relay.
+    @Published var remoteToken: String {
+        didSet { defaults.set(remoteToken, forKey: Keys.remoteToken) }
+    }
 
     /// Typed view of the user's chosen launch terminal, defaulting to the
     /// always-present Terminal.app when nothing's been picked yet.
@@ -48,6 +61,9 @@ final class Settings: ObservableObject {
         static let expandFeeds = "expandFeeds"
         static let lastLaunchDir = "lastLaunchDir"
         static let launchTerminalID = "launchTerminalID"
+        static let remoteEnabled = "remoteEnabled"
+        static let remoteURL = "remoteURL"
+        static let remoteToken = "remoteToken"
     }
 
     private init() {
@@ -63,5 +79,8 @@ final class Settings: ObservableObject {
         expandFeeds = bool(Keys.expandFeeds, default: false)
         lastLaunchDir = store.string(forKey: Keys.lastLaunchDir) ?? ""
         launchTerminalID = store.string(forKey: Keys.launchTerminalID) ?? TerminalBridge.LaunchTerminal.terminal.rawValue
+        remoteEnabled = bool(Keys.remoteEnabled, default: false)
+        remoteURL = store.string(forKey: Keys.remoteURL) ?? ""
+        remoteToken = store.string(forKey: Keys.remoteToken) ?? ""
     }
 }

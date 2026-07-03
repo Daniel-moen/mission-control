@@ -181,6 +181,18 @@ struct RootView: View {
             Toggle("Play sound with notifications", isOn: $settings.playSound)
             Toggle("Expand live feeds by default", isOn: $settings.expandFeeds)
             Divider()
+            Toggle("📡 Remote panel (iPad)", isOn: $settings.remoteEnabled)
+            if !settings.remoteURL.isEmpty {
+                Button("Open remote panel in browser") {
+                    if let url = panelLink() { NSWorkspace.shared.open(url) }
+                }
+                Button("Copy panel link (with token)") {
+                    guard let url = panelLink() else { return }
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                }
+            }
+            Divider()
             Button("🔔 Send test notification") {
                 Notifier.shared.post(title: "🔔 Mission Control",
                                      subtitle: "Test notification",
@@ -193,6 +205,18 @@ struct RootView: View {
         }
         .menuStyle(.borderlessButton).menuIndicator(.hidden)
         .frame(width: 20).foregroundStyle(.secondary).help("Settings")
+    }
+
+    /// The remote panel URL with the token baked in — the link you open on the
+    /// iPad once; the panel stores the token locally after that.
+    private func panelLink() -> URL? {
+        var raw = settings.remoteURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return nil }
+        if !raw.contains("://") { raw = "https://" + raw }
+        guard var comps = URLComponents(string: raw) else { return nil }
+        let token = settings.remoteToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !token.isEmpty { comps.queryItems = [URLQueryItem(name: "token", value: token)] }
+        return comps.url
     }
 }
 

@@ -5,15 +5,18 @@ import AppKit
 /// `claude --model …`; we use the stable aliases rather than pinned ids so the
 /// launch tracks whatever the installed CLI currently maps them to.
 enum ModelChoice: String, CaseIterable, Identifiable {
-    case opus, sonnet, haiku, fast
+    case fable, opus, sonnet, haiku, fast
 
     var id: String { rawValue }
 
-    /// CLI flag value; empty means "let the CLI pick its default".
+    /// CLI flag value; empty means "let the CLI pick its default". Fable and
+    /// Sonnet 5 are pinned to their full model ids so the launch lands on them
+    /// even if the installed CLI's aliases still map to an older generation.
     var flag: String {
         switch self {
+        case .fable:  return "claude-fable-5"
         case .opus:   return "opus"
-        case .sonnet: return "sonnet"
+        case .sonnet: return "claude-sonnet-5"
         case .haiku:  return "haiku"
         case .fast:   return "default"
         }
@@ -21,8 +24,9 @@ enum ModelChoice: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
+        case .fable:  return "Fable 5"
         case .opus:   return "Opus 4.8"
-        case .sonnet: return "Sonnet 4.6"
+        case .sonnet: return "Sonnet 5"
         case .haiku:  return "Haiku 4.5"
         case .fast:   return "Default"
         }
@@ -30,6 +34,7 @@ enum ModelChoice: String, CaseIterable, Identifiable {
 
     var short: String {
         switch self {
+        case .fable:  return "Fable"
         case .opus:   return "Opus"
         case .sonnet: return "Sonnet"
         case .haiku:  return "Haiku"
@@ -40,8 +45,9 @@ enum ModelChoice: String, CaseIterable, Identifiable {
     /// One-line "what's it good for" used in the picker menu.
     var blurb: String {
         switch self {
+        case .fable:  return "Frontier intelligence — the apex model"
         case .opus:   return "Deepest reasoning — the heavy lifter"
-        case .sonnet: return "Balanced speed & smarts"
+        case .sonnet: return "Near-Opus smarts at Sonnet speed"
         case .haiku:  return "Fast & cheap — quick passes"
         case .fast:   return "Whatever your CLI defaults to"
         }
@@ -49,6 +55,7 @@ enum ModelChoice: String, CaseIterable, Identifiable {
 
     var symbol: String {
         switch self {
+        case .fable:  return "wand.and.stars"
         case .opus:   return "brain.head.profile"
         case .sonnet: return "scalemass.fill"
         case .haiku:  return "hare.fill"
@@ -58,6 +65,7 @@ enum ModelChoice: String, CaseIterable, Identifiable {
 
     var tint: Color {
         switch self {
+        case .fable:  return Color(red: 0.98, green: 0.42, blue: 0.72)   // magenta
         case .opus:   return Color(red: 0.66, green: 0.45, blue: 0.98)   // violet
         case .sonnet: return Color(red: 0.35, green: 0.62, blue: 0.98)   // blue
         case .haiku:  return Color(red: 0.20, green: 0.85, blue: 0.62)   // green

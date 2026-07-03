@@ -4,6 +4,9 @@ import Combine
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     let manager = AgentManager()
+    /// Streams the fleet to the remote panel and executes its commands.
+    /// Self-managing: connects/disconnects as the remote settings change.
+    private(set) var remote: RemoteBridge?
     var statusItem: NSStatusItem!
     var popover: NSPopover!
     private var cancellables = Set<AnyCancellable>()
@@ -22,6 +25,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         // Ask for notification permission + enable real banners (when bundled).
         Notifier.shared.configure()
+
+        // Bring the remote panel bridge up (it no-ops unless enabled in settings).
+        remote = RemoteBridge(manager: manager)
 
         // A frosted-glass popover hosting the same root UI, anchored to the icon.
         let pop = NSPopover()
