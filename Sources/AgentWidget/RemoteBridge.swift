@@ -271,7 +271,12 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
     private func pushSnapshot() {
         guard connected, let manager else { return }
         captureScreensIfDue()
-        guard let data = try? JSONSerialization.data(withJSONObject: snapshot(of: manager)),
+        // .sortedKeys makes serialization deterministic: Swift randomizes
+        // Dictionary key order, so without it every frame looks different — the
+        // dedup below never fires (a full snapshot ships every second) and the
+        // viewer sees s.models churn, rebuilding the launch selects ~1/s.
+        guard let data = try? JSONSerialization.data(withJSONObject: snapshot(of: manager),
+                                                     options: [.sortedKeys]),
               let text = String(data: data, encoding: .utf8) else { return }
         // Skip identical frames, but resend periodically as a keepalive/heartbeat.
         if text == lastSent && Date().timeIntervalSince(lastSentAt) < 10 { return }

@@ -1571,7 +1571,7 @@ function doLaunch() {
 setMode('fleet'); renderSoloModels(); renderManager(); renderWorkers(); renderChat();
 
 // ---- settings -----------------------------------------------------------------------
-const PANEL_BUILD = 'build 2026-07-04c · selectors-fixed';
+const PANEL_BUILD = 'build 2026-07-04d · stable-models-key';
 function renderSettings() {
   document.getElementById('setRelay').textContent = location.host;
   document.getElementById('setToken').textContent = token ? token.slice(0, 4) + '••••••••' : '—';
@@ -1617,7 +1617,11 @@ function render(s) {
   }
   const dirEl = document.getElementById('dir');
   if (!dirEl.value && s.lastDir) { dirEl.value = s.lastDir; renderDirChips(); }
-  const mk = JSON.stringify(s.models || []);
+  // Key off the model *identities* only. The host serializes each snapshot's
+  // dicts with unstable key order (Swift randomizes Dictionary iteration), so
+  // JSON.stringify(s.models) flip-flops every snapshot — rebuilding the worker
+  // selects ~1/s and killing the native picker mid-selection on iOS.
+  const mk = (s.models || []).map(m => m.flag).join('|');
   if (s.models && s.models.length && mk !== modelsKey) {
     modelsKey = mk;
     models = s.models;
