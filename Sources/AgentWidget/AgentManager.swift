@@ -373,32 +373,25 @@ final class AgentManager: ObservableObject {
         return c
     }
 
-    /// Read off the library itself rather than hardcoded: the folder has moved
-    /// once already (`~/.mission-control/plans` → `.../library`), and an agent
-    /// pointed at the old one writes somewhere nothing lists.
-    private static var libraryRoot: String {
-        (DocLibrary.shared.root as NSString).abbreviatingWithTildeInPath
-    }
-
     /// Only a plan-mode agent gets its plan captured for free (ExitPlanMode →
     /// `capturePlan`). An ordinary agent that decides to write one drops a
     /// `PLAN.md` wherever it happens to be working and the library never sees
-    /// it — so point those at the plans folder instead. A bare markdown file
-    /// lands there fine: `PlanLibrary` reads the title off the first heading and
-    /// treats frontmatter as optional.
+    /// it — so point those at `mc-doc` instead. Writing the file by hand would
+    /// also work, but it would carry no frontmatter, and a doc with no `kind:`
+    /// reads back as a note; `mc-doc new` stamps the kind the agent meant.
     ///
     /// Deliberately NOT appended in plan mode, where it would be actively
     /// harmful: that agent is read-only, so a Write stalls on a permission gate
     /// instead of the agent finishing at ExitPlanMode.
-    private static var planFilePostscript: String {
-        """
+    private static let planFilePostscript = """
 
 
-        (Mission Control: if you write a standalone plan or design document as markdown, \
-        save it in \(libraryRoot)/ rather than inside the project, so it shows up in the \
-        document library. This does not apply to documentation that belongs with the code.)
+        (Mission Control: if you write a standalone plan, research report, or design \
+        document as markdown, file it in the document library with \
+        `~/.mission-control/bin/mc-doc new --kind plan|research|note --title "…"` — which \
+        prints the path to write to — rather than leaving it inside the project. This does \
+        not apply to documentation that belongs with the code.)
         """
-    }
 
     // MARK: Manager-led fleet
 
