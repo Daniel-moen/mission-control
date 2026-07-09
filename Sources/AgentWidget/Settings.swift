@@ -31,6 +31,13 @@ final class Settings: ObservableObject {
     @Published var launchTerminalID: String {
         didSet { defaults.set(launchTerminalID, forKey: Keys.launchTerminalID) }
     }
+    /// Open new agents as a tab of the terminal's existing window instead of a
+    /// window of their own — the only way to launch one without knocking a
+    /// full-screen terminal out of its space. Ignored by terminals with no tab
+    /// backend, which always get a fresh window.
+    @Published var launchInNewTab: Bool {
+        didSet { defaults.set(launchInNewTab, forKey: Keys.launchInNewTab) }
+    }
     /// Mirror the fleet to the remote panel (Railway relay) so it can be watched
     /// and steered from another device.
     @Published var remoteEnabled: Bool {
@@ -61,6 +68,7 @@ final class Settings: ObservableObject {
         static let expandFeeds = "expandFeeds"
         static let lastLaunchDir = "lastLaunchDir"
         static let launchTerminalID = "launchTerminalID"
+        static let launchInNewTab = "launchInNewTab"
         static let remoteEnabled = "remoteEnabled"
         static let remoteURL = "remoteURL"
         static let remoteToken = "remoteToken"
@@ -79,6 +87,7 @@ final class Settings: ObservableObject {
         expandFeeds = bool(Keys.expandFeeds, default: false)
         lastLaunchDir = store.string(forKey: Keys.lastLaunchDir) ?? ""
         launchTerminalID = store.string(forKey: Keys.launchTerminalID) ?? TerminalBridge.LaunchTerminal.terminal.rawValue
+        launchInNewTab = bool(Keys.launchInNewTab, default: true)
         remoteEnabled = bool(Keys.remoteEnabled, default: false)
         remoteURL = store.string(forKey: Keys.remoteURL) ?? ""
         remoteToken = store.string(forKey: Keys.remoteToken) ?? ""

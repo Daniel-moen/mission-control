@@ -360,13 +360,31 @@ final class TerminalBridge {
         NSWorkspace.shared.urlForApplication(withBundleIdentifier: t.bundleID)
     }
 
-    /// Open a brand-new window of `terminal` and run `command` in it, inside a
-    /// fresh login shell so the user's PATH — and therefore `claude` — resolves
-    /// exactly as it does when they run it by hand. Launching into the wrong shell
-    /// environment is why an agent could silently fail to start and so never show
-    /// up in the fleet. Returns true if the launch was dispatched.
+    /// Bundle id, not path: a terminal launched from a DMG or ~/Downloads runs
+    /// quarantine-translocated out of /private/var, so its path tells us nothing.
+    private func isRunning(_ t: LaunchTerminal) -> Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: t.bundleID).isEmpty
+    }
+
+    /// Terminals that can drop a new agent into a tab of a window they already
+    /// have open, rather than spawning a window of their own.
+    func supportsNewTab(_ t: LaunchTerminal) -> Bool {
+        t == .wezterm || t == .iterm2
+    }
+
+    /// Run `command` in `terminal`, inside a fresh login shell so the user's PATH
+    /// — and therefore `claude` — resolves exactly as it does when they run it by
+    /// hand. Launching into the wrong shell environment is why an agent could
+    /// silently fail to start and so never show up in the fleet.
+    ///
+    /// With `newTab`, the agent lands in a tab of the terminal's existing window
+    /// when it has one. That keeps a full-screen terminal full-screen: a new
+    /// window would open in its own space and drag the user out of whatever they
+    /// were watching. Falls back to a new window when the terminal can't do tabs
+    /// or has nothing open yet. Returns true if the launch was dispatched.
     @discardableResult
-    func launch(command: String, in terminal: LaunchTerminal) -> Bool {
+    func launch(command: String, in terminal: LaunchTerminal, newTab: Bool = true) -> Bool {
+        if newTab, launchInTab(command: command, in: terminal) { return true }
         switch terminal {
         case .terminal:
             return osascript(terminalLaunchScript, [command])?.contains("ok") == true
@@ -385,6 +403,29 @@ final class TerminalBridge {
             return openLaunch(.alacritty, args: ["-e", loginShell, "-ilc", keepOpen(command)])
         case .kitty:
             return openLaunch(.kitty, args: [loginShell, "-ilc", keepOpen(command)])
+        }
+    }
+
+    /// Add the agent as a tab of the terminal's frontmost existing window,
+    /// leaving that window exactly where it is. Neither backend activates the
+    /// app: the launch is meant to be unobtrusive, and pulling a full-screen
+    /// terminal forward would yank the user across spaces. Returns false when
+    /// this terminal has no tab backend, or no window to put a tab in.
+    private func launchInTab(command: String, in terminal: LaunchTerminal) -> Bool {
+        // A not-yet-running terminal has no window to reuse, and asking anyway
+        // has side effects: `tell application "iTerm2"` launches iTerm2, and
+        // `wezterm cli list` starts a headless mux server. Both would then race
+        // the new window we're about to open.
+        guard isRunning(terminal) else { return false }
+        switch terminal {
+        case .wezterm:
+            guard let window = weztermFocusedWindowId() else { return false }
+            return weztermCLI(["spawn", "--window-id", "\(window)",
+                               "--", loginShell, "-ilc", keepOpen(command)]) != nil
+        case .iterm2:
+            return osascript(itermTabLaunchScript, [command])?.contains("ok") == true
+        default:
+            return false
         }
     }
 
@@ -435,6 +476,22 @@ final class TerminalBridge {
         activate
         set w to (create window with default profile)
         tell current session of w to write text (item 1 of argv)
+      end tell
+      return "ok"
+    end run
+    """
+
+    // Anything but "ok" sends the caller back to opening a real window. iTerm2
+    // counts its own hidden "hotkey window", so an all-closed iTerm2 can still
+    // report windows; `create tab` on it is still the right move.
+    private let itermTabLaunchScript = """
+    on run argv
+      tell application "iTerm2"
+        if (count of windows) is 0 then return "nowindow"
+        tell current window
+          set t to (create tab with default profile)
+          tell current session of t to write text (item 1 of argv)
+        end tell
       end tell
       return "ok"
     end run
@@ -622,12 +679,39 @@ final class TerminalBridge {
         return true
     }
 
-    private func weztermPaneId(forTty tty: String) -> Int? {
-        guard !tty.isEmpty,
-              let json = weztermCLI(["list", "--format", "json"]),
+    /// The window WezTerm last had focus in — where the user is actually looking,
+    /// and so where a new agent's tab belongs. Falls back to any open window, and
+    /// is nil only when WezTerm has no windows at all (or isn't running), which
+    /// is the launcher's cue to open one.
+    private func weztermFocusedWindowId() -> Int? {
+        let panes = weztermPanes()
+        guard !panes.isEmpty else { return nil }
+        if let focused = weztermFocusedPaneId(),
+           let pane = panes.first(where: { ($0["pane_id"] as? Int) == focused }) {
+            return pane["window_id"] as? Int
+        }
+        return panes.first?["window_id"] as? Int
+    }
+
+    /// `focused_pane_id` from the GUI's own client record — the only place
+    /// WezTerm reports which pane has focus across windows.
+    private func weztermFocusedPaneId() -> Int? {
+        guard let json = weztermCLI(["list-clients", "--format", "json"]),
               let data = json.data(using: .utf8),
-              let panes = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return nil }
-        for pane in panes where (pane["tty_name"] as? String) == tty {
+              let clients = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return nil }
+        return clients.compactMap { $0["focused_pane_id"] as? Int }.first
+    }
+
+    private func weztermPanes() -> [[String: Any]] {
+        guard let json = weztermCLI(["list", "--format", "json"]),
+              let data = json.data(using: .utf8),
+              let panes = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        return panes
+    }
+
+    private func weztermPaneId(forTty tty: String) -> Int? {
+        guard !tty.isEmpty else { return nil }
+        for pane in weztermPanes() where (pane["tty_name"] as? String) == tty {
             if let id = pane["pane_id"] as? Int { return id }
         }
         return nil

@@ -298,6 +298,15 @@ struct LaunchView: View {
                 }
                 .padding(.vertical, 1)
             }
+            if manager.launchTerminalSupportsTabs {
+                Toggle(isOn: $settings.launchInNewTab) {
+                    Text("New tab in the current window")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                .toggleStyle(.checkbox)
+                .help("Keeps a full-screen terminal where it is, instead of opening a window in a new space.")
+            }
         }
     }
 

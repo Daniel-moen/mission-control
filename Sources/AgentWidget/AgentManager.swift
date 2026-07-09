@@ -323,20 +323,26 @@ final class AgentManager: ObservableObject {
     /// Resolved once — a terminal installed mid-session shows up after a restart.
     lazy var installedTerminals: [TerminalBridge.LaunchTerminal] = term.installedTerminals()
 
-    /// Spin up one fresh `claude` session per spec, each in its own new window of
-    /// the user's chosen terminal, rooted at `dir`. We stagger them slightly so a
-    /// burst of simultaneous launches doesn't trip the terminal up. They appear in
-    /// the fleet automatically as soon as they write their first transcript line.
+    /// Spin up one fresh `claude` session per spec in the user's chosen terminal,
+    /// rooted at `dir` — as tabs of a window it already has open, or as new
+    /// windows. We stagger them slightly so a burst of simultaneous launches
+    /// doesn't trip the terminal up. They appear in the fleet automatically as
+    /// soon as they write their first transcript line.
     func launchSessions(_ specs: [LaunchSpec], in dir: String) {
         let folder = dir.isEmpty ? home : (dir as NSString).expandingTildeInPath
         let terminal = settings.launchTerminal
+        let newTab = settings.launchInNewTab
         for (i, spec) in specs.enumerated() {
             let cmd = launchCommand(dir: folder, model: spec.model, prompt: spec.prompt, planMode: spec.planMode)
             DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.5) { [weak self] in
-                self?.term.launch(command: cmd, in: terminal)
+                self?.term.launch(command: cmd, in: terminal, newTab: newTab)
             }
         }
     }
+
+    /// Whether the chosen terminal can host agents in tabs — drives the
+    /// launcher's "New tab" toggle, which is meaningless for the ones that can't.
+    var launchTerminalSupportsTabs: Bool { term.supportsNewTab(settings.launchTerminal) }
 
     private func launchCommand(dir: String, model: String, prompt: String, planMode: Bool = false) -> String {
         let q = TerminalBridge.shellQuote
