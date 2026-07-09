@@ -4,15 +4,29 @@
 // per-session streamed terminal screens, and every command the panel can
 // issue. Wire protocol (JSON text frames over /ws?role=viewer&token=…):
 //   in : { type:'snapshot', at, summary, agents, fleets, knownDirs, lastDir,
-//          models, system? }                      ~1 Hz, resent ≥ every 10s
+//          models, docs, system? }                ~1 Hz, resent ≥ every 10s
 //   in : { type:'hostState', online }             relay → Mac link changes
-//   in : { type:'ack', ok, cmd, detail }          command results
+//   in : { type:'ack', ok, cmd, detail, id? }     command results (id on
+//                                                 docCreate + research acks)
 //   in : { type:'screen', sessionId, seq, text }  full terminal buffer for a
 //                                                 session we hold a watch lease on
+//   in : { type:'doc', id, title, kind, status, subject, tags, dir, content,
+//          updatedAt }                             a document body, replying to docGet
+//   in : { type:'docSearchResult', q, hits:[{id, snippets}] }  library search
 //   out: { type:'reply'|'broadcast'|'kill'|'key'|'launch', ... }
 //   out: { type:'watch', sessionId }              lease heartbeat (~3s)
+//   out: document library — docGet/docSave/docCreate/docDelete/docMeta/
+//        docSearch, and the one-shot `research` launch. See the command
+//        section at the foot of this file for each frame's shape.
 //
-// NEW snapshot fields (system, per-agent pid/cpu/mem/branch/alive) may be
+// The document library lives in ~/.mission-control/library on the Mac as plain
+// markdown files (kind: plan | research | note). The snapshot carries only each
+// doc's METADATA (id/title/kind/status/subject/tags/dir/folder/preview/…); a
+// body is pulled on demand with docGet and cached in `docDocs`, and invalidated
+// the moment its `updatedAt` moves on disk — which is how a research agent's
+// freshly-written report reaches the panel.
+//
+// NEW snapshot fields (system, per-agent pid/cpu/mem/branch/alive, docs) may be
 // ABSENT when an older Mac host connects — every consumer degrades gracefully.
 
 const LS_TOKEN = 'mc_token';
@@ -36,10 +50,11 @@ export const mc = $state({
   knownDirs: [],
   lastDir: '',
 
-  // Plan library — markdown files in ~/.mission-control/plans on the Mac.
-  plans: [], // metadata from the snapshot: { id, title, dir, folder, session, preview, created, updatedAt }
-  planDocs: {}, // id → { content, title, dir, updatedAt, at } — bodies fetched via planGet
-  lastCreatedPlanId: '', // set by a planCreate ack so the Plans tab can open it
+  // Document library — markdown files in ~/.mission-control/library on the Mac.
+  docs: [], // metadata from the snapshot: { id, title, kind, status, subject, tags, dir, folder, session, preview, words, created, updatedAt }
+  docDocs: {}, // id → { content, title, kind, status, subject, tags, dir, updatedAt, at } — bodies fetched via docGet
+  lastCreatedDocId: '', // set by a docCreate/research ack so the Library tab can open it
+  search: { q: '', hits: [], at: 0 }, // last full-text search: { id, snippets } hits from docSearch
 
   screens: {}, // sessionId → { seq, text, at } — streamed watch-lease frames
 
@@ -49,7 +64,7 @@ export const mc = $state({
   now: Date.now(), // 1 Hz clock for staleness ages ("live" / "6s ago")
 });
 
-export const PANEL_BUILD = 'v11 · 2026-07-09 · plans';
+export const PANEL_BUILD = 'v12 · 2026-07-09 · library';
 
 // ---- status helpers ---------------------------------------------------------
 // v8 status semantics: working = cyan, needs-you = amber, done = green,
@@ -94,6 +109,46 @@ export function agentById(id) {
 // back to the folder. When a name exists, folder/branch demote to metadata.
 export function agentName(a) {
   return a?.name || a?.folder || '';
+}
+
+// ---- document library helpers -----------------------------------------------
+// Pure lookups over the library metadata, shared by every view that renders a
+// doc. `kind` and `status` cross the wire as the raw enum strings DocLibrary
+// writes into frontmatter — map them here so the labels live in one place.
+export function kindLabel(kind) {
+  return kind === 'plan' ? 'Plan' : kind === 'research' ? 'Research' : 'Note';
+}
+// The icon NAME the UI looks up in its glyph set (worker C draws each one); an
+// unknown kind degrades to the note glyph, matching DocLibrary's Kind(loose:).
+export function kindIcon(kind) {
+  return kind === 'plan' ? 'plan' : kind === 'research' ? 'research' : 'note';
+}
+// `statusLabel` above is the AGENT status; a doc's status is a different enum
+// (draft/active/done/archived), so it gets its own name. `active` reads as
+// "Working" because that's what it means — an agent is writing the doc now.
+export function docStatusLabel(status) {
+  return status === 'active' ? 'Working' : status === 'done' ? 'Done' : status === 'archived' ? 'Archived' : 'Draft';
+}
+// Every distinct tag across the library, sorted, for the tag filter chips.
+export function allTags(docs) {
+  const set = new Set();
+  for (const d of docs || []) for (const t of d.tags || []) if (t) set.add(t);
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
+// Client-side filter for the library list. `kind`/`status`/`tag` of 'all' or ''
+// impose no constraint; `q` is a case-insensitive substring over the fields a
+// reader can see without opening the doc (title/subject/tags/preview) — the
+// deep full-text search is the host's docSearch, this is the instant local sieve.
+export function filterDocs(docs, { kind = 'all', status = 'all', tag = 'all', q = '' } = {}) {
+  const query = (q || '').trim().toLowerCase();
+  return (docs || []).filter((d) => {
+    if (kind && kind !== 'all' && d.kind !== kind) return false;
+    if (status && status !== 'all' && d.status !== status) return false;
+    if (tag && tag !== 'all' && !(d.tags || []).includes(tag)) return false;
+    if (!query) return true;
+    const hay = `${d.title || ''} ${d.subject || ''} ${(d.tags || []).join(' ')} ${d.preview || ''}`.toLowerCase();
+    return hay.includes(query);
+  });
 }
 
 // ---- fleet grouping ---------------------------------------------------------
@@ -471,8 +526,10 @@ export function connect() {
       ingest(msg);
     } else if (msg.type === 'screen') {
       ingestScreen(msg);
-    } else if (msg.type === 'plan') {
-      ingestPlan(msg);
+    } else if (msg.type === 'doc') {
+      ingestDoc(msg);
+    } else if (msg.type === 'docSearchResult') {
+      mc.search = { q: msg.q || '', hits: Array.isArray(msg.hits) ? msg.hits : [], at: Date.now() };
     } else if (msg.type === 'hostState') {
       hostOnline = msg.online;
       setLink();
@@ -579,16 +636,18 @@ function ingest(s) {
   });
   if (mc.history.length > 240) mc.history.shift();
 
-  // Plan library metadata — replace only on real change so open views and the
-  // list don't churn at 1 Hz. updatedAt moves when a file is written.
-  const pk = (s.plans || []).map((p) => `${p.id}@${p.updatedAt}`).join('|');
-  if (pk !== mc._plansKey) {
-    mc._plansKey = pk;
-    mc.plans = s.plans || [];
-    // A plan that changed on disk (or vanished) invalidates its cached body.
-    for (const id of Object.keys(mc.planDocs)) {
-      const meta = mc.plans.find((p) => p.id === id);
-      if (!meta || meta.updatedAt > (mc.planDocs[id].updatedAt ?? 0)) delete mc.planDocs[id];
+  // Document library metadata — replace only on real change so open views and
+  // the list don't churn at 1 Hz. updatedAt moves when a file is written.
+  const dgk = (s.docs || []).map((d) => `${d.id}@${d.updatedAt}`).join('|');
+  if (dgk !== mc._docsKey) {
+    mc._docsKey = dgk;
+    mc.docs = s.docs || [];
+    // A doc that changed on disk (or vanished) invalidates its cached body. This
+    // is the main path a research report lands: the agent rewrites the file, its
+    // updatedAt jumps, and the next docGet re-fetches instead of showing stale text.
+    for (const id of Object.keys(mc.docDocs)) {
+      const meta = mc.docs.find((d) => d.id === id);
+      if (!meta || meta.updatedAt > (mc.docDocs[id].updatedAt ?? 0)) delete mc.docDocs[id];
     }
   }
 
@@ -607,11 +666,15 @@ function ingest(s) {
   }
 }
 
-function ingestPlan(msg) {
+function ingestDoc(msg) {
   if (!msg.id || typeof msg.content !== 'string') return;
-  mc.planDocs[msg.id] = {
+  mc.docDocs[msg.id] = {
     content: msg.content,
     title: msg.title || '',
+    kind: msg.kind || 'note',
+    status: msg.status || 'draft',
+    subject: msg.subject || '',
+    tags: Array.isArray(msg.tags) ? msg.tags : [],
     dir: msg.dir || '',
     updatedAt: msg.updatedAt ?? 0,
     at: Date.now(),
@@ -619,13 +682,20 @@ function ingestPlan(msg) {
 }
 
 function handleAck(msg) {
-  if (msg.cmd === 'planCreate') {
-    if (msg.ok && msg.id) mc.lastCreatedPlanId = msg.id;
-    toast(msg.ok ? 'Plan created' : `Couldn't create — ${msg.detail || 'unknown error'}`);
+  // Both docCreate and research mint a new file and carry its id back so the
+  // Library tab can jump straight to it; research additionally spins up an agent.
+  if (msg.cmd === 'docCreate') {
+    if (msg.ok && msg.id) mc.lastCreatedDocId = msg.id;
+    toast(msg.ok ? 'Document created' : `Couldn't create — ${msg.detail || 'unknown error'}`);
     return;
   }
-  if (msg.cmd === 'planGet') {
-    if (!msg.ok) toast(msg.detail || "Couldn't load that plan");
+  if (msg.cmd === 'research') {
+    if (msg.ok && msg.id) mc.lastCreatedDocId = msg.id;
+    toast(msg.ok ? 'Research agent launched' : `Couldn't launch research — ${msg.detail || 'unknown error'}`);
+    return;
+  }
+  if (msg.cmd === 'docGet') {
+    if (!msg.ok) toast(msg.detail || "Couldn't load that document");
     return;
   }
   // The Launch sheet shows its own optimistic overlay on click, so a successful
@@ -680,22 +750,40 @@ export function sendKey(sessionId, key) {
 export function launch(payload) {
   return send({ type: 'launch', ...payload });
 }
-// ---- plan library commands ----
-export function planGet(id) {
-  return send({ type: 'planGet', id });
+// ---- document library commands ----
+export function docGet(id) {
+  return send({ type: 'docGet', id });
 }
-export function planSave(id, content) {
-  const ok = send({ type: 'planSave', id, content });
-  if (ok && mc.planDocs[id]) mc.planDocs[id] = { ...mc.planDocs[id], content }; // optimistic
+export function docSave(id, content) {
+  const ok = send({ type: 'docSave', id, content });
+  if (ok && mc.docDocs[id]) mc.docDocs[id] = { ...mc.docDocs[id], content }; // optimistic
   return ok;
 }
-export function planCreate({ title = '', dir = '', content = '' } = {}) {
-  return send({ type: 'planCreate', title, dir, content });
+export function docCreate({ title = '', kind = 'note', subject = '', tags = [], dir = '', content = '' } = {}) {
+  return send({ type: 'docCreate', title, kind, subject, tags, dir, content });
 }
-export function planDelete(id) {
-  const ok = send({ type: 'planDelete', id });
-  if (ok) delete mc.planDocs[id];
+export function docDelete(id) {
+  const ok = send({ type: 'docDelete', id });
+  if (ok) delete mc.docDocs[id];
   return ok;
+}
+// Metadata-only edit: send just the keys the caller wants to change so the host
+// leaves everything else on the file untouched (its update() treats absent as
+// "leave alone"). `type` and `id` are always present; nothing else unless asked.
+export function docMeta(id, patch = {}) {
+  const msg = { type: 'docMeta', id };
+  for (const k of ['kind', 'status', 'subject', 'tags', 'dir']) {
+    if (k in patch) msg[k] = patch[k];
+  }
+  return send(msg);
+}
+export function docSearch(q) {
+  return send({ type: 'docSearch', q: String(q ?? '') });
+}
+// One-shot: the host creates a research doc and launches an agent that writes
+// its report into that exact file; the ack carries the new doc's id.
+export function research({ topic = '', subject = '', dir = '', model = '', tags = [] } = {}) {
+  return send({ type: 'research', topic, subject, dir, model, tags });
 }
 export function stopAll() {
   const n = mc.agents.filter((a) => a.status !== 'done').length;

@@ -45,6 +45,7 @@ The fleet dashboard also gives you filter pills (All / Working / Waiting / Done)
 - **Agents** — live cards mirrored from your Mac ~1×/second: status, current activity, plan progress, runtime/cost/burn. The inspector shows the objective, todo checklist, **a live terminal mirror** (the agent's actual screen, captured by TTY even at an idle prompt), the activity log, reply box + quick presets, and the kill switch.
 - **Tasks** — a kanban board (to do / in progress / done) built live from every agent's `TodoWrite` plan; each card links back to its agent.
 - **Projects** — fleets and working directories rolled up into project cards: member agents, aggregate plan progress, cost and tokens.
+- **Library** — the fleet's shared body of work: every plan, research report, and note in one place (see [Document library](#document-library)). Filter by kind (plans / research / notes), status, or tag; search titles instantly and document bodies deeply over the wire; open any doc into a full-screen reader that refreshes live while an agent is writing it. From a document you dispatch straight back to the fleet — **Build** a plan, or **Continue** a research doc or note with a fresh agent. Hit **Research**, hand an agent a topic, and its report writes itself into a new document you watch fill in.
 - **Analytics** — fleet-wide tok/s hero counter with a live chart, token breakdown bar (output / input / cache read / cache write, colorblind-safe palette), and a top-agents leaderboard.
 - **Chat** — message any single agent (its transcript rendered as a conversation) or broadcast to all, with dictation via the mic button where the browser supports it.
 - **Launch** — fire a solo agent or a manager-led fleet *from the iPad*: mission, working directory (recent folders one tap away), model per agent (Fable 5 / Opus 4.8 / Sonnet 5 / Haiku 4.5 / Default), up to 8 workers. Terminals open on the Mac as usual and the new agents appear on the board.
@@ -153,6 +154,56 @@ The manager and workers communicate purely through files — no sockets, no shar
 
 ---
 
+## Document library
+
+Everything the fleet plans, researches, and finds out lands in one place: `~/.mission-control/library/`, a flat directory of markdown files. The files *are* the library — no database, no index — so any document survives relaunches and can be opened, searched, grepped, or committed with any tool, including by an agent that never heard of Mission Control. Each file carries a small managed frontmatter block, then a plain-markdown body:
+
+```
+---
+kind: research
+status: active
+subject: Acme Corp
+tags: pricing, competitors
+created: 2026-07-09T18:22:04Z
+---
+# Acme Corp — pricing teardown
+…
+```
+
+- **kind** — `plan` (something to build), `research` (findings about a topic or company), or `note` (anything else). Drives the icon and colour, and what an agent is told to do when you dispatch the document.
+- **status** — `draft`, `active` (an agent is working on it right now), `done`, or `archived`.
+- **subject** — the company / product / thing it's about; **tags** — a comma list. Both feed the panel's filters and search.
+
+Only the body is ever shown or edited as "the document"; the frontmatter is metadata the tools manage and it survives body edits untouched.
+
+Documents arrive three ways. Agents file their own plans — anything an agent proposes with `ExitPlanMode` is captured to the library as a `plan`, and revisions from the same session overwrite in place, so you keep its latest thinking. Research agents write reports straight into a file. And you start notes and plans by hand from the panel's Library tab.
+
+### Research flow
+
+Hit **Research** in the panel, hand it a topic, a subject (a company, say), tags, a folder, and a model. Mission Control creates the document immediately at `status: active`, launches a single agent, and the agent writes its report straight into that file. You watch it land — the reader refreshes as the bytes hit disk on the Mac, and the status flips to `done` when the agent is finished.
+
+### mc-doc — file to the library from any agent
+
+The library isn't only for agents you launch from the panel. On launch the app installs a small CLI at `~/.mission-control/bin/mc-doc` and a Claude Code skill at `~/.claude/skills/mission-control-library/SKILL.md`, so *any* `claude` session on the Mac can put work where you'll read it. Tell a plain session "research Acme Corp's pricing and file it" and it picks up the skill on its own, creates the document, and writes the report in — the same result as the panel's Research button, and it shows up in the panel within a second or two.
+
+`mc-doc` writes the exact on-disk format the app expects, so agents never hand-edit frontmatter:
+
+```bash
+mc-doc new --kind research --title "Pricing at Acme" \
+       --subject "Acme Corp" --tags pricing,competitors   # prints the new file's path
+mc-doc list [--kind k] [--status s] [--tag t]   # one id⇥kind⇥status⇥title per line
+mc-doc get   <id>              # print the body (frontmatter stripped)
+mc-doc write <id> --stdin      # replace the body, keep the frontmatter
+mc-doc set   <id> status done  # rewrite one of kind|status|subject|tags|dir
+mc-doc path  <id>              # absolute path (exit 1 if the doc is gone)
+```
+
+`<id>` is a document's filename (`acme-pricing.md`) — the last component of the path `new` prints. New docs start at `status: draft`; there's no `--status` flag, so set it with `mc-doc set <id> status active`.
+
+Set `MC_LIBRARY` to relocate the library; the app and `mc-doc` both honour it, so they never disagree about where the documents live.
+
+---
+
 ## Project layout
 
 ```
@@ -171,6 +222,8 @@ Sources/AgentWidget/
   LaunchView.swift     Launch tab: solo/fleet, mission input, terminal picker
   TerminalBridge.swift Terminal discovery (ps/lsof), focus, reply, launch
   RemoteBridge.swift   WebSocket host: streams snapshots to the relay, runs remote commands
+  DocLibrary.swift     Document library: markdown-with-frontmatter files under ~/.mission-control/library
+  ToolingInstaller.swift Installs mc-doc + the library skill so any agent can file work
   Notifier.swift       UserNotifications + osascript fallback
   PlanWindow.swift     Plan pop-out window, markdown renderer
   Settings.swift       UserDefaults-backed preferences

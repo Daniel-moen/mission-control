@@ -8,13 +8,17 @@ import Combine
 /// Protocol (JSON text frames):
 ///   host → relay:  {type:"snapshot", …}            full fleet state, ~1/s
 ///                  {type:"screen", sessionId, seq, text}  watched terminal buffer, ~1/s
-///                  {type:"ack", ok, cmd, detail}   result of an executed command
+///                  {type:"ack", ok, cmd, detail, id?}     result of an executed command
+///                  {type:"doc", id, …, content}    one document's body, sent on demand
+///                  {type:"docSearchResult", q, hits}      library full-text search hits
 ///   relay → host:  {type:"reply", sessionId, text} type into that agent's terminal
 ///                  {type:"broadcast", text}        send to every controllable agent
 ///                  {type:"kill", sessionId}        terminate that agent's process
 ///                  {type:"key", sessionId, key}    raw keystroke (menu digit, arrows, …)
 ///                  {type:"watch", sessionId}       lease: stream that terminal (renewed ~3s)
-///                  {type:"launch", mission, dir, managerModel?, workerModels[]}
+///                  {type:"launch", mission, dir, managerModel?, workerModels[], docId?, docMode?}
+///                  {type:"research", topic, subject, dir, model, tags[]}  seed a doc, dispatch an agent to fill it
+///                  {type:"docGet|docSave|docCreate|docDelete|docMeta|docSearch", …}  document library
 ///                  {type:"viewers", count}         how many panels are watching
 final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     @Published private(set) var connected = false
@@ -160,9 +164,22 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
 
     private func handle(_ text: String) {
         guard let data = text.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let type = obj["type"] as? String,
+              let rawObj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rawType = rawObj["type"] as? String,
               let manager else { return }
+
+        // A panel cached before the plan library became the document library
+        // still speaks plan*. They are the doc* handlers under old names — a
+        // plan is just a document of kind `plan`.
+        var obj = rawObj
+        var type = rawType
+        switch rawType {
+        case "planGet":    type = "docGet"
+        case "planSave":   type = "docSave"
+        case "planDelete": type = "docDelete"
+        case "planCreate": type = "docCreate"; if obj["kind"] == nil { obj["kind"] = "plan" }
+        default: break
+        }
 
         switch type {
         case "viewers":
@@ -220,24 +237,40 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
             var mission = ((obj["mission"] as? String) ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             var dir = (obj["dir"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            // An attached plan from the library: fold its content into the
+            // An attached document from the library: fold its body into the
             // mission (plus the file's path, so agents can re-read or update
-            // it), and let it stand in for a missing mission/dir.
-            if let planId = obj["planId"] as? String, !planId.isEmpty {
-                guard let body = PlanLibrary.shared.body(of: planId),
-                      let meta = PlanLibrary.shared.meta(of: planId) else {
-                    ack(false, cmd: "launch", detail: "That plan is gone"); return
+            // it), and let it stand in for a missing mission/dir. `planId` is the
+            // legacy spelling of a build-mode docId.
+            let docId = (obj["docId"] as? String) ?? (obj["planId"] as? String)
+            let docMode = (obj["docMode"] as? String) ?? "build"
+            if let docId, !docId.isEmpty {
+                guard let body = DocLibrary.shared.body(of: docId),
+                      let meta = DocLibrary.shared.meta(of: docId) else {
+                    ack(false, cmd: "launch", detail: "That document is gone"); return
                 }
                 if dir.isEmpty { dir = meta.dir }
-                if mission.isEmpty { mission = "Implement the attached plan: \(meta.title)" }
-                mission += """
+                let path = DocLibrary.shared.path(of: docId)
+                if docMode == "continue" {
+                    if mission.isEmpty { mission = "Pick up and keep working on: \(meta.title)" }
+                    mission += """
 
 
-                ## Attached plan — \(meta.title)
-                A reviewed implementation plan for this mission. Follow it. It is saved at \(PlanLibrary.shared.path(of: planId)) — if you knowingly deviate from it, update that file so it stays true.
+                    ## Attached document — \(meta.title)
+                    Here is an existing document from the library. Pick it up and keep working on it — extend, correct, and deepen it, then write the updated version back to that same file, preserving its `---` frontmatter block verbatim. It is saved at \(path).
 
-                \(body)
-                """
+                    \(body)
+                    """
+                } else {
+                    if mission.isEmpty { mission = "Implement the attached plan: \(meta.title)" }
+                    mission += """
+
+
+                    ## Attached plan — \(meta.title)
+                    A reviewed implementation plan for this mission. Follow it. It is saved at \(path) — if you knowingly deviate from it, update that file so it stays true.
+
+                    \(body)
+                    """
+                }
             }
             guard !mission.isEmpty else {
                 ack(false, cmd: "launch", detail: "Mission is empty"); return
@@ -257,54 +290,134 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
             ack(true, cmd: "launch",
                 detail: n == 1 ? "Agent launching on your Mac" : "Launching \(n) agents on your Mac")
 
-        // ---- plan library -------------------------------------------------
-        // Plans are markdown files in ~/.mission-control/plans/. The snapshot
-        // carries their metadata; bodies travel on demand as {type:"plan"}.
-
-        case "planGet":
-            guard let id = obj["id"] as? String,
-                  let body = PlanLibrary.shared.body(of: id),
-                  let meta = PlanLibrary.shared.meta(of: id) else {
-                ack(false, cmd: "planGet", detail: "That plan is gone"); return
+        case "research":
+            let topic = ((obj["topic"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !topic.isEmpty else {
+                ack(false, cmd: "research", detail: "Research topic is empty"); return
             }
-            sendJSON(["type": "plan", "id": id, "title": meta.title, "dir": meta.dir,
-                      "content": body, "updatedAt": meta.updatedAt.timeIntervalSince1970])
+            let subject = ((obj["subject"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let rdir = ((obj["dir"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let model = (obj["model"] as? String) ?? ""   // "" ⇒ CLI default
+            let tags = (obj["tags"] as? [String]) ?? []
+            let title = subject.isEmpty ? topic : "\(subject) — \(topic)"
+            // Seed the file now so it appears in the library as `active` the
+            // instant the agent starts, and so the agent has a path to write to.
+            let stub = "# \(title)\n\n_Research in progress…_\n"
+            guard let id = DocLibrary.shared.create(
+                title: title, kind: .research, status: .active,
+                subject: subject, tags: tags, dir: rdir, body: stub) else {
+                ack(false, cmd: "research", detail: "Couldn't start the research"); return
+            }
+            let plan = AgentManager.FleetPlan(
+                mission: researchMission(topic: topic, subject: subject,
+                                         id: id, path: DocLibrary.shared.path(of: id)),
+                dir: rdir, managerModel: nil, workerModels: [model], planMode: false)
+            manager.launchFleet(plan)
+            if !rdir.isEmpty { settings.lastLaunchDir = rdir }
+            sendJSON(["type": "ack", "ok": true, "cmd": "research",
+                      "detail": "Researching on your Mac", "id": id])
 
-        case "planSave":
+        // ---- document library ---------------------------------------------
+        // Markdown files in ~/.mission-control/library/. The snapshot carries
+        // their metadata; bodies travel on demand as {type:"doc"}.
+
+        case "docGet":
+            guard let id = obj["id"] as? String, DocLibrary.shared.meta(of: id) != nil else {
+                ack(false, cmd: "docGet", detail: "That document is gone"); return
+            }
+            sendDoc(id)
+
+        case "docSave":
             guard let id = obj["id"] as? String,
                   let content = obj["content"] as? String else {
-                ack(false, cmd: "planSave", detail: "Nothing to save"); return
+                ack(false, cmd: "docSave", detail: "Nothing to save"); return
             }
-            if PlanLibrary.shared.save(id: id, body: content) {
-                ack(true, cmd: "planSave", detail: "Plan saved")
+            if DocLibrary.shared.save(id: id, body: content) {
+                ack(true, cmd: "docSave", detail: "Document saved")
             } else {
-                ack(false, cmd: "planSave", detail: "Couldn't save that plan")
+                ack(false, cmd: "docSave", detail: "Couldn't save that document")
             }
 
-        case "planCreate":
+        case "docCreate":
             let title = ((obj["title"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let pdir = ((obj["dir"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let kind = (obj["kind"] as? String).map(DocLibrary.Kind.init(loose:)) ?? .note
+            let subject = (obj["subject"] as? String) ?? ""
+            let tags = (obj["tags"] as? [String]) ?? []
+            let ddir = ((obj["dir"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let content = (obj["content"] as? String) ?? ""
-            guard let id = PlanLibrary.shared.create(title: title, dir: pdir, body: content) else {
-                ack(false, cmd: "planCreate", detail: "Couldn't create the plan"); return
+            guard let id = DocLibrary.shared.create(
+                title: title, kind: kind, subject: subject, tags: tags, dir: ddir, body: content) else {
+                ack(false, cmd: "docCreate", detail: "Couldn't create the document"); return
             }
-            // The ack carries the id so the panel can open the fresh plan.
-            sendJSON(["type": "ack", "ok": true, "cmd": "planCreate", "detail": "Plan created", "id": id])
-            if let meta = PlanLibrary.shared.meta(of: id) {
-                sendJSON(["type": "plan", "id": id, "title": meta.title, "dir": meta.dir,
-                          "content": PlanLibrary.shared.body(of: id) ?? "",
-                          "updatedAt": meta.updatedAt.timeIntervalSince1970])
-            }
+            // The ack carries the id so the panel can open the fresh document.
+            sendJSON(["type": "ack", "ok": true, "cmd": "docCreate", "detail": "Document created", "id": id])
+            sendDoc(id)
 
-        case "planDelete":
-            guard let id = obj["id"] as? String, PlanLibrary.shared.delete(id: id) else {
-                ack(false, cmd: "planDelete", detail: "That plan is already gone"); return
+        case "docDelete":
+            guard let id = obj["id"] as? String, DocLibrary.shared.delete(id: id) else {
+                ack(false, cmd: "docDelete", detail: "That document is already gone"); return
             }
-            ack(true, cmd: "planDelete", detail: "Plan deleted")
+            ack(true, cmd: "docDelete", detail: "Document deleted")
+
+        case "docMeta":
+            guard let id = obj["id"] as? String else {
+                ack(false, cmd: "docMeta", detail: "No document"); return
+            }
+            // Only keys actually present move; an absent key leaves that field
+            // as it is on disk (update() reads nil as "leave alone").
+            let ok = DocLibrary.shared.update(
+                id: id,
+                kind: (obj["kind"] as? String).map(DocLibrary.Kind.init(loose:)),
+                status: (obj["status"] as? String).map(DocLibrary.Status.init(loose:)),
+                subject: obj["subject"] as? String,
+                tags: obj["tags"] as? [String],
+                dir: obj["dir"] as? String)
+            ack(ok, cmd: "docMeta", detail: ok ? "Updated" : "Couldn't update that document")
+
+        case "docSearch":
+            let q = ((obj["q"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let hits: [[String: Any]] = DocLibrary.shared.search(q).map {
+                ["id": $0.meta.id, "snippets": $0.snippets]
+            }
+            sendJSON(["type": "docSearchResult", "q": q, "hits": hits])
 
         default:
             break
         }
+    }
+
+    /// Ship one document's full body to the panel. Silently drops if the id
+    /// went stale between request and read.
+    private func sendDoc(_ id: String) {
+        guard let meta = DocLibrary.shared.meta(of: id),
+              let body = DocLibrary.shared.body(of: id) else { return }
+        sendJSON(["type": "doc", "id": id, "title": meta.title,
+                  "kind": meta.kind.rawValue, "status": meta.status.rawValue,
+                  "subject": meta.subject, "tags": meta.tags, "dir": meta.dir,
+                  "content": body, "updatedAt": meta.updatedAt.timeIntervalSince1970])
+    }
+
+    /// The brief handed to a research agent: research the topic and overwrite the
+    /// seeded file with a standalone report, keeping the frontmatter and marking
+    /// the doc done when finished.
+    private func researchMission(topic: String, subject: String, id: String, path: String) -> String {
+        let subjectLine = subject.isEmpty ? "" : "\nSubject: \(subject)"
+        return """
+        You are a research agent. Research the topic below thoroughly and write a report.
+
+        Topic: \(topic)\(subjectLine)
+
+        Research deeply — search the web, and read local code or context in the working directory wherever it bears on the topic. Cross-check what you find.
+
+        Write the FULL report as markdown into this exact file, replacing its placeholder body but PRESERVING the `---` frontmatter block at the very top of the file verbatim (do not touch or drop those lines):
+          \(path)
+
+        The report must stand on its own for a reader who never saw this prompt: open with a `#` title, then an executive summary, then well-structured sections. State concrete facts, and cite sources with links wherever you have them. End with a "Sources" section.
+
+        When the report is written, mark the document done by running:
+          ~/.mission-control/bin/mc-doc set \(id) status done
+        If that command isn't installed, edit the `status:` line in the file's frontmatter to `status: done` yourself.
+        """
     }
 
     private func setViewers(_ n: Int) {
@@ -579,11 +692,13 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
                 "memUsedMB": Int(hostMemUsedMB().rounded()),
                 "memTotalMB": Int((Double(ProcessInfo.processInfo.physicalMemory) / 1_048_576).rounded()),
             ],
-            // The plan library (metadata only — bodies travel via planGet).
-            "plans": PlanLibrary.shared.list().map {
-                ["id": $0.id, "title": $0.title, "dir": $0.dir,
+            // The document library (metadata only — bodies travel via docGet).
+            "docs": DocLibrary.shared.list().map {
+                ["id": $0.id, "title": $0.title, "kind": $0.kind.rawValue,
+                 "status": $0.status.rawValue, "subject": $0.subject, "tags": $0.tags,
+                 "dir": $0.dir,
                  "folder": $0.dir.isEmpty ? "" : ($0.dir as NSString).lastPathComponent,
-                 "session": $0.session, "preview": $0.preview,
+                 "session": $0.session, "preview": $0.preview, "words": $0.words,
                  "created": $0.createdAt.timeIntervalSince1970,
                  "updatedAt": $0.updatedAt.timeIntervalSince1970]
             },

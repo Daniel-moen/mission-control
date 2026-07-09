@@ -26,6 +26,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // Ask for notification permission + enable real banners (when bundled).
         Notifier.shared.configure()
 
+        // Drop the mc-doc CLI + skill on disk so any agent on this Mac — not just
+        // ones launched from the panel — can file work into the library.
+        ToolingInstaller.install()
+
         // Bring the remote panel bridge up (it no-ops unless enabled in settings).
         remote = RemoteBridge(manager: manager)
 

@@ -8,6 +8,14 @@
 // It connects as role=host, streams a realistic snapshot every second, answers
 // viewer commands with acks, and streams per-session terminal buffers while a
 // viewer holds a 'watch' lease on a session.
+//
+// It also impersonates the document library (DocLibrary.swift / RemoteBridge):
+// the snapshot carries doc METADATA under `docs`, bodies travel on demand via
+// docGet → {type:'doc'}, and docSave/docCreate/docDelete/docMeta/docSearch plus
+// the one-shot `research` launch behave as the real host does — including a
+// research doc that flips draft→active→done a few seconds after it is dispatched,
+// so the panel's live-research path is exercisable without the Mac. The legacy
+// plan* commands stay handled as doc* aliases, exactly as RemoteBridge does.
 
 import WebSocket from 'ws';
 
@@ -204,8 +212,71 @@ const fleets = [
 ];
 
 // ---------------------------------------------------------------------------
-// Plan library — mirrors ~/.mission-control/plans on the real host. Snapshot
-// carries metadata; bodies travel on demand via planGet → {type:'plan'}.
+// Document library — mirrors ~/.mission-control/library on the real host
+// (DocLibrary.swift). The snapshot carries only each doc's METADATA; a body is
+// pulled on demand via docGet → {type:'doc'}. Title/preview/words are DERIVED
+// from the body and never stored — which is why docMeta, which only rewrites
+// frontmatter, can't and doesn't move a doc's title. `updatedAt`/`created`
+// cross the wire as epoch SECONDS.
+
+const nowSec = () => Date.now() / 1000;
+
+// First `#` heading in the body, else its first non-empty line (≤90 chars) —
+// DocLibrary.title(ofBody:).
+function docTitle(body) {
+  let fallback = '';
+  for (const line of String(body).split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    if (t.startsWith('#')) {
+      const s = t.replace(/^#+/, '').trim();
+      if (s) return s.slice(0, 90);
+    }
+    if (!fallback) fallback = t.slice(0, 90);
+  }
+  return fallback;
+}
+
+// A couple of plain lines after the title, ≤180 chars — DocLibrary.preview(ofBody:).
+function docPreview(body) {
+  let sawTitle = false;
+  const out = [];
+  for (const line of String(body).split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    if (!sawTitle) { sawTitle = true; if (t.startsWith('#')) continue; }
+    out.push(t);
+    if (out.join(' ').length > 180) break;
+  }
+  return out.join(' ').slice(0, 180);
+}
+
+function wordCount(body) {
+  return String(body).split(/\s+/).filter(Boolean).length;
+}
+
+// DocLibrary.slug(): letters/digits kept, runs of space/-/_ collapse to one '-',
+// capped at 40 chars, never empty.
+function docSlug(s) {
+  let out = '';
+  for (const ch of String(s).toLowerCase()) {
+    if (/[a-z0-9]/.test(ch)) out += ch;
+    else if (ch === ' ' || ch === '-' || ch === '_') { if (!out.endsWith('-')) out += '-'; }
+    if (out.length >= 40) break;
+  }
+  out = out.replace(/-+$/, '');
+  return out || 'doc';
+}
+
+// DocLibrary.uniqueId(): first writer keeps the bare slug; a collision gets a
+// numeric suffix, so two same-titled creates don't clobber each other.
+function newDocId(seed) {
+  const base = docSlug(seed);
+  let id = `${base}.md`;
+  let n = 2;
+  while (docs.has(id)) { id = `${base}-${n}.md`; n += 1; }
+  return id;
+}
 
 const PLAN_BODY = `# Checkout revamp — implementation plan
 
@@ -227,49 +298,113 @@ The checkout flow lives in \`src/checkout/\` and currently posts to the legacy
 Run \`npm test\` and the checkout E2E suite; place a staging order end-to-end.
 `;
 
-let planSeq = 0;
-const plans = new Map([
+// A finished research report: headings + a Sources section so the panel's reader
+// is exercised, and one deliberately unique token (`zephyrite`) that appears in
+// NO other body — the full-text docSearch fixture the wire test greps for.
+const RESEARCH_BODY = `# Acme Corp — pricing teardown
+
+## Executive summary
+Acme Corp positions itself as the premium option in the workflow-automation
+market, list-pricing roughly 30% above the median competitor. Discounting is
+aggressive but opaque: the public zephyrite tier exists only to anchor the
+enterprise quote.
+
+## Plans and packaging
+- **Starter** — $19/seat/mo, 3-seat minimum, no SSO
+- **Team** — $49/seat/mo, adds SSO and audit logs
+- **Enterprise** — "contact us", volume-based, custom SLAs
+
+## Competitive position
+Against Globex and Initech, Acme wins on integrations and loses on price. The
+gap widens above 50 seats, where Globex's flat-rate plan undercuts Acme.
+
+## Risks
+- Heavy reliance on annual prepay masks churn in the monthly cohort.
+- No published usage limits invites bill shock, a recurring support theme.
+
+## Sources
+- Acme public pricing page — https://example.com/acme/pricing
+- Globex plan comparison — https://example.com/globex/plans
+- G2 reviews, "billing" filter — https://example.com/g2/acme
+`;
+
+const NOTE_BODY = `# Standup notes — 2026-07-08
+
+- Shipped the tax client behind a feature flag
+- Blocked on staging credentials for the payment sandbox
+- Follow up with design on the empty-state copy
+`;
+
+// id → { kind, status, subject, tags, dir, session, created, updatedAt, content }.
+// A realistic mix: a captured plan, a finished research report, a hand-written note.
+const docs = new Map([
   ['checkout-revamp--3fa9c2d1.md', {
-    title: 'Checkout revamp — implementation plan',
+    kind: 'plan', status: 'draft', subject: '', tags: [],
     dir: '/Users/demo/shop', session: 'shop-manager',
-    created: Date.now() / 1000 - 3600, updatedAt: Date.now() / 1000 - 600,
-    content: PLAN_BODY,
+    created: nowSec() - 3600, updatedAt: nowSec() - 600, content: PLAN_BODY,
   }],
-  ['csv-export.md', {
-    title: 'CSV export for reports',
+  ['acme-corp-pricing-teardown--7b2e9f14.md', {
+    kind: 'research', status: 'done', subject: 'Acme Corp',
+    tags: ['pricing', 'competitors'],
     dir: '/Users/demo/acme', session: '',
-    created: Date.now() / 1000 - 86400, updatedAt: Date.now() / 1000 - 7200,
-    content: '# CSV export for reports\n\n- Add `Export` button to the reports toolbar\n- Stream rows server-side, no in-memory join\n- RFC 4180 quoting, UTF-8 BOM for Excel\n',
+    created: nowSec() - 86400, updatedAt: nowSec() - 5400, content: RESEARCH_BODY,
+  }],
+  ['standup-notes.md', {
+    kind: 'note', status: 'draft', subject: '', tags: ['meeting'],
+    dir: '', session: '',
+    created: nowSec() - 7200, updatedAt: nowSec() - 1800, content: NOTE_BODY,
   }],
 ]);
 
-function planMetaList() {
-  return [...plans.entries()]
-    .map(([id, p]) => ({
-      id, title: p.title, dir: p.dir,
-      folder: p.dir ? p.dir.split('/').pop() : '',
-      session: p.session,
-      preview: p.content.split('\n').filter((l) => l.trim() && !l.startsWith('#')).join(' ').slice(0, 180),
-      created: p.created, updatedAt: p.updatedAt,
+function docMetaList() {
+  return [...docs.entries()]
+    .map(([id, d]) => ({
+      id,
+      title: docTitle(d.content),
+      kind: d.kind, status: d.status, subject: d.subject, tags: d.tags,
+      dir: d.dir,
+      folder: d.dir ? d.dir.split('/').pop() : '',
+      session: d.session,
+      preview: docPreview(d.content),
+      words: wordCount(d.content),
+      created: d.created, updatedAt: d.updatedAt,
     }))
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-function planTitle(body) {
-  for (const line of body.split('\n')) {
-    const t = line.trim();
-    if (!t) continue;
-    if (t.startsWith('#')) return t.replace(/^#+\s*/, '').slice(0, 90);
-    return t.slice(0, 90);
-  }
-  return 'Untitled plan';
+function sendDoc(id) {
+  const d = docs.get(id);
+  if (!d) return false;
+  send({
+    type: 'doc', id, title: docTitle(d.content),
+    kind: d.kind, status: d.status, subject: d.subject, tags: d.tags,
+    dir: d.dir, content: d.content, updatedAt: d.updatedAt,
+  });
+  return true;
 }
 
-function sendPlan(id) {
-  const p = plans.get(id);
-  if (!p) return false;
-  send({ type: 'plan', id, title: p.title, dir: p.dir, content: p.content, updatedAt: p.updatedAt });
-  return true;
+// The report a dispatched research agent writes back a few seconds after launch.
+function researchReport(title, topic, subject) {
+  const subj = subject ? `**Subject:** ${subject}\n\n` : '';
+  return `# ${title}
+
+${subj}## Executive summary
+${topic} is well-established, with three credible approaches in active use. The
+recommended path balances delivery speed against long-term maintenance cost.
+
+## Findings
+1. The dominant approach is widely documented and battle-tested.
+2. A newer alternative trades a steeper learning curve for lower overhead.
+3. Tooling has consolidated over the last year, reducing integration risk.
+
+## Recommendation
+Adopt the mainstream approach now; revisit the alternative once the team has
+the capacity to absorb the migration.
+
+## Sources
+- Primary reference — https://example.com/reference
+- Community discussion — https://example.com/thread
+`;
 }
 
 let tick = 0;
@@ -313,7 +448,7 @@ function snapshot() {
     },
     agents,
     fleets,
-    plans: planMetaList(),
+    docs: docMetaList(),
     knownDirs: ['/Users/demo/acme', '/Users/demo/webapp', '/Users/demo/shop', '/Users/demo/tools'],
     lastDir: '/Users/demo/acme',
     models: MODELS,
@@ -366,7 +501,18 @@ function connect() {
     try { msg = JSON.parse(data.toString()); } catch { return; }
     if (!msg || typeof msg.type !== 'string') return;
 
-    switch (msg.type) {
+    // A panel cached before the plan library became the document library still
+    // speaks plan*. They are the doc* handlers under old names — a plan is just a
+    // doc of kind `plan` — so normalize here exactly as RemoteBridge does.
+    let type = msg.type;
+    switch (type) {
+      case 'planGet': type = 'docGet'; break;
+      case 'planSave': type = 'docSave'; break;
+      case 'planDelete': type = 'docDelete'; break;
+      case 'planCreate': type = 'docCreate'; if (msg.kind == null) msg.kind = 'plan'; break;
+    }
+
+    switch (type) {
       case 'viewers':
         log(`relay: ${msg.count} viewer(s)`);
         return;
@@ -403,42 +549,136 @@ function connect() {
         return;
       }
 
-      case 'planGet': {
-        log(`planGet → ${msg.id}`);
-        if (!sendPlan(msg.id)) send({ type: 'ack', ok: false, cmd: 'planGet', detail: 'That plan is gone' });
+      // ---- document library ----------------------------------------------
+      // Markdown files in ~/.mission-control/library/. The snapshot carries
+      // their metadata; bodies travel on demand as {type:'doc'}. `cmd` on every
+      // ack is the ORIGINAL wire type so a legacy plan* caller sees plan* back.
+
+      case 'docGet': {
+        log(`docGet → ${msg.id}`);
+        // On success only the doc frame is sent, no ack — mirrors RemoteBridge.
+        if (!sendDoc(msg.id)) send({ type: 'ack', ok: false, cmd: 'docGet', detail: 'That document is gone' });
         return;
       }
 
-      case 'planSave': {
-        const p = plans.get(msg.id);
-        log(`planSave → ${msg.id} (${(msg.content ?? '').length} chars)`);
-        if (!p || typeof msg.content !== 'string') {
-          send({ type: 'ack', ok: false, cmd: 'planSave', detail: "Couldn't save that plan" });
+      case 'docSave': {
+        const d = docs.get(msg.id);
+        log(`docSave → ${msg.id} (${(msg.content ?? '').length} chars)`);
+        if (!d || typeof msg.content !== 'string') {
+          send({ type: 'ack', ok: false, cmd: 'docSave', detail: "Couldn't save that document" });
           return;
         }
-        p.content = msg.content;
-        p.title = planTitle(msg.content);
-        p.updatedAt = Date.now() / 1000;
-        send({ type: 'ack', ok: true, cmd: 'planSave', detail: 'Plan saved' });
+        // Only the body changes; frontmatter (kind/status/subject/tags/dir) is
+        // untouched, and title/preview/words re-derive from the new body.
+        d.content = msg.content;
+        d.updatedAt = nowSec();
+        send({ type: 'ack', ok: true, cmd: 'docSave', detail: 'Document saved' });
         return;
       }
 
-      case 'planCreate': {
-        planSeq += 1;
-        const title = msg.title || 'Untitled plan';
-        const id = `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'plan'}-${planSeq}.md`;
-        const content = msg.content || `# ${title}\n\n`;
-        plans.set(id, { title: planTitle(content), dir: msg.dir || '', session: '', created: Date.now() / 1000, updatedAt: Date.now() / 1000, content });
-        log(`planCreate → ${id}`);
-        send({ type: 'ack', ok: true, cmd: 'planCreate', detail: 'Plan created', id });
-        sendPlan(id);
+      case 'docCreate': {
+        const title = (msg.title || '').trim();
+        // DocLibrary.Kind(loose:) — unknown/garbage degrades to `note`.
+        const kind = ['plan', 'research', 'note'].includes(msg.kind) ? msg.kind : 'note';
+        const content = (typeof msg.content === 'string' && msg.content.length)
+          ? msg.content
+          : `# ${title || `Untitled ${kind}`}\n\n`;
+        const id = newDocId(title || docTitle(content) || 'doc');
+        docs.set(id, {
+          kind, status: 'draft',
+          subject: msg.subject || '', tags: Array.isArray(msg.tags) ? msg.tags : [],
+          dir: (msg.dir || '').trim(), session: '',
+          created: nowSec(), updatedAt: nowSec(), content,
+        });
+        log(`docCreate → ${id}`);
+        // Ack carries the new id (so the panel can jump to the doc), THEN the
+        // body frame — RemoteBridge's exact order.
+        send({ type: 'ack', ok: true, cmd: 'docCreate', detail: 'Document created', id });
+        sendDoc(id);
         return;
       }
 
-      case 'planDelete': {
-        log(`planDelete → ${msg.id}`);
-        const ok = plans.delete(msg.id);
-        send({ type: 'ack', ok, cmd: 'planDelete', detail: ok ? 'Plan deleted' : 'That plan is already gone' });
+      case 'docDelete': {
+        log(`docDelete → ${msg.id}`);
+        const ok = docs.delete(msg.id);
+        send({ type: 'ack', ok, cmd: 'docDelete', detail: ok ? 'Document deleted' : 'That document is already gone' });
+        return;
+      }
+
+      case 'docMeta': {
+        const d = docs.get(msg.id);
+        log(`docMeta → ${msg.id}`);
+        if (!d) { send({ type: 'ack', ok: false, cmd: 'docMeta', detail: "Couldn't update that document" }); return; }
+        // Patch semantics: only keys PRESENT in the frame move. An absent key
+        // leaves that field alone (RemoteBridge maps a missing key to nil, which
+        // DocLibrary.update reads as "leave alone"). Title lives in the body, so
+        // it is never sent here and never changes. Any write bumps updatedAt.
+        if ('kind' in msg) d.kind = ['plan', 'research', 'note'].includes(msg.kind) ? msg.kind : 'note';
+        if ('status' in msg) d.status = ['draft', 'active', 'done', 'archived'].includes(msg.status) ? msg.status : 'draft';
+        if ('subject' in msg) d.subject = msg.subject;
+        if ('tags' in msg && Array.isArray(msg.tags)) d.tags = msg.tags;
+        if ('dir' in msg) d.dir = msg.dir;
+        d.updatedAt = nowSec();
+        send({ type: 'ack', ok: true, cmd: 'docMeta', detail: 'Updated' });
+        return;
+      }
+
+      case 'docSearch': {
+        const q = String(msg.q ?? '').trim().toLowerCase();
+        log(`docSearch → ${JSON.stringify(q)}`);
+        const hits = [];
+        if (q) {
+          for (const meta of docMetaList()) { // newest-first, like DocLibrary.list()
+            const d = docs.get(meta.id);
+            const snippets = [];
+            for (const line of d.content.split('\n')) {
+              if (!line.toLowerCase().includes(q)) continue;
+              const t = line.trim();
+              if (!t) continue;
+              snippets.push(t.slice(0, 220));
+              if (snippets.length >= 3) break;
+            }
+            // A title/subject/tag hit counts even when the body never says it.
+            const metaHay = `${meta.title} ${d.subject} ${d.tags.join(' ')}`.toLowerCase();
+            if (!snippets.length && !metaHay.includes(q)) continue;
+            hits.push({ id: meta.id, snippets });
+            if (hits.length >= 40) break;
+          }
+        }
+        send({ type: 'docSearchResult', q: String(msg.q ?? '').trim(), hits });
+        return;
+      }
+
+      case 'research': {
+        const topic = String(msg.topic ?? '').trim();
+        if (!topic) { send({ type: 'ack', ok: false, cmd: 'research', detail: 'Research topic is empty' }); return; }
+        const subject = String(msg.subject ?? '').trim();
+        const rdir = String(msg.dir ?? '').trim();
+        const tags = Array.isArray(msg.tags) ? msg.tags : [];
+        const title = subject ? `${subject} — ${topic}` : topic;
+        // Seed the file NOW so it shows up as `active` the instant the agent
+        // starts and the agent has a path to write to.
+        const id = newDocId(title);
+        docs.set(id, {
+          kind: 'research', status: 'active',
+          subject, tags, dir: rdir, session: '',
+          created: nowSec(), updatedAt: nowSec(),
+          content: `# ${title}\n\n_Research in progress…_\n`,
+        });
+        log(`research → ${id} (${JSON.stringify(topic)})`);
+        send({ type: 'ack', ok: true, cmd: 'research', detail: 'Researching on your Mac', id });
+        // Imitate the dispatched agent: a few seconds later it overwrites the
+        // stub with a finished report and flips the doc to `done`, bumping
+        // updatedAt — the active → (snapshot) → done+longer-body sequence the
+        // panel's live-research path watches for.
+        setTimeout(() => {
+          const d = docs.get(id);
+          if (!d) return;
+          d.content = researchReport(title, topic, subject);
+          d.status = 'done';
+          d.updatedAt = nowSec();
+          log(`research done → ${id}`);
+        }, 4000);
         return;
       }
 

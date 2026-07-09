@@ -369,8 +369,35 @@ final class AgentManager: ObservableObject {
             // agent — and coordinated workers' polling loops — start working at once.
             c += " --dangerously-skip-permissions"
         }
-        c += " \(q(prompt))"
+        c += " \(q(planMode ? prompt : prompt + Self.planFilePostscript))"
         return c
+    }
+
+    /// Read off the library itself rather than hardcoded: the folder has moved
+    /// once already (`~/.mission-control/plans` → `.../library`), and an agent
+    /// pointed at the old one writes somewhere nothing lists.
+    private static var libraryRoot: String {
+        (DocLibrary.shared.root as NSString).abbreviatingWithTildeInPath
+    }
+
+    /// Only a plan-mode agent gets its plan captured for free (ExitPlanMode →
+    /// `capturePlan`). An ordinary agent that decides to write one drops a
+    /// `PLAN.md` wherever it happens to be working and the library never sees
+    /// it — so point those at the plans folder instead. A bare markdown file
+    /// lands there fine: `PlanLibrary` reads the title off the first heading and
+    /// treats frontmatter as optional.
+    ///
+    /// Deliberately NOT appended in plan mode, where it would be actively
+    /// harmful: that agent is read-only, so a Write stalls on a permission gate
+    /// instead of the agent finishing at ExitPlanMode.
+    private static var planFilePostscript: String {
+        """
+
+
+        (Mission Control: if you write a standalone plan or design document as markdown, \
+        save it in \(libraryRoot)/ rather than inside the project, so it shows up in the \
+        document library. This does not apply to documentation that belongs with the code.)
+        """
     }
 
     // MARK: Manager-led fleet
@@ -926,11 +953,11 @@ final class AgentManager: ObservableObject {
         let plan = (input["plan"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !plan.isEmpty, run.plans.last?.text != plan else { return }
         run.plans.append(CapturedPlan(text: plan))
-        // Every proposed plan also lands in the on-disk plan library as an
+        // Every proposed plan also lands in the on-disk document library as an
         // editable markdown file (revisions from the same session overwrite),
         // so it can be reviewed, edited, and built from the remote panel.
-        PlanLibrary.shared.capture(plan, session: run.sessionId, dir: run.workingDir,
-                                   fallbackTitle: run.prompt.isEmpty ? run.folderName : firstLine(run.prompt))
+        DocLibrary.shared.capture(plan, session: run.sessionId, dir: run.workingDir,
+                                  fallbackTitle: run.prompt.isEmpty ? run.folderName : firstLine(run.prompt))
         let rev = run.plans.count
         run.activity = "Proposed a plan" + (rev > 1 ? " (rev \(rev))" : "")
         run.append(LogLine(kind: .status, text: "📋 " + run.activity))

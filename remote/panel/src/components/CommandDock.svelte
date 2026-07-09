@@ -2,7 +2,7 @@
   import { stopAll } from '../lib/store.svelte.js';
   import Icon from './Icon.svelte';
 
-  let { active = 'fleet', onFleet, onPlans, onData, onLaunch, onSettings, onMic } = $props();
+  let { active = 'fleet', onFleet, onLibrary, onData, onLaunch, onSettings, onMic } = $props();
 
   function confirmStop() {
     if (confirm('Send “Stop” to every agent still running?')) stopAll();
@@ -20,9 +20,9 @@
       <Icon name="fleet" size={23} />
       <span class="hud !text-inherit">Fleet</span>
     </button>
-    <button onclick={onPlans} class={navCls(active === 'plans')} aria-label="Plans">
-      <Icon name="plan" size={23} />
-      <span class="hud !text-inherit">Plans</span>
+    <button onclick={onLibrary} class={navCls(active === 'library')} aria-label="Library">
+      <Icon name="book" size={23} />
+      <span class="hud !text-inherit">Library</span>
     </button>
     <button onclick={onData} class={navCls(active === 'data')} aria-label="Data">
       <Icon name="pulse" size={23} />

@@ -6,6 +6,13 @@
 // broadcast / kill / launch) that are relayed back to the host. The Mac never
 // has to accept inbound connections.
 //
+// The relay is deliberately dumb: it never parses a command's payload, only its
+// `type`. The document-library traffic (doc* frames for the markdown library
+// under ~/.mission-control/library, plus one-shot `research` launches) rides the
+// same viewer→host channel — the relay just has to allowlist those types and
+// hand them through. Bodies come back as `doc`/`docSearchResult` frames folded
+// into the same host→viewer fan-out as snapshots and acks.
+//
 // The panel is a built Svelte SPA in ./dist (see `npm run build`). This server
 // serves those static assets plus a /health check, and runs the WebSocket relay.
 //
@@ -200,7 +207,13 @@ wss.on('connection', (ws) => {
       return;
     }
     if (!msg || typeof msg.type !== 'string') return;
-    const allowed = ['reply', 'broadcast', 'kill', 'launch', 'key', 'watch', 'planGet', 'planSave', 'planCreate', 'planDelete'];
+    const allowed = [
+      'reply', 'broadcast', 'kill', 'launch', 'key', 'watch',
+      'docGet', 'docSave', 'docCreate', 'docDelete', 'docMeta', 'docSearch', 'research',
+      // Legacy plan* aliases: an old cached panel may still send these, and the
+      // host handles them as doc* equivalents.
+      'planGet', 'planSave', 'planCreate', 'planDelete',
+    ];
     if (!allowed.includes(msg.type)) return;
     if (!host) {
       // 'watch' is a ~3s lease heartbeat, not a user action — drop it silently

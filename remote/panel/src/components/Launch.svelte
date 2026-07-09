@@ -1,15 +1,24 @@
 <script>
   import { onDestroy } from 'svelte';
-  import { mc, launch, toast } from '../lib/store.svelte.js';
+  import { mc, launch, toast, kindLabel } from '../lib/store.svelte.js';
   import { dictate, speechSupported } from '../lib/speech.js';
   import Icon from './Icon.svelte';
 
-  let { onclose, attachPlan = null } = $props();
+  let { onclose, attachDoc = null } = $props();
 
-  // A plan from the library riding along with this launch. The Mac folds its
-  // content (and file path) into the mission, so it can stand in for a missing
-  // mission text and supplies a default working dir.
-  let plan = $state(attachPlan);
+  // A library document riding along with this launch: a plan to BUILD, or a
+  // research/note to CONTINUE. `mode` ('build' | 'continue') tells the Mac how to
+  // frame it; it folds the doc's content and file path into the mission, so the
+  // doc can stand in for missing mission text and supplies a default working dir.
+  let doc = $state(attachDoc);
+
+  const DOC_TONE = {
+    plan: { icon: 'plan', text: 'text-accent', edge: 'border-accent/40 bg-accent/8' },
+    research: { icon: 'research', text: 'text-mgr', edge: 'border-mgr/40 bg-mgr/8' },
+    note: { icon: 'note', text: 'text-ink2', edge: 'border-line2 bg-raised/50' },
+  };
+  const docTone = $derived(DOC_TONE[doc?.kind] || DOC_TONE.note);
+  const docVerb = $derived(doc?.mode === 'continue' ? 'Continuing' : 'Building');
 
   const FALLBACK = [
     { flag: 'claude-fable-5', label: 'Fable 5', short: 'Fable', blurb: 'Frontier intelligence — the apex model' },
@@ -29,7 +38,7 @@
 
   let dirTouched = false;
   $effect(() => {
-    if (!dirTouched && !dir && (plan?.dir || mc.lastDir)) dir = plan?.dir || mc.lastDir;
+    if (!dirTouched && !dir && (doc?.dir || mc.lastDir)) dir = doc?.dir || mc.lastDir;
   });
 
   const agentCount = $derived(mode === 'solo' ? 1 : 1 + workers.length);
@@ -58,14 +67,17 @@
 
   function doLaunch() {
     const m = mission.trim();
-    if (!m && !plan) return toast('Describe the mission first');
+    if (!m && !doc) return toast('Describe the mission first');
     if (mode === 'fleet' && workers.length === 0) return toast('Add at least one worker');
     const fix = (f) => (f === 'default' ? '' : f);
     const payload =
       mode === 'solo'
         ? { mission: m, dir: dir.trim(), managerModel: null, workerModels: [fix(soloModel)] }
         : { mission: m, dir: dir.trim(), managerModel: fix(managerModel) || 'opus', workerModels: workers.map(fix) };
-    if (plan) payload.planId = plan.id;
+    if (doc) {
+      payload.docId = doc.id;
+      payload.docMode = doc.mode || (doc.kind === 'plan' ? 'build' : 'continue');
+    }
     if (!launch(payload)) return; // send() already toasted the reason
     mission = '';
     launching = true;
@@ -111,20 +123,20 @@
             <button onclick={toggleMic} aria-label="Dictate mission" class="grid h-11 w-11 flex-none place-items-center rounded-xl border transition active:scale-95 {micSession ? 'border-crit bg-crit/15 text-crit glow-crit' : 'border-line bg-raised/60 text-ink2'}" style={micSession ? 'animation:mc-ring 1.4s ease-out infinite' : ''}><Icon name="mic" size={18} /></button>
           {/if}
         </div>
-        {#if plan}
-          <div class="mb-3 flex items-center gap-3 rounded-xl border border-accent/40 bg-accent/8 px-3.5 py-2.5">
-            <Icon name="plan" size={17} class="flex-none text-accent" />
+        {#if doc}
+          <div class="mb-3 flex items-center gap-3 rounded-xl border {docTone.edge} px-3.5 py-2.5">
+            <Icon name={docTone.icon} size={17} class="flex-none {docTone.text}" />
             <div class="min-w-0 flex-1">
-              <div class="truncate font-mono text-[13px] font-semibold text-accent">{plan.title}</div>
-              <div class="hud mt-0.5">Plan attached — sent to the agents with the mission</div>
+              <div class="truncate font-mono text-[13px] font-semibold {docTone.text}">{doc.title}</div>
+              <div class="hud mt-0.5">{docVerb} this {kindLabel(doc.kind).toLowerCase()} — sent to the agents with the mission</div>
             </div>
-            <button onclick={() => (plan = null)} aria-label="Detach plan" class="grid h-9 w-9 flex-none place-items-center rounded-lg text-ink3 transition hover:text-crit"><Icon name="close" size={16} /></button>
+            <button onclick={() => (doc = null)} aria-label="Detach document" class="grid h-9 w-9 flex-none place-items-center rounded-lg text-ink3 transition hover:text-crit"><Icon name="close" size={16} /></button>
           </div>
         {/if}
         <textarea
           bind:value={mission}
           rows="3"
-          placeholder={plan ? 'Optional extra instructions — the plan is the mission…' : mode === 'solo' ? 'Describe the task for your agent…' : 'Describe the mission — the manager splits it into assignments…'}
+          placeholder={doc ? 'Optional extra instructions — the document is the mission…' : mode === 'solo' ? 'Describe the task for your agent…' : 'Describe the mission — the manager splits it into assignments…'}
           class="min-h-24 w-full resize-y rounded-xl border border-line bg-inset px-4 py-3 text-[16px] leading-relaxed text-ink outline-none transition placeholder:text-ink3 focus:border-accent/70 focus:shadow-[0_0_0_1px_rgba(34,217,238,0.25)] noscroll"></textarea>
       </section>
 
