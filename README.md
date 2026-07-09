@@ -185,14 +185,32 @@ Makefile               Convenience targets: build, dev, release, clean
 
 ## Remote panel (iPad)
 
-The `remote/` folder is a self-contained relay + web panel:
+The `remote/` folder is a Node relay plus a Svelte + Tailwind web panel:
 
 ```
 remote/
-  server.js           Node relay: one "host" (your Mac) + N "viewer" (browser) sockets
-  public/index.html   The panel — a single self-contained page, no build step
-  package.json        One dependency (ws)
+  server.js           Node relay: one "host" (your Mac) + N "viewer" (browser) sockets;
+                      also serves the built SPA from dist/
+  panel/              Panel source — Svelte 5 + Tailwind v4 (Vite)
+  dist/               Built panel (created by `npm run build`; gitignored)
+  vite.config.mjs     Build config (root=panel, outDir=dist)
+  package.json        Runtime dep: ws · build deps: svelte, vite, tailwindcss
 ```
+
+Build & run locally:
+
+```bash
+cd remote
+npm install
+npm run build          # emits dist/
+MC_TOKEN=… npm start   # serves dist/ + runs the relay
+# or: npm run dev      # Vite dev server for the panel
+```
+
+The panel is an iPad-first operations console: a fleet of large agent cards, a
+full-screen agent workspace (live terminal mirror, plan, activity, resources,
+reply), and a prominent voice composer (tap the mic → speak → live transcription
+→ edit → send). Dark-first "Graphite + Electric" theme.
 
 ### Deploy (Railway)
 

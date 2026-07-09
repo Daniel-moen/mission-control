@@ -104,6 +104,20 @@ final class AgentRun: ObservableObject, Identifiable {
     /// The terminal this agent's process runs in (nil until resolved / if gone).
     @Published var terminal: TerminalInfo? = nil
 
+    // Process binding — set by AgentManager.assignProcesses() from the scan +
+    // Claude Code's session registry. `pid` is THIS session's process; 0 while
+    // unresolved. Stats ride the same scan so they refresh together.
+    var pid: Int32 = 0
+    var cpuPercent: Double = 0
+    var memMB: Double = 0
+    /// Git branch of the working directory ("" outside a repo).
+    var branch: String = ""
+    /// Claude Code's own session name (e.g. "widget-claude-fa") — unique-ish,
+    /// tells same-folder agents apart. "" until the process is bound.
+    var agentName: String = ""
+    /// This run has at some point been bound to a concrete process.
+    var everBound = false
+
     // Tailing bookkeeping (managed by AgentManager).
     var transcriptPath: String
     var readOffset: UInt64 = 0

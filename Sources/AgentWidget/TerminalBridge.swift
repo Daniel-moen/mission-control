@@ -16,6 +16,22 @@ struct TerminalInfo: Equatable {
     var scriptable: Bool { app == "iTerm2" || app == "Terminal" || app == "WezTerm" }
 }
 
+/// One live `claude` process, as seen by a scan pass: identity (pid + the
+/// sessionId Claude Code publishes for it), where it runs, and resource usage.
+/// Keyed by PID — never by working directory — so several agents in the same
+/// folder stay fully distinct.
+struct ClaudeProcess: Equatable {
+    var pid: Int32
+    var sessionId: String    // from ~/.claude/sessions/<pid>.json; "" if absent
+    var name: String         // Claude Code's per-session name ("" if absent) —
+                             // unique-ish, disambiguates same-folder agents
+    var cwd: String          // symlink-resolved working directory
+    var cpuPercent: Double   // instantaneous %CPU from ps
+    var rssMB: Double        // resident memory, MB
+    var startedAt: Date?     // process start, for stable fallback ordering
+    var terminal: TerminalInfo
+}
+
 /// Focuses terminals and types replies into them across the common macOS
 /// terminals. Scriptable apps (iTerm2, Terminal, WezTerm) target the exact
 /// tab/pane by TTY; everything else falls back to synthesized keystrokes,
@@ -25,14 +41,18 @@ final class TerminalBridge {
 
     // MARK: Discovery
 
-    /// Map of resolved working directory → terminal info for every running
-    /// `claude` process. One scan feeds both liveness and terminal targeting.
+    /// Every running `claude` process, one record per PID — identity, cwd, TTY,
+    /// owning terminal app, and resource usage. Each record is then joined with
+    /// Claude Code's own session registry (~/.claude/sessions/<pid>.json) to
+    /// learn which sessionId the process belongs to, so an agent maps to ITS
+    /// process even when several run from the same folder.
     /// Returns nil when the scan itself failed (shell couldn't run, `ps`
     /// errored, …) — callers must treat that as "unknown", NOT as "no agents",
     /// or one hiccup under load marks every live agent dead at once.
-    func scan() -> [String: TerminalInfo]? {
+    func scan() -> [ClaudeProcess]? {
         let script = #"""
-        for p in $(ps -axww -o pid=,command= | awk '$2 ~ /(^|\/)claude$/ {print $1}'); do
+        ps -axww -o pid=,pcpu=,rss=,lstart=,command= | while read -r p cpu rss d1 d2 d3 d4 d5 rest; do
+          case "$rest" in claude|*/claude|claude\ *|*/claude\ *) ;; *) continue;; esac
           cwd=$(lsof -a -p "$p" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
           [ -z "$cwd" ] && continue
           tty=$(ps -o tty= -p "$p" | tr -d ' ')
@@ -53,26 +73,63 @@ final class TerminalBridge {
             esac
             cur=$ppid; i=$((i+1))
           done
-          printf '%s\t%s\t%s\t%s\n' "$cwd" "$tty" "$app" "$appcmd"
+          printf '%s\t%s\t%s\t%s %s %s %s %s\t%s\t%s\t%s\n' "$p" "$cpu" "$rss" "$d1" "$d2" "$d3" "$d4" "$d5" "$cwd" "$tty" "$app|$appcmd"
         done
         echo '__MC_SCAN_OK__'
         """#
-        let out = runShell(script)
+        // LC_ALL=C pins ps's number and date formats: a comma-decimal locale
+        // prints pcpu as "24,7" (unparseable) and reorders lstart's fields.
+        let out = runShell(script, env: ["LC_ALL": "C"])
         // No sentinel ⇒ the script never ran to completion — report failure
         // rather than an (indistinguishable) empty fleet.
         guard out.contains("__MC_SCAN_OK__") else { return nil }
-        var result: [String: TerminalInfo] = [:]
+        let sessions = sessionRegistry()
+        var result: [ClaudeProcess] = []
         for line in out.split(separator: "\n") where line != "__MC_SCAN_OK__" {
             let parts = line.components(separatedBy: "\t")
-            guard parts.count >= 3, !parts[0].isEmpty else { continue }
-            let cwd = resolved(parts[0])
-            let tty = parts[1].isEmpty ? "" : "/dev/\(parts[1])"
-            let app = parts[2]
-            let appcmd = parts.count >= 4 ? parts[3] : ""
-            result[cwd] = TerminalInfo(tty: tty, app: app, bundlePath: bundle(fromCommand: appcmd))
+            guard parts.count >= 7, let pid = Int32(parts[0]), !parts[4].isEmpty else { continue }
+            let appParts = parts[6].components(separatedBy: "|")
+            let app = appParts.first ?? ""
+            let appcmd = appParts.dropFirst().joined(separator: "|")
+            let tty = parts[5].isEmpty || parts[5] == "??" ? "" : "/dev/\(parts[5])"
+            result.append(ClaudeProcess(
+                pid: pid,
+                sessionId: sessions[pid]?.sessionId ?? "",
+                name: sessions[pid]?.name ?? "",
+                cwd: resolved(parts[4]),
+                cpuPercent: Double(parts[1]) ?? 0,
+                rssMB: (Double(parts[2]) ?? 0) / 1024,
+                startedAt: Self.lstartFormatter.date(from: parts[3]),
+                terminal: TerminalInfo(tty: tty, app: app, bundlePath: bundle(fromCommand: appcmd))))
         }
         return result
     }
+
+    /// pid → (sessionId, name), from the per-process registry files Claude Code
+    /// writes at ~/.claude/sessions/<pid>.json. Only trusted for PIDs the caller
+    /// has independently confirmed to be live `claude` processes (a dead
+    /// session's file may linger until its PID is recycled).
+    private func sessionRegistry() -> [Int32: (sessionId: String, name: String)] {
+        let dir = "\(home)/.claude/sessions"
+        guard let files = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return [:] }
+        var map: [Int32: (sessionId: String, name: String)] = [:]
+        for f in files where f.hasSuffix(".json") {
+            guard let pid = Int32((f as NSString).deletingPathExtension),
+                  let data = FileManager.default.contents(atPath: "\(dir)/\(f)"),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let sid = obj["sessionId"] as? String, !sid.isEmpty else { continue }
+            map[pid] = (sid, obj["name"] as? String ?? "")
+        }
+        return map
+    }
+
+    /// Parses ps's `lstart` column ("Tue Jul  7 21:38:20 2026").
+    private static let lstartFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "EEE MMM d HH:mm:ss yyyy"
+        return f
+    }()
 
     /// `/path/Foo.app/Contents/MacOS/foo …` → `/path/Foo.app`
     private func bundle(fromCommand cmd: String) -> String {
@@ -115,21 +172,65 @@ final class TerminalBridge {
 
     enum SendResult { case sent, failed, needsAccessibility }
 
+    /// Send a single raw keystroke (no trailing newline) so a remote viewer can
+    /// drive Claude Code's interactive selection prompts — pressing a digit
+    /// picks a numbered option; named keys navigate/confirm. WezTerm and iTerm2
+    /// deliver the exact bytes to the pane by TTY; other terminals fall back to
+    /// synthesized keystrokes into the focused window (needs Accessibility).
+    @discardableResult
+    func sendKey(_ key: String, to info: TerminalInfo) -> Bool {
+        let seq = Self.keySequence(key)
+        guard !seq.isEmpty else { return false }
+        switch info.app {
+        case "WezTerm":
+            guard let id = weztermPaneId(forTty: info.tty) else { return false }
+            return weztermCLI(["send-text", "--no-paste", "--pane-id", "\(id)", seq]) != nil
+        case "iTerm2":
+            return osascript(iTermSendRawScript, [info.tty, seq])?.contains("ok") == true
+        default:
+            guard accessibilityTrusted(prompt: true) else { return false }
+            activateBundle(info)
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                self?.typeUnicode(seq)   // no pressReturn — a keystroke, not a line
+            }
+            return true
+        }
+    }
+
+    /// Map a key name to the bytes a terminal expects. Single visible characters
+    /// (digits/letters) pass through as-is; the rest are the usual VT sequences.
+    static func keySequence(_ key: String) -> String {
+        switch key.lowercased() {
+        case "up":              return "\u{1b}[A"
+        case "down":            return "\u{1b}[B"
+        case "right":           return "\u{1b}[C"
+        case "left":            return "\u{1b}[D"
+        case "enter", "return": return "\r"
+        case "esc", "escape":   return "\u{1b}"
+        case "tab":             return "\t"
+        case "space":           return " "
+        default:                return key.count == 1 ? key : ""
+        }
+    }
+
     // MARK: Screen mirror
 
     /// The visible contents of the agent's terminal tab/pane — literally what
     /// you'd see standing at the Mac, including the claude TUI, its prompt and
-    /// any permission dialog. Only scriptable terminals can be read (iTerm2 /
-    /// Terminal.app by TTY via AppleScript, WezTerm via its CLI); returns nil
-    /// for the rest.
-    func screenText(of info: TerminalInfo) -> String? {
+    /// any permission dialog. With `scrollback`, includes recent history above
+    /// the viewport (for the remote panel's full terminal view). Only
+    /// scriptable terminals can be read (iTerm2 / Terminal.app by TTY via
+    /// AppleScript, WezTerm via its CLI); returns nil for the rest.
+    func screenText(of info: TerminalInfo, scrollback: Bool = false) -> String? {
         guard !info.tty.isEmpty else { return nil }
         switch info.app {
-        case "iTerm2":   return osascript(iTermScreenScript, [info.tty])
-        case "Terminal": return osascript(terminalScreenScript, [info.tty])
+        case "iTerm2":   return osascript(scrollback ? iTermHistoryScript : iTermScreenScript, [info.tty])
+        case "Terminal": return osascript(scrollback ? terminalHistoryScript : terminalScreenScript, [info.tty])
         case "WezTerm":
             guard let id = weztermPaneId(forTty: info.tty) else { return nil }
-            return weztermCLI(["get-text", "--pane-id", "\(id)"])
+            var args = ["get-text", "--pane-id", "\(id)"]
+            if scrollback { args += ["--start-line", "-400"] }
+            return weztermCLI(args)
         default:
             return nil
         }
@@ -161,6 +262,51 @@ final class TerminalBridge {
           repeat with t in tabs of w
             if (tty of t) is theTty then
               return contents of t
+            end if
+          end repeat
+        end repeat
+      end tell
+      return ""
+    end run
+    """
+
+    // Scrollback-inclusive variants, used for the remote panel's full terminal
+    // view. Each falls back to the visible screen if the richer property isn't
+    // available in the running app version.
+    private let iTermHistoryScript = """
+    on run argv
+      set theTty to item 1 of argv
+      tell application "iTerm2"
+        repeat with w in windows
+          repeat with t in tabs of w
+            repeat with s in sessions of t
+              if (tty of s) is theTty then
+                try
+                  return text of s
+                on error
+                  return contents of s
+                end try
+              end if
+            end repeat
+          end repeat
+        end repeat
+      end tell
+      return ""
+    end run
+    """
+
+    private let terminalHistoryScript = """
+    on run argv
+      set theTty to item 1 of argv
+      tell application "Terminal"
+        repeat with w in windows
+          repeat with t in tabs of w
+            if (tty of t) is theTty then
+              try
+                return history of t
+              on error
+                return contents of t
+              end try
             end if
           end repeat
         end repeat
@@ -228,14 +374,17 @@ final class TerminalBridge {
             return osascript(itermLaunchScript, [command])?.contains("ok") == true
         // CLI-style terminals take the program to run as command-line arguments.
         // We hand them the login shell so rc files load, then the agent command.
+        // -i matters: a non-interactive `zsh -lc` skips ~/.zshrc, where PATH
+        // additions like ~/.local/bin (claude's home) usually live — fatal when
+        // the app itself was started by launchd with a bare PATH to inherit.
         case .wezterm:
-            return openLaunch(.wezterm, args: ["start", "--", loginShell, "-lc", keepOpen(command)])
+            return openLaunch(.wezterm, args: ["start", "--", loginShell, "-ilc", keepOpen(command)])
         case .ghostty:
-            return openLaunch(.ghostty, args: ["-e", loginShell, "-lc", keepOpen(command)])
+            return openLaunch(.ghostty, args: ["-e", loginShell, "-ilc", keepOpen(command)])
         case .alacritty:
-            return openLaunch(.alacritty, args: ["-e", loginShell, "-lc", keepOpen(command)])
+            return openLaunch(.alacritty, args: ["-e", loginShell, "-ilc", keepOpen(command)])
         case .kitty:
-            return openLaunch(.kitty, args: [loginShell, "-lc", keepOpen(command)])
+            return openLaunch(.kitty, args: [loginShell, "-ilc", keepOpen(command)])
         }
     }
 
@@ -325,6 +474,28 @@ final class TerminalBridge {
             repeat with s in sessions of t
               if (tty of s) is theTty then
                 tell s to write text theMsg
+                return "ok"
+              end if
+            end repeat
+          end repeat
+        end repeat
+      end tell
+      return "notfound"
+    end run
+    """
+
+    // Like iTermSendScript but appends no newline — used for single raw keys
+    // (menu digits, arrows, enter, esc) that drive interactive prompts.
+    private let iTermSendRawScript = """
+    on run argv
+      set theTty to item 1 of argv
+      set theMsg to item 2 of argv
+      tell application "iTerm2"
+        repeat with w in windows
+          repeat with t in tabs of w
+            repeat with s in sessions of t
+              if (tty of s) is theTty then
+                tell s to write text theMsg newline no
                 return "ok"
               end if
             end repeat
@@ -443,7 +614,10 @@ final class TerminalBridge {
 
     private func sendWezTerm(_ text: String, info: TerminalInfo) -> Bool {
         guard let id = weztermPaneId(forTty: info.tty) else { return false }
-        weztermCLI(["send-text", "--no-paste", "--pane-id", "\(id)", text])
+        // A nil return means the CLI exited non-zero (bad socket/path, gone pane)
+        // — treat the message body's send-text as the source of truth so a silent
+        // failure surfaces as "Couldn't reach terminal" instead of a false "Sent".
+        guard weztermCLI(["send-text", "--no-paste", "--pane-id", "\(id)", text]) != nil else { return false }
         weztermCLI(["send-text", "--no-paste", "--pane-id", "\(id)", "\r"])
         return true
     }

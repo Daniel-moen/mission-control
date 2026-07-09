@@ -108,12 +108,15 @@ final class AgentManager: ObservableObject {
     // MARK: Liveness & terminal resolution
 
     private let term = TerminalBridge()
-    /// Resolved cwd → terminal info for every running `claude` process,
-    /// refreshed off the main thread (a process scan is too heavy per tick).
-    private var liveTerminals: [String: TerminalInfo] = [:]
-    private var liveDirs: Set<String> = []
+    /// Every running `claude` process from the latest scan, refreshed off the
+    /// main thread (a process scan is too heavy per tick). Keyed by PID, joined
+    /// with Claude Code's session registry — the source of truth for which
+    /// process (and therefore which terminal pane) belongs to which session.
+    private var liveProcs: [ClaudeProcess] = []
     private var liveScanReady = false
     private var lastLivenessScan = Date.distantPast
+    /// dir → (branch, readAt) cache so we're not re-reading .git/HEAD each pass.
+    private var branchCache: [String: (branch: String, at: Date)] = [:]
     /// How often we run the (expensive: lsof + a parent-walk of ps forks per
     /// agent) process scan. Snappy while the popover is open so liveness and
     /// terminal targeting stay fresh for the live feed; much lazier while it's
@@ -126,16 +129,15 @@ final class AgentManager: ObservableObject {
         guard Date().timeIntervalSince(lastLivenessScan) > livenessScanInterval else { return }
         lastLivenessScan = Date()
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let map = self?.term.scan()
+            let procs = self?.term.scan()
             DispatchQueue.main.async {
                 // A failed scan (nil) tells us nothing — keep the previous
                 // liveness picture and, crucially, don't count misses, or a
                 // couple of hiccups under load flip every agent to "done".
-                guard let map else { return }
-                self?.liveTerminals = map
-                self?.liveDirs = Set(map.keys)
+                guard let procs else { return }
+                self?.liveProcs = procs
                 self?.liveScanReady = true
-                self?.assignTerminals()
+                self?.assignProcesses()
                 // Reap once per scan so the miss count tracks real scans,
                 // not the much faster UI tick.
                 self?.reapDepartedSessions()
@@ -143,12 +145,89 @@ final class AgentManager: ObservableObject {
         }
     }
 
-    /// Attach each agent to the terminal its process is running in.
-    private func assignTerminals() {
-        for run in agents where !run.workingDir.isEmpty {
-            let info = liveTerminals[resolved(run.workingDir)]
-            if info != run.terminal { run.terminal = info }
+    /// Bind each agent to ITS process — never merely "a process in the same
+    /// folder". Exact matches come from Claude Code's session registry
+    /// (sessionId ↔ pid); processes without a registry entry (older CLI builds)
+    /// fall back to sticky per-cwd assignment, oldest process to oldest session,
+    /// so even then two same-folder agents get two distinct TTYs.
+    private func assignProcesses() {
+        var bySession: [String: ClaudeProcess] = [:]
+        for p in liveProcs where !p.sessionId.isEmpty { bySession[p.sessionId] = p }
+
+        var unbound: [AgentRun] = []
+        for run in agents {
+            if let p = bySession[run.sessionId] {
+                apply(p, to: run)
+            } else {
+                unbound.append(run)
+            }
         }
+        // Pool for the fallback: registry-less processes only. A process that
+        // declares a sessionId belongs to that session and no other — handing
+        // it to a different agent is exactly the leak this design removes.
+        var pool = liveProcs.filter { $0.sessionId.isEmpty }
+        guard !unbound.isEmpty else { return }
+
+        // Sticky pass: keep an agent on the pid it already had.
+        for run in unbound where run.pid != 0 {
+            if let i = pool.firstIndex(where: { $0.pid == run.pid && $0.cwd == resolved(run.workingDir) }) {
+                apply(pool[i], to: run)
+                pool.remove(at: i)
+            } else {
+                run.pid = 0
+            }
+        }
+        // Remaining: oldest unclaimed same-cwd process → oldest session.
+        for run in unbound where run.pid == 0 {
+            guard !run.workingDir.isEmpty else { clearProcess(run); continue }
+            let rdir = resolved(run.workingDir)
+            let candidates = pool.filter { $0.cwd == rdir }
+                .sorted { ($0.startedAt ?? .distantPast) < ($1.startedAt ?? .distantPast) }
+            guard let pick = candidates.first else { clearProcess(run); continue }
+            apply(pick, to: run)
+            pool.removeAll { $0.pid == pick.pid }
+        }
+    }
+
+    private func apply(_ p: ClaudeProcess, to run: AgentRun) {
+        run.pid = p.pid
+        run.cpuPercent = p.cpuPercent
+        run.memMB = p.rssMB
+        run.everBound = true
+        if !p.name.isEmpty { run.agentName = p.name }
+        if p.terminal != run.terminal { run.terminal = p.terminal }
+        if !run.workingDir.isEmpty { run.branch = branch(of: resolved(run.workingDir)) }
+    }
+
+    private func clearProcess(_ run: AgentRun) {
+        run.pid = 0
+        run.cpuPercent = 0
+        if run.terminal != nil { run.terminal = nil }
+    }
+
+    /// Current git branch of a working directory (via .git/HEAD — no subprocess),
+    /// cached briefly so a scan pass touches each repo at most once.
+    private func branch(of dir: String) -> String {
+        if let hit = branchCache[dir], Date().timeIntervalSince(hit.at) < 15 { return hit.branch }
+        var result = ""
+        var gitDir = "\(dir)/.git"
+        // Worktrees: .git is a file containing "gitdir: <path>".
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: gitDir),
+           (attrs[.type] as? FileAttributeType) == .typeRegular,
+           let content = try? String(contentsOfFile: gitDir, encoding: .utf8),
+           let path = content.split(separator: "\n").first(where: { $0.hasPrefix("gitdir:") }) {
+            gitDir = String(path.dropFirst(7)).trimmingCharacters(in: .whitespaces)
+        }
+        if let head = try? String(contentsOfFile: "\(gitDir)/HEAD", encoding: .utf8) {
+            let line = head.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.hasPrefix("ref: refs/heads/") {
+                result = String(line.dropFirst("ref: refs/heads/".count))
+            } else if line.count >= 7 {
+                result = String(line.prefix(7))   // detached HEAD → short sha
+            }
+        }
+        branchCache[dir] = (result, Date())
+        return result
     }
 
     private func resolved(_ path: String) -> String {
@@ -157,23 +236,25 @@ final class AgentManager: ObservableObject {
 
     /// Remove agents whose claude process has gone away (the user left/quit it).
     /// Conservative on purpose: a session is only dropped after several
-    /// consecutive scans confirm no live process for its folder, and a session
-    /// that's still writing its transcript is never touched. Once dropped it's
+    /// consecutive scans confirm no live process for it, and a session that's
+    /// still writing its transcript is never touched. Once dropped it's
     /// suppressed so discovery doesn't flicker it back in.
     private func reapDepartedSessions() {
         guard liveScanReady else { return }
+        let livePids = Set(liveProcs.map { $0.pid })
         var gone: [AgentRun] = []
         for run in agents where !run.workingDir.isEmpty {
-            // A live `claude` process resolves to this folder's cwd whether or
-            // not it's actively writing (e.g. mid-way through a long tool call),
-            // so the process scan — not transcript recency — is the source of
-            // truth for liveness.
-            if liveDirs.contains(resolved(run.workingDir)) {
+            // The assignment pass just ran, so a live agent has its process
+            // bound (pid set and present). The process scan — not transcript
+            // recency — is the source of truth for liveness: a live process is
+            // Working no matter how long it's been quiet (thinking, long tool
+            // call). The recency guard below only papers over scan races.
+            if run.pid != 0 && livePids.contains(run.pid) {
                 run.livenessMisses = 0
                 run.processAlive = true
             } else if Date().timeIntervalSince(run.lastModified) < 15 {
                 // The transcript was written moments ago — something is very
-                // much alive in that folder, whatever lsof failed to see.
+                // much alive here, whatever the process scan failed to see.
                 run.livenessMisses = 0
                 run.processAlive = true
             } else {
@@ -195,19 +276,25 @@ final class AgentManager: ObservableObject {
 
     // MARK: Destroy / remove
 
-    /// Kill the running agent process for this session (matched by working
-    /// directory), then drop it from the monitor.
+    /// Kill the running agent's own process, then drop it from the monitor.
+    /// Targets the bound PID — never "everything in that folder" — so killing
+    /// one agent can't take out a sibling working in the same directory.
     func destroy(_ run: AgentRun) {
-        let dir = run.workingDir
-        if !dir.isEmpty {
-            // Find `claude` processes whose cwd matches and terminate them.
-            let script = #"""
-            for p in $(ps -axww -o pid=,command= | awk '$2 ~ /(^|\/)claude$/ {print $1}'); do
-              c=$(lsof -a -p "$p" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
-              [ "$c" = "$AGENT_DIR" ] && kill "$p" 2>/dev/null
-            done
-            """#
-            term.runShell(script, env: ["AGENT_DIR": dir])
+        if run.pid != 0 {
+            kill(run.pid, SIGTERM)
+        } else if !run.workingDir.isEmpty {
+            // Never bound (scan hasn't landed yet): fall back to cwd matching,
+            // but leave alone any process that is bound to another tracked
+            // agent or declares a different session in the registry.
+            let ownedByOthers = Set(agents.compactMap { other -> Int32? in
+                other.sessionId != run.sessionId && other.pid != 0 ? other.pid : nil
+            })
+            let procs = liveProcs.filter {
+                $0.cwd == resolved(run.workingDir)
+                    && !ownedByOthers.contains($0.pid)
+                    && ($0.sessionId.isEmpty || $0.sessionId == run.sessionId)
+            }
+            for p in procs { kill(p.pid, SIGTERM) }
         }
         remove(run)
     }
@@ -226,6 +313,10 @@ final class AgentManager: ObservableObject {
     struct LaunchSpec {
         var model: String
         var prompt: String
+        /// Launch in Claude Code's read-only "plan mode" (`--permission-mode
+        /// plan`) instead of the usual unattended auto mode — the agent explores
+        /// and drafts a plan but can't modify code until approved.
+        var planMode: Bool = false
     }
 
     /// Terminals installed on this machine, for the launcher's "open in" picker.
@@ -240,14 +331,14 @@ final class AgentManager: ObservableObject {
         let folder = dir.isEmpty ? home : (dir as NSString).expandingTildeInPath
         let terminal = settings.launchTerminal
         for (i, spec) in specs.enumerated() {
-            let cmd = launchCommand(dir: folder, model: spec.model, prompt: spec.prompt)
+            let cmd = launchCommand(dir: folder, model: spec.model, prompt: spec.prompt, planMode: spec.planMode)
             DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.5) { [weak self] in
                 self?.term.launch(command: cmd, in: terminal)
             }
         }
     }
 
-    private func launchCommand(dir: String, model: String, prompt: String) -> String {
+    private func launchCommand(dir: String, model: String, prompt: String, planMode: Bool = false) -> String {
         let q = TerminalBridge.shellQuote
         // A launched agent MUST run as an independent, top-level session. When the
         // app (or the terminal it spawns) was itself started from inside a Claude
@@ -261,9 +352,17 @@ final class AgentManager: ObservableObject {
         c += "; cd \(q(dir))"
         c += " && claude"
         if !model.isEmpty { c += " --model \(model)" }
-        // Run unattended ("auto mode"): skip per-tool permission prompts so the
-        // agent — and coordinated workers' polling loops — start working at once.
-        c += " --dangerously-skip-permissions"
+        if planMode {
+            // Read-only planning session: the agent can explore and draft a plan
+            // but Claude Code gates every code change behind approval, so it stops
+            // at the plan and waits rather than implementing. (Never paired with
+            // --dangerously-skip-permissions, which would override plan mode.)
+            c += " --permission-mode plan"
+        } else {
+            // Run unattended ("auto mode"): skip per-tool permission prompts so the
+            // agent — and coordinated workers' polling loops — start working at once.
+            c += " --dangerously-skip-permissions"
+        }
         c += " \(q(prompt))"
         return c
     }
@@ -280,6 +379,9 @@ final class AgentManager: ObservableObject {
         var dir: String
         var managerModel: String?     // nil ⇒ no manager (workers run solo)
         var workerModels: [String]
+        /// Launch every agent in read-only plan mode (used for the panel's "draft
+        /// a plan" flow — a solo agent that plans but never touches code).
+        var planMode: Bool = false
         var agentCount: Int { (managerModel == nil ? 0 : 1) + workerModels.count }
     }
 
@@ -310,7 +412,7 @@ final class AgentManager: ObservableObject {
             let prompt = coordinated
                 ? coordinatedWorkerPrompt(plan.mission, number: i + 1, total: n)
                 : soloWorkerPrompt(plan.mission, number: i + 1, total: n)
-            specs.append(.init(model: wm, prompt: prompt))
+            specs.append(.init(model: wm, prompt: prompt, planMode: plan.planMode))
         }
         launchSessions(specs, in: dir)
     }
@@ -670,6 +772,16 @@ final class AgentManager: ObservableObject {
         return term.send(text, to: info)
     }
 
+    /// Send a single raw keystroke (a digit to pick a menu option, or a named
+    /// key like "up"/"down"/"enter"/"esc") to an agent's terminal WITHOUT a
+    /// trailing newline — so the panel can drive Claude Code's interactive
+    /// selection prompts. Returns whether it reached the terminal.
+    @discardableResult
+    func sendKey(_ key: String, to run: AgentRun) -> Bool {
+        guard let info = run.terminal else { return false }
+        return term.sendKey(key, to: info)
+    }
+
     // MARK: Event parsing (works on both stream-json and transcript lines)
 
     private func handleEvent(_ obj: [String: Any], run: AgentRun) {
@@ -808,6 +920,11 @@ final class AgentManager: ObservableObject {
         let plan = (input["plan"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !plan.isEmpty, run.plans.last?.text != plan else { return }
         run.plans.append(CapturedPlan(text: plan))
+        // Every proposed plan also lands in the on-disk plan library as an
+        // editable markdown file (revisions from the same session overwrite),
+        // so it can be reviewed, edited, and built from the remote panel.
+        PlanLibrary.shared.capture(plan, session: run.sessionId, dir: run.workingDir,
+                                   fallbackTitle: run.prompt.isEmpty ? run.folderName : firstLine(run.prompt))
         let rev = run.plans.count
         run.activity = "Proposed a plan" + (rev > 1 ? " (rev \(rev))" : "")
         run.append(LogLine(kind: .status, text: "📋 " + run.activity))
