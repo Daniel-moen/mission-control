@@ -17,6 +17,7 @@
   import VoiceComposer from './components/VoiceComposer.svelte';
   import Toast from './components/Toast.svelte';
   import TvMode from './components/TvMode.svelte';
+  import CarMode from './components/CarMode.svelte';
   import TerminalConsole from './components/TerminalConsole.svelte';
 
   // ---- layout mode ---------------------------------------------------------
@@ -29,9 +30,10 @@
   let sel = $state(null); // desktop: agent filling the main pane
   let openAgentId = $state(null); // phone: full-screen agent workspace
   let openDoc = $state(null); // { id, edit } — full-screen document workspace
-  // #tv = the ambient wall display (TV mode). Hash-routed so a TV browser can
-  // be pointed straight at …/?token=XXX#tv and never touch the app chrome.
+  // #tv / #car = the ambient wall display and the driving mode. Hash-routed so
+  // a TV (or a phone mount) can be pointed straight at …/?token=XXX#tv|#car.
   let tvOn = $state(typeof location !== 'undefined' && location.hash === '#tv');
+  let carOn = $state(typeof location !== 'undefined' && location.hash === '#car');
   let sheet = $state(null); // 'launch' | 'settings' | null
   // The terminal console: { agentId } with null meaning "show the picker".
   let console_ = $state(null);
@@ -66,7 +68,10 @@
 
   onMount(() => {
     initToken();
-    const syncTv = () => (tvOn = location.hash === '#tv');
+    const syncTv = () => {
+      tvOn = location.hash === '#tv';
+      carOn = location.hash === '#car';
+    };
     window.addEventListener('hashchange', syncTv);
     const mq = matchMedia('(min-width: 1024px)');
     const syncMq = () => {
@@ -122,6 +127,10 @@
   <TvMode onclose={() => (location.hash = '')} />
 {/if}
 
+{#if carOn}
+  <CarMode onclose={() => (location.hash = '')} />
+{/if}
+
 {#if isDesktop}
   <!-- ============ DESKTOP: split view ============ -->
   <div class="flex h-dvh">
@@ -147,7 +156,7 @@
   </div>
 {:else}
   <!-- ============ PHONE: tabs + dock ============ -->
-  <StatusStrip onSettings={() => (sheet = 'settings')} />
+  <StatusStrip onSettings={() => (sheet = 'settings')} onCar={() => (location.hash = '#car')} />
   <ConnBanner />
 
   <div class="pb-32">

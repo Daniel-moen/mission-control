@@ -61,6 +61,10 @@
           <button onclick={() => { location.hash = '#tv'; onclose(); }} class="min-h-[40px] rounded-xl border border-line bg-surface px-4 py-2 text-[13px] font-medium text-ink2 transition hover:border-line2 active:scale-95">Open</button>
         </div>
         <div class="flex items-center justify-between gap-4 border-b border-line/70 py-3.5">
+          <div><div class="text-[14px] font-semibold">Car mode</div><div class="mt-0.5 text-[12.5px] text-ink3">Voice-first driving view: asks read aloud, giant buttons — or open #car</div></div>
+          <button onclick={() => { location.hash = '#car'; onclose(); }} class="min-h-[40px] rounded-xl border border-line bg-surface px-4 py-2 text-[13px] font-medium text-ink2 transition hover:border-line2 active:scale-95">Open</button>
+        </div>
+        <div class="flex items-center justify-between gap-4 border-b border-line/70 py-3.5">
           <div><div class="text-[14px] font-semibold">Stop all agents</div><div class="mt-0.5 text-[12.5px] text-ink3">Send “Stop” to every agent still running</div></div>
           <button onclick={confirmStop} class="min-h-[40px] rounded-xl border border-crit/40 px-4 py-2 text-[13px] font-medium text-crit transition hover:border-crit active:scale-95">Stop all</button>
         </div>

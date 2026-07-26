@@ -4,7 +4,7 @@
   import { mc, counts, fmtInt } from '../lib/store.svelte.js';
   import Icon from './Icon.svelte';
 
-  let { onSettings } = $props();
+  let { onSettings, onCar = null } = $props();
 
   const c = $derived(counts(mc.agents));
 
@@ -30,6 +30,11 @@
       {#if !c.working && !c.waiting}<span class="text-ink3">{mc.agents.length ? 'all quiet' : 'no agents'}</span>{/if}
     </span>
 
+    {#if onCar}
+      <button onclick={onCar} aria-label="Car mode" class="grid h-9 w-9 flex-none place-items-center rounded-lg text-ink3 transition hover:bg-raised hover:text-ink2">
+        <Icon name="car" size={19} />
+      </button>
+    {/if}
     <button onclick={onSettings} aria-label="Settings" class="grid h-9 w-9 flex-none place-items-center rounded-lg text-ink3 transition hover:bg-raised hover:text-ink2">
       <Icon name="settings" size={18} />
     </button>

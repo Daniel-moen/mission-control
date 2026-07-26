@@ -237,43 +237,40 @@
       <p class="mx-auto mt-2 max-w-[440px] text-[13px] leading-relaxed text-ink3">The document library lives on your Mac. Rebuild and relaunch Mission Control there to start syncing plans, research, and notes.</p>
     </div>
   {:else}
-    <!-- filter bar: kind (with counts) · status · tags -->
-    <div class="mb-3 flex flex-col gap-2">
-      <div class="flex flex-wrap gap-1.5">
-        {#each KIND_TABS as [k, label]}
-          <button onclick={() => (kindFilter = k)} class="flex min-h-[36px] items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-[13px] font-medium transition active:scale-95 {kindFilter === k ? 'border-line2 bg-raised text-ink' : 'border-line text-ink2 hover:border-line2'}">
-            {label}
-            <span class="tabular-nums text-ink3">{kindCount(k)}</span>
-          </button>
-        {/each}
-        <span class="mx-1 hidden self-center text-line2 sm:block">·</span>
-        {#each STATUS_TABS as [s, label]}
-          <button onclick={() => (statusFilter = s)} class="min-h-[36px] rounded-full border px-3 py-1 text-[12.5px] transition active:scale-95 {statusFilter === s ? 'border-line2 bg-raised text-ink' : 'border-line text-ink3 hover:border-line2'}">{label}</button>
-        {/each}
-      </div>
-      {#if tags.length}
-        <div class="flex flex-wrap gap-1.5">
-          <button onclick={() => (tagFilter = 'all')} class="flex min-h-[32px] items-center gap-1 rounded-full border px-3 py-1 text-[12px] transition active:scale-95 {tagFilter === 'all' ? 'border-line2 bg-raised text-ink' : 'border-line text-ink3'}"><Icon name="tag" size={12} /> All tags</button>
-          {#each tags as t}
-            <button onclick={() => (tagFilter = tagFilter === t ? 'all' : t)} class="min-h-[32px] rounded-full border px-3 py-1 text-[12px] transition active:scale-95 {tagFilter === t ? 'border-accent/40 bg-accent/10 text-accent' : 'border-line text-ink3'}">#{t}</button>
-          {/each}
-        </div>
-      {/if}
-    </div>
-
-    <!-- search -->
-    <div class="mb-4 flex items-center gap-2">
-      <div class="relative w-full max-w-md">
+    <!-- one control row: search · kind · status -->
+    <div class="mb-3 flex flex-wrap items-center gap-2">
+      <div class="relative min-w-[200px] flex-1 sm:max-w-sm">
         <span class="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-ink3"><Icon name="search" size={16} /></span>
         <input
           bind:value={q}
           placeholder="Search titles and full text…"
-          class="panel h-10 w-full rounded-xl pl-10 pr-4 text-[14px] outline-none transition focus:border-line2" />
+          class="panel h-10 w-full rounded-xl pl-10 pr-9 text-[14px] outline-none transition focus:border-line2" />
+        {#if q.trim()}
+          <button onclick={() => (q = '')} aria-label="Clear search" class="absolute right-2 top-1/2 grid h-7 w-7 -translate-y-1/2 place-items-center rounded-lg text-ink3 transition hover:bg-raised hover:text-ink2">✕</button>
+        {/if}
       </div>
-      {#if q.trim()}
-        <button onclick={() => (q = '')} class="h-10 flex-none rounded-xl border border-line bg-surface px-4 text-[13px] font-medium text-ink2 transition active:scale-95">Clear ✕</button>
-      {/if}
+      <div class="flex overflow-hidden rounded-xl border border-line">
+        {#each KIND_TABS as [k, label]}
+          <button onclick={() => (kindFilter = k)} class="flex min-h-[38px] items-center gap-1.5 px-3.5 text-[13px] font-medium transition {kindFilter === k ? 'bg-raised text-ink' : 'text-ink3 hover:text-ink2'}">
+            {label}
+            <span class="text-[11.5px] tabular-nums {kindFilter === k ? 'text-ink3' : 'text-ink3/70'}">{kindCount(k)}</span>
+          </button>
+        {/each}
+      </div>
+      <select bind:value={statusFilter} aria-label="Status filter" class="min-h-[38px] rounded-xl border border-line bg-surface px-3 text-[13px] text-ink2 outline-none transition focus:border-line2">
+        {#each STATUS_TABS as [s, label]}<option value={s}>{s === 'all' ? 'Any status' : label}</option>{/each}
+      </select>
     </div>
+
+    {#if tags.length}
+      <div class="mb-4 flex flex-wrap gap-1.5">
+        {#each tags as t}
+          <button onclick={() => (tagFilter = tagFilter === t ? 'all' : t)} class="min-h-[30px] rounded-full border px-3 py-1 text-[12px] transition active:scale-95 {tagFilter === t ? 'border-accent/40 bg-accent/10 text-accent' : 'border-line text-ink3 hover:border-line2'}">#{t}</button>
+        {/each}
+      </div>
+    {:else}
+      <div class="mb-1"></div>
+    {/if}
 
     {#if !mc.docs.length}
       <div class="panel rounded-2xl p-8 text-center">

@@ -63,6 +63,9 @@
       <button onclick={onMic} aria-label="Voice command" class="grid h-10 w-10 flex-none place-items-center rounded-xl border border-line bg-raised text-ink2 transition hover:text-ink active:scale-95">
         <Icon name="mic" size={18} />
       </button>
+      <button onclick={() => (location.hash = '#car')} aria-label="Car mode" class="grid h-10 w-10 flex-none place-items-center rounded-xl border border-line bg-raised text-ink2 transition hover:text-ink active:scale-95">
+        <Icon name="car" size={18} />
+      </button>
       <button onclick={onSettings} aria-label="Settings" class="grid h-10 w-10 flex-none place-items-center rounded-xl border border-line bg-raised text-ink2 transition hover:text-ink active:scale-95">
         <Icon name="settings" size={17} />
       </button>

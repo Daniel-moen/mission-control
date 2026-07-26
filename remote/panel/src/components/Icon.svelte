@@ -37,6 +37,9 @@
     expand: '<path d="M15 3h6v6M21 3l-7 7M9 21H3v-6M3 21l7-7"/>',
     keyboard:
       '<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h.01M18 14h.01M9.5 14h5"/>',
+    car: '<path d="M5.5 11 7 6.8A2 2 0 0 1 8.9 5.5h6.2A2 2 0 0 1 17 6.8L18.5 11"/><rect x="3" y="11" width="18" height="6" rx="2"/><path d="M6.5 14h.01M17.5 14h.01"/><path d="M5 17v2M19 17v2"/>',
+    speaker: '<path d="M11 5 6.5 9H3v6h3.5L11 19z"/><path d="M15 9a4.5 4.5 0 0 1 0 6M17.8 6.5a8 8 0 0 1 0 11"/>',
+    mute: '<path d="M11 5 6.5 9H3v6h3.5L11 19z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/>',
   };
 </script>
 

@@ -41,7 +41,20 @@
     if (!dirTouched && !dir && (doc?.dir || mc.lastDir)) dir = doc?.dir || mc.lastDir;
   });
 
+  // Snap model choices onto the host's actual list — a default flag that the
+  // connected Mac doesn't offer would otherwise render as an empty select.
+  $effect(() => {
+    const flags = new Set(models.map((m) => m.flag));
+    const pick = (want) => models.find((m) => m.flag.includes(want))?.flag || models[0]?.flag || '';
+    if (!flags.has(soloModel)) soloModel = pick('opus');
+    if (!flags.has(managerModel)) managerModel = pick('opus');
+    if (workers.some((w) => !flags.has(w))) workers = workers.map((w) => (flags.has(w) ? w : pick('sonnet')));
+  });
+
   const agentCount = $derived(mode === 'solo' ? 1 : 1 + workers.length);
+  // "Other folder…" input only shows when the current dir isn't one of the chips.
+  const knownDir = $derived(mc.knownDirs.includes(dir));
+  let showDirInput = $state(false);
 
   // dictation for the mission field
   let micSession = $state(null);
@@ -55,8 +68,16 @@
 
   function step(d) {
     if (d > 0 && workers.length < 8) workers = [...workers, workers[workers.length - 1] || 'claude-sonnet-5'];
-    if (d < 0 && workers.length > 0) workers = workers.slice(0, -1);
+    if (d < 0 && workers.length > 1) workers = workers.slice(0, -1);
   }
+
+  // Per-worker model rows are advanced detail — one shared select covers the
+  // common case, the list unfolds on demand.
+  let perWorker = $state(false);
+  function setAllWorkers(flag) {
+    workers = workers.map(() => flag);
+  }
+  const workersUniform = $derived(new Set(workers).size <= 1);
 
   // The launch overlay is driven by the user's click (optimistic), NOT by a
   // persisted ack — a leftover ack must never re-fire when the sheet reopens.
@@ -96,119 +117,147 @@
 <div class="fixed inset-0 z-[70] flex flex-col bg-bg">
   <header class="flex flex-none items-center gap-3 border-b border-line bg-surface/85 px-4 backdrop-blur sm:px-6" style="padding-top:calc(12px + var(--sat));padding-bottom:12px">
     <button onclick={() => onclose()} aria-label="Close" class="grid h-10 w-10 flex-none place-items-center rounded-xl text-ink2 transition hover:bg-raised"><Icon name="close" size={22} /></button>
-    <h2 class="text-[18px] font-semibold leading-none tracking-tight">Launch agents</h2>
+    <h2 class="text-[18px] font-semibold leading-none tracking-tight">Launch</h2>
   </header>
 
   <main class="min-h-0 flex-1 overflow-y-auto noscroll">
-    <div class="mx-auto flex max-w-[760px] flex-col gap-4 p-4 sm:p-6">
-      <!-- mode -->
-      <div class="panel grid grid-cols-2 gap-1 rounded-2xl p-1">
-        {#each [['solo', 'Solo', 'One agent, one mission'], ['fleet', 'Fleet', 'A manager directs a crew']] as [m, t, s]}
-          <button onclick={() => (mode = m)} class="rounded-xl px-4 py-3 text-center transition {mode === m ? 'bg-raised' : 'hover:bg-white/[0.02]'}">
-            <div class="text-[15px] font-semibold {mode === m ? 'text-ink' : 'text-ink2'}">{t}</div>
-            <div class="mt-0.5 text-[12px] text-ink3">{s}</div>
-          </button>
-        {/each}
-      </div>
-
-      <!-- mission -->
-      <section class="panel rounded-2xl p-5">
-        <div class="mb-3 flex items-center gap-3">
-          <span class="hud">Mission</span>
-          <span class="flex-1"></span>
-          {#if speechSupported}
-            <button onclick={toggleMic} aria-label="Dictate mission" class="grid h-10 w-10 flex-none place-items-center rounded-xl border transition active:scale-95 {micSession ? 'border-crit bg-crit/12 text-crit' : 'border-line bg-raised/60 text-ink2'}" style={micSession ? 'animation:mc-ring 1.4s ease-out infinite' : ''}><Icon name="mic" size={18} /></button>
-          {/if}
-        </div>
+    <div class="mx-auto flex max-w-[680px] flex-col gap-6 p-4 pb-8 sm:p-6">
+      <!-- THE MISSION — the hero. Everything else is a detail. -->
+      <section>
         {#if doc}
           <div class="mb-3 flex items-center gap-3 rounded-xl border {docTone.edge} px-3.5 py-2.5">
             <Icon name={docTone.icon} size={17} class="flex-none {docTone.text}" />
             <div class="min-w-0 flex-1">
-              <div class="truncate font-mono text-[13px] font-semibold {docTone.text}">{doc.title}</div>
-              <div class="hud mt-0.5">{docVerb} this {kindLabel(doc.kind).toLowerCase()} — sent to the agents with the mission</div>
+              <div class="truncate text-[13.5px] font-semibold {docTone.text}">{doc.title}</div>
+              <div class="mt-0.5 text-[11.5px] text-ink3">{docVerb} this {kindLabel(doc.kind).toLowerCase()} — sent to the agents with the mission</div>
             </div>
             <button onclick={() => (doc = null)} aria-label="Detach document" class="grid h-9 w-9 flex-none place-items-center rounded-lg text-ink3 transition hover:text-crit"><Icon name="close" size={16} /></button>
           </div>
         {/if}
-        <textarea
-          bind:value={mission}
-          rows="3"
-          placeholder={doc ? 'Optional extra instructions — the document is the mission…' : mode === 'solo' ? 'Describe the task for your agent…' : 'Describe the mission — the manager splits it into assignments…'}
-          class="min-h-24 w-full resize-y rounded-xl border border-line bg-inset px-4 py-3 text-[16px] leading-relaxed text-ink outline-none transition placeholder:text-ink3 focus:border-line2 noscroll"></textarea>
+        <div class="relative">
+          <textarea
+            bind:value={mission}
+            rows="4"
+            placeholder={doc ? 'Optional extra instructions — the document is the mission…' : 'What should get done?'}
+            class="min-h-32 w-full resize-y rounded-2xl border bg-inset px-5 py-4 pr-14 text-[17px] leading-relaxed text-ink outline-none transition placeholder:text-ink3 noscroll {micSession ? 'border-crit/40' : 'border-line focus:border-line2'}"></textarea>
+          {#if speechSupported}
+            <button
+              onclick={toggleMic}
+              aria-label="Dictate mission"
+              class="absolute right-3 top-3 grid h-10 w-10 place-items-center rounded-xl border transition active:scale-95 {micSession ? 'border-crit bg-crit/12 text-crit' : 'border-line bg-raised/80 text-ink2'}"
+              style={micSession ? 'animation:mc-ring 1.4s ease-out infinite' : ''}><Icon name="mic" size={18} /></button>
+          {/if}
+        </div>
       </section>
 
-      <!-- directory -->
-      <section class="panel rounded-2xl p-5">
-        <span class="hud">Working directory</span>
-        <input bind:value={dir} oninput={() => (dirTouched = true)} placeholder="~/path/to/project" class="mt-3 w-full rounded-xl border border-line bg-inset px-4 py-3 font-mono text-[13px] text-ink outline-none transition placeholder:text-ink3 focus:border-line2" />
-        {#if mc.knownDirs.length}
-          <div class="mt-3 flex flex-wrap gap-1.5">
-            {#each mc.knownDirs as d}
-              <button onclick={() => { dir = d; dirTouched = true; }} class="min-h-[38px] rounded-lg border px-3.5 py-2 text-[13px] transition active:scale-95 {d === dir ? 'border-line2 bg-raised text-ink' : 'border-line text-ink2 hover:border-line2'}">{d.split('/').filter(Boolean).pop() || d}</button>
-            {/each}
-          </div>
+      <!-- WHERE -->
+      <section>
+        <div class="hud mb-2">Project</div>
+        <div class="flex flex-wrap gap-1.5">
+          {#each mc.knownDirs as d (d)}
+            <button
+              onclick={() => { dir = d; dirTouched = true; showDirInput = false; }}
+              class="flex min-h-[40px] items-center gap-1.5 rounded-xl border px-3.5 text-[13.5px] transition active:scale-95 {d === dir ? 'border-line2 bg-raised font-medium text-ink' : 'border-line text-ink2 hover:border-line2'}">
+              <Icon name="folder" size={14} class={d === dir ? 'text-ink2' : 'text-ink3'} />
+              {d.split('/').filter(Boolean).pop() || d}
+            </button>
+          {/each}
+          <button
+            onclick={() => (showDirInput = !showDirInput)}
+            class="min-h-[40px] rounded-xl border px-3.5 text-[13.5px] transition active:scale-95 {showDirInput || (dir && !knownDir) ? 'border-line2 bg-raised text-ink' : 'border-line text-ink3 hover:border-line2'}">
+            Other…
+          </button>
+        </div>
+        {#if showDirInput || (dir && !knownDir)}
+          <input bind:value={dir} oninput={() => (dirTouched = true)} placeholder="~/path/to/project" class="mt-2 w-full rounded-xl border border-line bg-inset px-4 py-3 font-mono text-[13px] text-ink outline-none transition placeholder:text-ink3 focus:border-line2" />
         {/if}
       </section>
 
-      <!-- models -->
-      {#if mode === 'solo'}
-        <section class="panel rounded-2xl p-5">
-          <span class="hud">Model</span>
-          <div class="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-            {#each models as m}
+      <!-- WHO -->
+      <section>
+        <div class="hud mb-2">Team</div>
+        <div class="flex flex-wrap items-center gap-2">
+          <div class="flex overflow-hidden rounded-xl border border-line">
+            {#each [['solo', 'Solo'], ['fleet', 'Fleet']] as [m, label] (m)}
+              <button onclick={() => (mode = m)} class="min-h-[42px] px-5 text-[14px] font-medium transition {mode === m ? 'bg-raised text-ink' : 'text-ink3 hover:text-ink2'}">{label}</button>
+            {/each}
+          </div>
+          {#if mode === 'fleet'}
+            <div class="flex items-center gap-1 rounded-xl border border-line px-1.5 py-1">
+              <button onclick={() => step(-1)} aria-label="Fewer workers" class="grid h-8 w-9 place-items-center rounded-lg text-[17px] text-ink2 transition hover:bg-raised active:scale-95">−</button>
+              <span class="w-[76px] text-center text-[13.5px] tabular-nums text-ink2"><b class="text-ink">{workers.length}</b> worker{workers.length === 1 ? '' : 's'}</span>
+              <button onclick={() => step(1)} aria-label="More workers" class="grid h-8 w-9 place-items-center rounded-lg text-[17px] text-ink2 transition hover:bg-raised active:scale-95">+</button>
+            </div>
+            <span class="text-[12.5px] text-ink3">+ 1 manager to run them</span>
+          {/if}
+        </div>
+        {#if mode === 'solo'}
+          <p class="mt-2 text-[12.5px] text-ink3">One agent takes the whole task itself.</p>
+        {:else}
+          <p class="mt-2 text-[12.5px] text-ink3">A manager splits the mission into assignments and reconciles the results.</p>
+        {/if}
+      </section>
+
+      <!-- WITH WHAT -->
+      <section>
+        <div class="hud mb-2">{mode === 'solo' ? 'Model' : 'Models'}</div>
+        {#if mode === 'solo'}
+          <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {#each models as m (m.flag)}
               <button onclick={() => (soloModel = m.flag)} class="flex flex-col gap-1 rounded-xl border p-3.5 text-left transition active:scale-[0.97] {m.flag === soloModel ? 'border-line2 bg-raised' : 'border-line hover:border-line2'}">
                 <span class="text-[14px] font-semibold {m.flag === soloModel ? 'text-ink' : 'text-ink2'}">{m.short}</span>
                 <span class="text-[12px] leading-snug text-ink3">{m.blurb}</span>
               </button>
             {/each}
           </div>
-        </section>
-      {:else}
-        <section class="panel rounded-2xl p-5">
-          <div class="flex items-center gap-3">
-            <div class="min-w-0 flex-1">
-              <div class="flex items-center gap-2">
-                <span class="text-[15px] font-semibold">Manager</span>
-                <span class="flex-none rounded-md border border-mgr/40 px-1.5 py-0.5 text-[10px] font-semibold text-mgr">MGR</span>
-              </div>
-              <div class="mt-0.5 text-[12.5px] text-ink3">Plans, assigns, reconciles — never touches code itself.</div>
-            </div>
-          </div>
-          <select bind:value={managerModel} class="mt-3 min-h-[46px] w-full rounded-xl border border-line bg-raised px-4 py-3 text-[14px] text-ink outline-none transition focus:border-line2">
-            {#each models as m}<option value={m.flag}>{m.label}</option>{/each}
-          </select>
-        </section>
-
-        <section class="panel rounded-2xl p-5">
-          <div class="flex items-center gap-3">
-            <span class="hud">Workers</span>
-            <span class="flex-1"></span>
-            <div class="flex flex-none items-center gap-2.5">
-              <button onclick={() => step(-1)} aria-label="Remove worker" class="grid h-10 w-10 place-items-center rounded-xl border border-line bg-raised text-[18px] text-ink2 transition active:scale-95">−</button>
-              <b class="w-5 text-center text-[16px] font-semibold tabular-nums">{workers.length}</b>
-              <button onclick={() => step(1)} aria-label="Add worker" class="grid h-10 w-10 place-items-center rounded-xl border border-line bg-raised text-[18px] text-ink2 transition active:scale-95">+</button>
-            </div>
-          </div>
-          <div class="mt-3 flex flex-col gap-2">
-            {#each workers as w, i}
-              <div class="flex items-center gap-3 rounded-xl border border-line bg-raised/40 px-3 py-2">
-                <span class="w-6 flex-none text-center font-mono text-[12px] tabular-nums text-ink3">{i + 1}</span>
-                <select value={w} onchange={(e) => (workers[i] = e.currentTarget.value)} class="min-h-[42px] min-w-0 flex-1 rounded-lg border border-line bg-surface px-3 py-2 text-[14px] text-ink outline-none transition focus:border-line2">
-                  {#each models as m}<option value={m.flag}>{m.label}</option>{/each}
+        {:else}
+          <div class="flex flex-col gap-2">
+            <label class="flex items-center gap-3">
+              <span class="w-[72px] flex-none text-[13px] text-ink3">Manager</span>
+              <select bind:value={managerModel} class="min-h-[42px] min-w-0 flex-1 rounded-xl border border-line bg-raised px-3.5 text-[14px] text-ink outline-none transition focus:border-line2">
+                {#each models as m (m.flag)}<option value={m.flag}>{m.label}</option>{/each}
+              </select>
+            </label>
+            {#if !perWorker}
+              <label class="flex items-center gap-3">
+                <span class="w-[72px] flex-none text-[13px] text-ink3">Workers</span>
+                <select
+                  value={workersUniform ? workers[0] : ''}
+                  onchange={(e) => setAllWorkers(e.currentTarget.value)}
+                  class="min-h-[42px] min-w-0 flex-1 rounded-xl border border-line bg-raised px-3.5 text-[14px] text-ink outline-none transition focus:border-line2">
+                  {#if !workersUniform}<option value="" disabled>Mixed…</option>{/if}
+                  {#each models as m (m.flag)}<option value={m.flag}>{m.label}</option>{/each}
                 </select>
-                <button onclick={() => (workers = workers.filter((_, j) => j !== i))} aria-label="Remove" class="min-h-[42px] flex-none px-2 text-[16px] text-ink3 transition hover:text-crit">✕</button>
-              </div>
-            {/each}
+              </label>
+              <button onclick={() => (perWorker = true)} class="self-start text-[12.5px] text-ink3 underline decoration-line2 underline-offset-2 transition hover:text-ink2">Pick a model per worker</button>
+            {:else}
+              {#each workers as w, i (i)}
+                <label class="flex items-center gap-3">
+                  <span class="w-[72px] flex-none font-mono text-[12px] tabular-nums text-ink3">Worker {i + 1}</span>
+                  <select value={w} onchange={(e) => (workers[i] = e.currentTarget.value)} class="min-h-[42px] min-w-0 flex-1 rounded-xl border border-line bg-raised px-3.5 text-[14px] text-ink outline-none transition focus:border-line2">
+                    {#each models as m (m.flag)}<option value={m.flag}>{m.label}</option>{/each}
+                  </select>
+                </label>
+              {/each}
+              <button onclick={() => { perWorker = false; setAllWorkers(workers[0]); }} class="self-start text-[12.5px] text-ink3 underline decoration-line2 underline-offset-2 transition hover:text-ink2">Use one model for all workers</button>
+            {/if}
           </div>
-        </section>
-      {/if}
-
-      <button onclick={doLaunch} class="w-full rounded-xl bg-ink py-4 text-[15px] font-semibold text-bg transition active:scale-[0.98]">
-        {mode === 'solo' ? 'Launch agent' : `Launch fleet · ${agentCount} agents`}
-      </button>
-      <p class="pb-2 text-center text-[12.5px] text-ink3">Agents open in your chosen terminal on the Mac and appear on the fleet board automatically.</p>
+        {/if}
+      </section>
     </div>
   </main>
+
+  <!-- always-visible launch bar -->
+  <footer class="flex-none border-t border-line bg-surface/85 px-4 backdrop-blur-xl sm:px-6" style="padding-top:10px;padding-bottom:calc(12px + var(--sab))">
+    <div class="mx-auto flex max-w-[680px] items-center gap-4">
+      <div class="min-w-0 flex-1 text-[12.5px] leading-snug text-ink3">
+        {mode === 'solo' ? '1 agent' : `${agentCount} agents`} · opens in your terminal on the Mac and appears on the board automatically
+      </div>
+      <button onclick={doLaunch} class="flex h-12 flex-none items-center gap-2 rounded-xl bg-ink px-7 text-[15px] font-semibold text-bg transition active:scale-[0.98]">
+        <Icon name="launch" size={17} /> Launch
+      </button>
+    </div>
+  </footer>
 </div>
 
 {#if launching}
