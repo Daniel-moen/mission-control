@@ -63,19 +63,19 @@
       <input
         bind:value={query}
         placeholder="Search agents, branches, activity…"
-        class="panel h-11 w-full max-w-sm rounded-full px-5 font-mono text-[14px] outline-none transition focus:border-accent" />
+        class="panel h-10 w-full max-w-sm rounded-xl px-4 text-[14px] outline-none transition focus:border-line2" />
       {#if mc.filter !== 'all'}
-        <button onclick={() => (mc.filter = 'all')} class="h-11 flex-none rounded-full border border-line bg-surface px-4 text-[13px] font-semibold text-ink2">Clear filter ✕</button>
+        <button onclick={() => (mc.filter = 'all')} class="h-10 flex-none rounded-xl border border-line bg-surface px-4 text-[13px] font-medium text-ink2">Clear filter ✕</button>
       {/if}
     </div>
   {/if}
 
-  <!-- fleets then solo agents, under HUD section rules -->
+  <!-- fleets then solo agents -->
   {#if anyResults}
     {#if fleets.length}
-      <div class="mt-5 mb-3 flex items-center gap-3">
-        <span class="hud">Fleets — {fleets.length}</span>
-        <span class="h-px flex-1 bg-gradient-to-r from-line2 to-transparent"></span>
+      <div class="mt-6 mb-3 flex items-baseline gap-2">
+        <h2 class="text-[13px] font-semibold text-ink2">Fleets</h2>
+        <span class="text-[13px] tabular-nums text-ink3">{fleets.length}</span>
       </div>
       <div class="flex flex-col gap-4">
         {#each fleets as g (g.id)}
@@ -84,9 +84,9 @@
       </div>
     {/if}
     {#if solo.length}
-      <div class="mt-5 mb-3 flex items-center gap-3">
-        <span class="hud">Agents — {solo.length}</span>
-        <span class="h-px flex-1 bg-gradient-to-r from-line2 to-transparent"></span>
+      <div class="mt-6 mb-3 flex items-baseline gap-2">
+        <h2 class="text-[13px] font-semibold text-ink2">Agents</h2>
+        <span class="text-[13px] tabular-nums text-ink3">{solo.length}</span>
       </div>
       <div class="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
         {#each solo as agent (agent.id)}
@@ -99,8 +99,8 @@
       <div class="grid h-14 w-14 place-items-center rounded-2xl border border-line bg-surface text-ink3">
         <Icon name="fleet" size={26} />
       </div>
-      <div class="text-[17px] font-semibold text-ink2">
-        {mc.agents.length ? 'No agents match' : 'No agents on the board'}
+      <div class="text-[16px] font-semibold text-ink2">
+        {mc.agents.length ? 'No agents match' : 'No agents running'}
       </div>
       <div class="max-w-xs text-[14px] text-ink3">
         {mc.agents.length ? 'Try a different filter or search.' : 'Launch one from the dock — it appears here automatically.'}
@@ -110,9 +110,8 @@
 
   <!-- telemetry: burn timeseries + token economics -->
   {#if hasSession}
-    <div class="mt-7 mb-3 flex items-center gap-3">
-      <span class="hud">Telemetry</span>
-      <span class="h-px flex-1 bg-gradient-to-r from-line2 to-transparent"></span>
+    <div class="mt-6 mb-3 flex items-baseline gap-2">
+      <h2 class="text-[13px] font-semibold text-ink2">Telemetry</h2>
     </div>
     <div class="grid grid-cols-1 gap-3.5 lg:grid-cols-3">
       <div class="lg:col-span-2"><Graph /></div>

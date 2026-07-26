@@ -15,7 +15,7 @@
   import ConnBanner from './ConnBanner.svelte';
   import Icon from './Icon.svelte';
 
-  let { agentId, onclose } = $props();
+  let { agentId, onclose, onconsole = null } = $props();
 
   const agent = $derived(mc.agents.find((a) => a.id === agentId));
   const cls = $derived(agent ? agentStatus(agent) : 'done');
@@ -70,40 +70,40 @@
   <div class="anim-slide fixed inset-0 z-[70] flex flex-col bg-bg">
     <!-- header: status-colored hairline up top -->
     <header
-      class="relative flex flex-none items-center gap-3 border-b border-line bg-surface/70 px-4 backdrop-blur-2xl sm:px-6"
-      style="padding-top:calc(10px + var(--sat));padding-bottom:10px; box-shadow: inset 0 1px 0 rgba(147,200,255,0.07)">
+      class="relative flex flex-none items-center gap-3 border-b border-line bg-surface/85 px-4 backdrop-blur-xl sm:px-6"
+      style="padding-top:calc(10px + var(--sat));padding-bottom:10px">
       <span class="absolute inset-x-0 top-0 h-[2px] {t.edge}"></span>
-      <button onclick={onclose} aria-label="Back" class="grid h-11 w-11 flex-none place-items-center rounded-xl text-ink2 transition hover:bg-raised">
-        <Icon name="back" size={24} />
+      <button onclick={onclose} aria-label="Back" class="grid h-10 w-10 flex-none place-items-center rounded-xl text-ink2 transition hover:bg-raised">
+        <Icon name="back" size={22} />
       </button>
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2">
-          <h2 class="display truncate text-[21px] font-bold tracking-tight">{agentName(agent)}</h2>
+          <h2 class="truncate text-[18px] font-semibold tracking-tight">{agentName(agent)}</h2>
           {#if agent.isManager}
-            <span class="flex-none rounded-md border border-mgr/50 px-1.5 py-0.5 text-[10px] font-extrabold tracking-wider text-mgr">MGR</span>
+            <span class="flex-none rounded-md border border-mgr/40 px-1.5 py-0.5 text-[10px] font-semibold text-mgr">MGR</span>
           {/if}
           {#if agent.branch}
-            <span class="hidden flex-none items-center gap-1 rounded-md bg-white/5 px-1.5 py-0.5 font-mono text-[11px] text-ink2 sm:flex">
+            <span class="hidden flex-none items-center gap-1 font-mono text-[11px] text-ink3 sm:flex">
               <Icon name="branch" size={11} /><span class="max-w-[160px] truncate">{agent.branch}</span>
             </span>
           {/if}
         </div>
-        <div class="flex min-w-0 items-center gap-2 font-mono text-[12px] text-ink3">
+        <div class="flex min-w-0 items-center gap-2 text-[12px] text-ink3">
           <span class="truncate">{agent.dir || agent.folder || ''}</span>
         </div>
       </div>
 
       <!-- glance stats: uptime · cost · cpu/mem -->
-      <div class="hidden flex-none items-center gap-4 font-mono text-[13px] tabular-nums text-ink2 lg:flex">
-        {#if agent.uptime}<span class="flex items-center gap-1.5 text-ink3"><Icon name="clock" size={14} />{agent.uptime}</span>{/if}
+      <div class="hidden flex-none items-center gap-4 font-mono text-[12.5px] tabular-nums text-ink2 lg:flex">
+        {#if agent.uptime}<span class="text-ink3">{agent.uptime}</span>{/if}
         <span>${(agent.cost ?? 0).toFixed(2)}</span>
         {#if hasSys}
-          <span class="flex items-center gap-1.5 text-ink3"><Icon name="chip" size={14} />{Math.round(agent.cpu)}%{#if typeof agent.mem === 'number'}<span>· {fmtMem(agent.mem)}</span>{/if}</span>
+          <span class="text-ink3">{Math.round(agent.cpu)}%{typeof agent.mem === 'number' ? ` · ${fmtMem(agent.mem)}` : ''}</span>
         {/if}
       </div>
 
-      <span class="flex flex-none items-center gap-2 rounded-full px-3 py-1.5 text-[13px] font-bold {t.chip}">
-        {#if cls === 'working'}<span class="h-2 w-2 rounded-full bg-accent" style="animation:mc-pulse 1.4s steps(2) infinite"></span>{/if}
+      <span class="flex flex-none items-center gap-2 rounded-full px-3 py-1.5 text-[12.5px] font-semibold {t.chip}">
+        {#if cls === 'working'}<span class="h-1.5 w-1.5 rounded-full bg-accent" style="animation:mc-pulse 1.4s steps(2) infinite"></span>{/if}
         {statusLabel(cls)}
       </span>
     </header>
@@ -118,43 +118,49 @@
           <PromptControls {agent} screen={rawScreenFor(agent)} />
         {/if}
         <div class="min-h-[46vh] flex-1 lg:min-h-0">
-          <Terminal text={screen.text} at={screen.at} streamed={screen.streamed} controllable={agent.controllable} fill />
+          <Terminal
+            text={screen.text}
+            at={screen.at}
+            streamed={screen.streamed}
+            controllable={agent.controllable}
+            onexpand={onconsole && agent.controllable ? () => onconsole(agentId) : null}
+            fill />
         </div>
       </div>
 
       <!-- RIGHT: stats, plan, log, objective -->
-      <div class="flex min-w-0 flex-col gap-4 lg:min-h-0 lg:overflow-y-auto lg:pb-2 lg:noscroll">
+      <div class="flex min-w-0 flex-col gap-3 lg:min-h-0 lg:overflow-y-auto lg:pb-2 lg:noscroll">
         <div class="grid grid-cols-2 gap-2.5">
-          {#each [['Runtime', agent.uptime || '—', 'clock'], ['Cost', '$' + (agent.cost ?? 0).toFixed(2), 'coins'], ['Tokens', fmtTokens(agent.tokens ?? 0), 'bolt'], ['Turns', fmtInt(agent.turns ?? 0), 'pulse']] as [k, v, ic] (k)}
-            <div class="panel rounded-2xl p-3.5">
-              <div class="hud flex items-center gap-1.5"><Icon name={ic} size={13} />{k}</div>
-              <div class="display mt-1.5 text-[21px] font-bold tabular-nums">{v}</div>
+          {#each [['Runtime', agent.uptime || '—'], ['Cost', '$' + (agent.cost ?? 0).toFixed(2)], ['Tokens', fmtTokens(agent.tokens ?? 0)], ['Turns', fmtInt(agent.turns ?? 0)]] as [k, v] (k)}
+            <div class="panel rounded-xl p-3.5">
+              <div class="hud">{k}</div>
+              <div class="mt-1.5 text-[19px] font-semibold tracking-tight tabular-nums">{v}</div>
             </div>
           {/each}
         </div>
 
         {#if cls === 'working'}
-          <div class="panel flex items-center justify-between rounded-2xl px-4 py-3">
+          <div class="panel flex items-center justify-between rounded-xl px-4 py-3">
             <span class="hud">Burn</span>
-            <span class="display text-[19px] font-bold tabular-nums text-accent-bright" style="text-shadow:0 0 16px rgba(34,217,238,0.4)">{fmtInt(Math.round(agent.tokensPerSec ?? 0))} <span class="hud !text-ink3">tok/s</span></span>
+            <span class="text-[17px] font-semibold tabular-nums text-accent">{fmtInt(Math.round(agent.tokensPerSec ?? 0))} <span class="text-[12px] font-normal text-ink3">tok/s</span></span>
           </div>
         {/if}
 
         {#if cls === 'exited'}
-          <div class="rounded-2xl border border-crit/40 bg-crit/8 p-4">
-            <div class="flex items-center gap-2 text-[13px] font-bold text-crit"><Icon name="alert" size={15} />Process exited</div>
+          <div class="rounded-xl border border-crit/30 bg-crit/[0.06] p-4">
+            <div class="flex items-center gap-2 text-[13px] font-semibold text-crit"><Icon name="alert" size={15} />Process exited</div>
             <p class="mt-1 text-[13px] leading-relaxed text-ink2">The claude process behind this session is gone. The last terminal output is preserved above.</p>
           </div>
         {/if}
 
         {#if todos.length}
-          <section class="panel rounded-2xl p-4">
+          <section class="panel rounded-xl p-4">
             <div class="mb-3 flex items-center justify-between">
-              <span class="hud !text-ink2">Plan</span>
+              <span class="hud">Plan</span>
               <span class="font-mono text-[12px] text-ink3">{doneCount}/{todos.length} · {pct}%</span>
             </div>
-            <div class="mb-3 h-1.5 overflow-hidden rounded-full bg-inset">
-              <div class="h-full rounded-full bg-gradient-to-r from-accent/40 to-accent transition-[width] duration-500" style="width:{pct}%; box-shadow:0 0 10px rgba(34,217,238,0.5)"></div>
+            <div class="mb-3 h-1 overflow-hidden rounded-full bg-white/[0.06]">
+              <div class="h-full rounded-full bg-accent transition-[width] duration-500" style="width:{pct}%"></div>
             </div>
             <div class="flex flex-col gap-2">
               {#each todos as td}
@@ -170,54 +176,54 @@
         {/if}
 
         <section>
-          <div class="hud mb-2 !text-ink2">Recent log</div>
-          <div class="crt max-h-56 overflow-y-auto rounded-2xl border border-line bg-inset p-3 font-mono text-[12px] leading-relaxed noscroll">
+          <div class="hud mb-2">Recent log</div>
+          <div class="max-h-56 overflow-y-auto rounded-xl border border-line bg-inset p-3 font-mono text-[12px] leading-relaxed noscroll">
             {#each agent.log || [] as l}
               <div class="truncate {lineTone[l.kind] || 'text-ink2'}">{l.text}</div>
             {:else}
-              <div class="text-ink3 italic">No activity yet.</div>
+              <div class="text-ink3">No activity yet.</div>
             {/each}
           </div>
         </section>
 
         {#if agent.prompt}
-          <section class="panel rounded-2xl p-4">
-            <div class="hud mb-2 !text-ink2">Objective</div>
-            <p class="max-h-32 overflow-y-auto break-words [overflow-wrap:anywhere] text-[14px] leading-relaxed text-ink noscroll">{agent.prompt}</p>
+          <section class="panel rounded-xl p-4">
+            <div class="hud mb-2">Objective</div>
+            <p class="max-h-32 overflow-y-auto break-words [overflow-wrap:anywhere] text-[13.5px] leading-relaxed text-ink2 noscroll">{agent.prompt}</p>
           </section>
         {/if}
       </div>
     </main>
 
     <!-- sticky bottom action bar -->
-    <footer class="flex-none border-t border-line bg-surface/75 px-4 backdrop-blur-2xl sm:px-6" style="padding-top:10px;padding-bottom:calc(10px + var(--sab)); box-shadow: inset 0 1px 0 rgba(147,200,255,0.07)">
+    <footer class="flex-none border-t border-line bg-surface/85 px-4 backdrop-blur-xl sm:px-6" style="padding-top:10px;padding-bottom:calc(10px + var(--sab))">
       <div class="mx-auto max-w-[1400px]">
         {#if agent.controllable}
           <div class="mb-2.5 flex items-center gap-2 overflow-x-auto pb-0.5 noscroll">
             <!-- quick keys -->
             {#each [['esc', 'Esc'], ['up', '↑'], ['down', '↓'], ['enter', '⏎']] as [k, lbl] (k)}
-              <button onclick={() => sendKey(agentId, k)} aria-label={k} class="grid h-11 w-12 flex-none place-items-center rounded-xl border border-line bg-raised text-[15px] font-semibold text-ink2 transition active:scale-90">{lbl}</button>
+              <button onclick={() => sendKey(agentId, k)} aria-label={k} class="grid h-10 w-11 flex-none place-items-center rounded-lg border border-line bg-raised text-[14px] font-medium text-ink2 transition active:scale-90">{lbl}</button>
             {/each}
-            <span class="h-6 w-px flex-none bg-line2"></span>
+            <span class="h-5 w-px flex-none bg-line"></span>
             {#each ['Continue', 'Yes', 'Approve plan'] as q (q)}
-              <button onclick={() => reply(agentId, q)} class="h-11 flex-none rounded-xl border border-line bg-raised px-4 text-[14px] font-semibold text-ink2 transition active:scale-95">{q}</button>
+              <button onclick={() => reply(agentId, q)} class="h-10 flex-none rounded-lg border border-line bg-raised px-3.5 text-[13px] font-medium text-ink2 transition active:scale-95">{q}</button>
             {/each}
-            <button onclick={() => reply(agentId, 'Stop')} class="h-11 flex-none rounded-xl border border-crit/45 bg-crit/8 px-4 text-[14px] font-semibold text-crit transition active:scale-95">■ Stop</button>
+            <button onclick={() => reply(agentId, 'Stop')} class="h-10 flex-none rounded-lg border border-crit/40 px-3.5 text-[13px] font-medium text-crit transition active:scale-95">■ Stop</button>
             <span class="min-w-2 flex-1"></span>
             <button
               onclick={tapKill}
-              class="flex h-11 flex-none items-center gap-1.5 rounded-xl border px-4 text-[14px] font-bold transition active:scale-95 {killArmed ? 'border-crit bg-crit text-white' : 'border-crit/45 text-crit'}">
-              <Icon name="skull" size={16} />{killArmed ? 'Tap again to kill' : 'Kill'}
+              class="flex h-10 flex-none items-center gap-1.5 rounded-lg border px-3.5 text-[13px] font-semibold transition active:scale-95 {killArmed ? 'border-crit bg-crit text-white' : 'border-crit/40 text-crit'}">
+              {killArmed ? 'Tap again to kill' : 'Kill'}
             </button>
           </div>
           <MicField bind:value={replyText} placeholder="Message this agent…" onsubmit={sendReply} />
         {:else}
           <div class="flex items-center justify-between gap-3">
-            <p class="text-[14px] italic text-ink3">Read-only — this agent’s terminal can’t be driven remotely.</p>
+            <p class="text-[13px] text-ink3">Read-only — this agent’s terminal can’t be driven remotely.</p>
             <button
               onclick={tapKill}
-              class="flex h-11 flex-none items-center gap-1.5 rounded-xl border px-4 text-[14px] font-bold transition active:scale-95 {killArmed ? 'border-crit bg-crit text-white' : 'border-crit/45 text-crit'}">
-              <Icon name="skull" size={16} />{killArmed ? 'Tap again to kill' : 'Kill'}
+              class="flex h-10 flex-none items-center gap-1.5 rounded-lg border px-3.5 text-[13px] font-semibold transition active:scale-95 {killArmed ? 'border-crit bg-crit text-white' : 'border-crit/40 text-crit'}">
+              {killArmed ? 'Tap again to kill' : 'Kill'}
             </button>
           </div>
         {/if}

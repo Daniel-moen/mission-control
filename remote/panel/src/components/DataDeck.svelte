@@ -89,33 +89,28 @@
     const top = Math.max(...rows.map((a) => a.tokens ?? 0), 1);
     return rows.map((a) => ({ a, share: (100 * (a.tokens ?? 0)) / top }));
   });
-  const dotCls = { working: 'bg-accent', waiting: 'bg-warn', done: 'bg-ok', exited: 'bg-crit' };
+  const dotCls = { working: 'bg-accent', waiting: 'bg-warn', done: 'bg-ink3', exited: 'bg-crit' };
 </script>
 
-<div class="mx-auto flex w-full max-w-[1400px] flex-col gap-4 px-4 pt-4 sm:px-6">
-  <div class="flex items-center gap-3">
-    <span class="grid h-11 w-11 flex-none place-items-center rounded-2xl border border-accent/40 bg-inset text-accent glow-accent">
-      <Icon name="pulse" size={20} />
-    </span>
-    <div>
-      <h1 class="display text-[22px] font-bold leading-none tracking-tight">Data</h1>
-      <div class="hud mt-1.5">Live fleet telemetry</div>
-    </div>
+<div class="mx-auto flex w-full max-w-[1400px] flex-col gap-4 px-4 pt-5 sm:px-6">
+  <div>
+    <h1 class="display text-[20px] font-semibold leading-none tracking-tight">Data</h1>
+    <div class="mt-1.5 text-[13px] text-ink3">Live fleet telemetry</div>
   </div>
 
   {#if hasData}
     <!-- headline stat tiles -->
-    <div class="grid grid-cols-2 gap-3.5 lg:grid-cols-4">
+    <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
       {#each tiles as t (t.label)}
-        <div class="panel anim-rise relative overflow-hidden rounded-[22px] p-4">
+        <div class="panel anim-rise relative overflow-hidden rounded-2xl p-4">
           <div class="hud flex items-center gap-2">
             {t.label}
             {#if t.live}<span class="h-1.5 w-1.5 rounded-full bg-accent" style="animation:mc-pulse 1.4s steps(2) infinite"></span>{/if}
           </div>
-          <div class="display mt-2 flex items-baseline gap-1.5 text-[28px] font-bold leading-none tracking-tight tabular-nums text-ink">
-            {t.value}{#if t.unit}<span class="hud !tracking-[0.1em]">{t.unit}</span>{/if}
+          <div class="display mt-2 flex items-baseline gap-1.5 text-[26px] font-semibold leading-none tracking-tight tabular-nums text-ink">
+            {t.value}{#if t.unit}<span class="text-[13px] font-normal text-ink3">{t.unit}</span>{/if}
           </div>
-          <div class="mt-1.5 truncate font-mono text-[12px] {t.warn ? 'text-warn' : 'text-ink3'}">{t.sub}</div>
+          <div class="mt-1.5 truncate text-[12px] {t.warn ? 'text-warn' : 'text-ink3'}">{t.sub}</div>
           <!-- hidden on narrow tiles where it would collide with the caption -->
           {#if t.spark && t.spark.length > 1}
             <div class="pointer-events-none absolute bottom-0 right-0 hidden opacity-70 sm:block">
@@ -133,7 +128,7 @@
     <div class="grid grid-cols-1 gap-3.5 lg:grid-cols-2">
       <TokenMix />
 
-      <div class="panel flex flex-col rounded-[22px] p-5">
+      <div class="panel flex flex-col rounded-2xl p-5">
         <div class="hud">Machine health</div>
         {#if bars.length}
           <div class="mt-4 flex flex-1 flex-col justify-center gap-4">
@@ -141,10 +136,10 @@
               {@const pct = Math.max(0, Math.min(100, b.pct))}
               <div>
                 <div class="mb-1.5 flex items-baseline justify-between gap-3">
-                  <span class="font-mono text-[12px] text-ink2">{b.label}</span>
+                  <span class="text-[12.5px] text-ink2">{b.label}</span>
                   <span class="font-mono text-[12px] tabular-nums text-ink3">{b.detail} · <span class="font-semibold text-ink2">{Math.round(pct)}%</span></span>
                 </div>
-                <div class="h-2.5 w-full overflow-hidden rounded-full" style="background:color-mix(in oklab, {barTone(pct)} 14%, transparent)">
+                <div class="h-2 w-full overflow-hidden rounded-full" style="background:color-mix(in oklab, {barTone(pct)} 14%, transparent)">
                   <div class="h-full rounded-full transition-[width] duration-700" style="width:{pct}%;background:{barTone(pct)}"></div>
                 </div>
               </div>
@@ -152,7 +147,7 @@
           </div>
         {:else}
           <div class="grid flex-1 place-items-center py-8">
-            <span class="hud">No host telemetry — older Mac host</span>
+            <span class="text-[13px] text-ink3">No host telemetry — older Mac host</span>
           </div>
         {/if}
       </div>
@@ -160,23 +155,22 @@
 
     <!-- per-agent burn board -->
     {#if board.length}
-      <div class="mt-1 flex items-center gap-3">
-        <span class="hud">Burn by agent</span>
-        <span class="h-px flex-1 bg-gradient-to-r from-line2 to-transparent"></span>
-        <span class="hud !text-ink2">{board.length}</span>
+      <div class="mt-2 flex items-baseline gap-2">
+        <h2 class="text-[13px] font-semibold text-ink2">Burn by agent</h2>
+        <span class="text-[13px] tabular-nums text-ink3">{board.length}</span>
       </div>
-      <div class="panel -mt-1 overflow-hidden rounded-[22px]">
+      <div class="panel -mt-1 overflow-hidden rounded-2xl">
         <div class="overflow-x-auto noscroll">
           <table class="w-full min-w-[640px] border-collapse text-left">
             <thead>
               <tr class="border-b border-line">
-                <th class="hud px-5 py-3 font-semibold">Agent</th>
-                <th class="hud px-3 py-3 font-semibold">Burn</th>
-                <th class="hud px-3 py-3 text-right font-semibold">tok/s</th>
-                <th class="hud px-3 py-3 text-right font-semibold">Tokens</th>
-                <th class="hud px-3 py-3 text-right font-semibold">Cost</th>
-                <th class="hud px-3 py-3 text-right font-semibold">CPU</th>
-                <th class="hud px-5 py-3 text-right font-semibold">Mem</th>
+                <th class="hud px-5 py-3">Agent</th>
+                <th class="hud px-3 py-3">Burn</th>
+                <th class="hud px-3 py-3 text-right">tok/s</th>
+                <th class="hud px-3 py-3 text-right">Tokens</th>
+                <th class="hud px-3 py-3 text-right">Cost</th>
+                <th class="hud px-3 py-3 text-right">CPU</th>
+                <th class="hud px-5 py-3 text-right">Mem</th>
               </tr>
             </thead>
             <tbody>
@@ -188,7 +182,7 @@
                       <span class="h-2 w-2 flex-none rounded-full {dotCls[st]}" title={statusLabel(st)}></span>
                       <div class="min-w-0">
                         <div class="truncate text-[13px] font-semibold text-ink">{agentName(a)}</div>
-                        <div class="truncate font-mono text-[11px] text-ink3">{statusLabel(st)}{a.branch ? ` · ${a.branch}` : ''}</div>
+                        <div class="truncate text-[11.5px] text-ink3">{statusLabel(st)}{a.branch ? ` · ${a.branch}` : ''}</div>
                       </div>
                     </div>
                     <div class="mt-2 h-1 w-full overflow-hidden rounded-full bg-inset">
@@ -196,7 +190,7 @@
                     </div>
                   </td>
                   <td class="px-3 py-3"><Sparkline data={sparkOf(a.id)} width={96} height={26} /></td>
-                  <td class="px-3 py-3 text-right font-mono text-[13px] tabular-nums {(a.tokensPerSec ?? 0) > 0 ? 'text-accent-bright' : 'text-ink3'}">{fmtInt(Math.round(a.tokensPerSec ?? 0))}</td>
+                  <td class="px-3 py-3 text-right font-mono text-[13px] tabular-nums {(a.tokensPerSec ?? 0) > 0 ? 'text-accent' : 'text-ink3'}">{fmtInt(Math.round(a.tokensPerSec ?? 0))}</td>
                   <td class="px-3 py-3 text-right font-mono text-[13px] tabular-nums text-ink2">{fmtTokens(a.tokens)}</td>
                   <td class="px-3 py-3 text-right font-mono text-[13px] tabular-nums text-ink2">${(a.cost ?? 0).toFixed(2)}</td>
                   <td class="px-3 py-3 text-right font-mono text-[13px] tabular-nums text-ink3">{typeof a.cpu === 'number' ? a.cpu.toFixed(0) + '%' : '—'}</td>

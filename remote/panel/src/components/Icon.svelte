@@ -34,6 +34,9 @@
     chip: '<rect x="6" y="6" width="12" height="12" rx="2"/><rect x="10" y="10" width="4" height="4"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>',
     alert: '<path d="M12 3 2.5 20.5h19z"/><path d="M12 10v4.5M12 18v.5"/>',
     down: '<path d="M12 5v14M5 12l7 7 7-7"/>',
+    expand: '<path d="M15 3h6v6M21 3l-7 7M9 21H3v-6M3 21l7-7"/>',
+    keyboard:
+      '<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h.01M18 14h.01M9.5 14h5"/>',
   };
 </script>
 

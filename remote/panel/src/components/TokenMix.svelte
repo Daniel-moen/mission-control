@@ -26,11 +26,11 @@
   const hitTone = $derived(cacheHit === null ? 'text-ink3' : cacheHit >= 80 ? 'text-ok' : cacheHit >= 50 ? 'text-warn' : 'text-crit');
 </script>
 
-<div class="panel flex flex-col rounded-[22px] p-5">
+<div class="panel flex flex-col rounded-2xl p-5">
   <div class="flex items-start justify-between">
     <div>
       <div class="hud">Cache hit rate</div>
-      <div class="display mt-1.5 text-[26px] font-bold leading-none tracking-tight tabular-nums {hitTone}">
+      <div class="display mt-1.5 text-[24px] font-semibold leading-none tracking-tight tabular-nums {hitTone}">
         {cacheHit === null ? '—' : cacheHit + '%'}
       </div>
     </div>

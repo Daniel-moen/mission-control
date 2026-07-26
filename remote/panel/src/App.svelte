@@ -14,17 +14,36 @@
   import Settings from './components/Settings.svelte';
   import VoiceComposer from './components/VoiceComposer.svelte';
   import Toast from './components/Toast.svelte';
+  import TvMode from './components/TvMode.svelte';
+  import TerminalConsole from './components/TerminalConsole.svelte';
 
   let tab = $state('fleet'); // 'fleet' | 'library' | 'data' — main content area
+  // #tv = the ambient wall display (TV mode). Hash-routed so a TV browser can
+  // be pointed straight at …/?token=XXX#tv and never touch the app chrome.
+  let tvOn = $state(typeof location !== 'undefined' && location.hash === '#tv');
   let sheet = $state(null); // 'launch' | 'settings' | null
   let openAgentId = $state(null); // full-screen agent workspace
   let openDoc = $state(null); // { id, edit } — full-screen document workspace
+  // The terminal console: { agentId } with null meaning "show the picker".
+  // Held separately from openAgentId so closing it drops you back where you were.
+  let console_ = $state(null);
+  let lastConsoleId = $state(null); // reopen on the terminal you were last driving
   let launchDocMeta = $state(null); // { ...doc meta, mode } attached to the Launch sheet
   let composer = $state(null); // { target } | null
 
-  const active = $derived(sheet || tab);
+  const active = $derived(console_ ? 'console' : sheet || tab);
 
-  onMount(initToken);
+  function openConsole(id = null) {
+    lastConsoleId = id ?? lastConsoleId;
+    console_ = { agentId: lastConsoleId };
+  }
+
+  onMount(() => {
+    initToken();
+    const syncTv = () => (tvOn = location.hash === '#tv');
+    window.addEventListener('hashchange', syncTv);
+    return () => window.removeEventListener('hashchange', syncTv);
+  });
 
   function openAgent(id) {
     openAgentId = id;
@@ -35,6 +54,7 @@
     sheet = null;
     openAgentId = null;
     openDoc = null;
+    console_ = null;
   }
 
   // A doc just created from the Library — open it. A hand-made note/plan opens
@@ -67,6 +87,10 @@
   <Gate />
 {/if}
 
+{#if tvOn}
+  <TvMode onclose={() => (location.hash = '')} />
+{/if}
+
 <StatusStrip />
 <ConnBanner />
 
@@ -87,6 +111,7 @@
   onData={() => goto('data')}
   onLaunch={() => (sheet = 'launch')}
   onSettings={() => (sheet = 'settings')}
+  onConsole={() => openConsole()}
   onMic={() => (composer = { target: 'all' })} />
 
 {#if openDoc}
@@ -94,7 +119,11 @@
 {/if}
 
 {#if openAgentId}
-  <AgentView agentId={openAgentId} onclose={() => (openAgentId = null)} />
+  <AgentView agentId={openAgentId} onclose={() => (openAgentId = null)} onconsole={openConsole} />
+{/if}
+
+{#if console_}
+  <TerminalConsole agentId={console_.agentId} onselect={(id) => (lastConsoleId = id)} onclose={() => (console_ = null)} />
 {/if}
 
 {#if sheet === 'launch'}

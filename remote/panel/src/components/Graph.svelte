@@ -49,21 +49,21 @@
   const cur = $derived(samples.length ? samples[samples.length - 1] : null);
 </script>
 
-<div class="panel rounded-[22px] p-5">
+<div class="panel rounded-2xl p-5">
   <div class="mb-3 flex items-center gap-3">
     <div class="min-w-0 flex-1">
       <div class="hud">{M.label} over time</div>
       <!-- value wears ink, not the series color; the swatch beside it carries identity -->
-      <div class="display mt-1.5 flex items-baseline gap-2 text-[26px] font-bold leading-none tracking-tight text-ink">
+      <div class="display mt-1.5 flex items-baseline gap-2 text-[24px] font-semibold leading-none tracking-tight text-ink">
         <span class="h-2.5 w-2.5 flex-none self-center rounded-sm" style="background:{M.color}"></span>
-        {cur ? M.fmt(M.pick(cur)) : '—'}<span class="hud !tracking-[0.1em]">{M.unit}</span>
+        {cur ? M.fmt(M.pick(cur)) : '—'}<span class="text-[12px] font-normal text-ink3">{M.unit}</span>
       </div>
     </div>
-    <div class="flex flex-none gap-1 rounded-full border border-line bg-inset p-1">
+    <div class="flex flex-none gap-0.5 rounded-lg border border-line p-0.5">
       {#each Object.entries(METRICS) as [k, m]}
         <button
           onclick={() => (metric = k)}
-          class="min-h-[32px] rounded-full px-3 py-1 font-mono text-[11px] font-semibold uppercase tracking-[0.1em] transition {metric === k ? 'bg-raised text-ink shadow-[inset_0_1px_0_rgba(147,200,255,0.1)]' : 'text-ink3 hover:text-ink2'}">
+          class="min-h-[30px] rounded-md px-3 py-1 text-[12px] font-medium transition {metric === k ? 'bg-raised text-ink' : 'text-ink3 hover:text-ink2'}">
           {m.label}
         </button>
       {/each}
@@ -114,7 +114,7 @@
       {/if}
     {:else}
       <div class="grid h-[168px] place-items-center">
-        <span class="hud flex items-center gap-2"><span class="h-1.5 w-1.5 rounded-full bg-accent" style="animation:mc-pulse 1.4s ease-in-out infinite"></span>Collecting telemetry…</span>
+        <span class="flex items-center gap-2 text-[13px] text-ink3"><span class="h-1.5 w-1.5 rounded-full bg-accent" style="animation:mc-pulse 1.4s ease-in-out infinite"></span>Collecting telemetry…</span>
       </div>
     {/if}
   </div>

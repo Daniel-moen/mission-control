@@ -8,13 +8,17 @@
 //   in : { type:'hostState', online }             relay → Mac link changes
 //   in : { type:'ack', ok, cmd, detail, id? }     command results (id on
 //                                                 docCreate + research acks)
-//   in : { type:'screen', sessionId, seq, text }  full terminal buffer for a
-//                                                 session we hold a watch lease on
+//   in : { type:'screen', sessionId, seq, text, keep? }  terminal buffer for a
+//                                                 session we hold a watch lease
+//                                                 on; with `keep`, a delta on
+//                                                 top of frame seq-1
 //   in : { type:'doc', id, title, kind, status, subject, tags, dir, content,
 //          updatedAt }                             a document body, replying to docGet
 //   in : { type:'docSearchResult', q, hits:[{id, snippets}] }  library search
 //   out: { type:'reply'|'broadcast'|'kill'|'key'|'launch', ... }
-//   out: { type:'watch', sessionId }              lease heartbeat (~3s)
+//   out: { type:'key', sessionId, key }           named keystroke (esc, up, ctrl-c, a digit)
+//   out: { type:'key', sessionId, text }          literal typing from the console
+//   out: { type:'watch', sessionId, hot }         lease heartbeat (~3s); hot ⇒ being typed into
 //   out: document library — docGet/docSave/docCreate/docDelete/docMeta/
 //        docSearch, and the one-shot `research` launch. See the command
 //        section at the foot of this file for each frame's shape.
@@ -64,7 +68,7 @@ export const mc = $state({
   now: Date.now(), // 1 Hz clock for staleness ages ("live" / "6s ago")
 });
 
-export const PANEL_BUILD = 'v12 · 2026-07-09 · library';
+export const PANEL_BUILD = 'v17 · 2026-07-26 · studio redesign';
 
 // ---- status helpers ---------------------------------------------------------
 // v8 status semantics: working = cyan, needs-you = amber, done = green,
@@ -344,11 +348,14 @@ export function attentionList(agents) {
 // reconnect; the host streams {type:'screen', sessionId, seq, text} frames
 // (~400 lines incl. scrollback) at ~1 Hz while the lease is fresh. Leases are
 // cheap — send liberally. The host expires them after 8s.
-const watchLeases = new Map(); // sessionId → refcount
+// A "hot" lease additionally says someone is TYPING into that terminal from the
+// console — the host then mirrors it at ~3 Hz instead of 1 Hz.
+const watchLeases = new Map(); // sessionId → { n, hot } — refcounts
 let watchTimer = null;
 
 function sendWatch(sessionId) {
-  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'watch', sessionId }));
+  const l = watchLeases.get(sessionId);
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'watch', sessionId, hot: !!l?.hot }));
 }
 function sendAllWatches() {
   for (const id of watchLeases.keys()) sendWatch(id);
@@ -362,27 +369,42 @@ function syncWatchTimer() {
 }
 // Acquire a lease; returns a release function. Refcounted so two views of the
 // same session don't cancel each other.
-export function watchAgent(sessionId) {
-  watchLeases.set(sessionId, (watchLeases.get(sessionId) || 0) + 1);
+export function watchAgent(sessionId, { hot = false } = {}) {
+  const l = watchLeases.get(sessionId) || { n: 0, hot: 0 };
+  l.n += 1;
+  if (hot) l.hot += 1;
+  watchLeases.set(sessionId, l);
   sendWatch(sessionId);
   syncWatchTimer();
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    const n = (watchLeases.get(sessionId) || 1) - 1;
-    if (n <= 0) watchLeases.delete(sessionId);
-    else watchLeases.set(sessionId, n);
+    const cur = watchLeases.get(sessionId);
+    if (!cur) return;
+    cur.n -= 1;
+    if (hot) cur.hot = Math.max(0, cur.hot - 1);
+    if (cur.n <= 0) watchLeases.delete(sessionId);
     syncWatchTimer();
   };
 }
 
 function ingestScreen(msg) {
-  if (!msg.sessionId || typeof msg.text !== 'string') return;
+  if (!msg.sessionId) return;
   const prev = mc.screens[msg.sessionId];
+  let text = msg.text;
+  // Delta frame: the host kept the first `keep` characters of the frame BEFORE
+  // this one and sent only the tail. Applicable solely on top of that exact
+  // frame — otherwise drop it and wait for the next full one (the host forces
+  // one every few frames, so a viewer that joined mid-stream catches up).
+  if (typeof msg.keep === 'number') {
+    if (!prev || msg.seq !== prev.seq + 1 || prev.text.length < msg.keep) return;
+    text = prev.text.slice(0, msg.keep) + (msg.text || '');
+  }
+  if (typeof text !== 'string') return;
   // Drop out-of-order frames — but accept a sequence restart (host relaunch).
   if (prev && typeof msg.seq === 'number' && msg.seq <= prev.seq && msg.seq > prev.seq - 1000) return;
-  mc.screens[msg.sessionId] = { seq: msg.seq ?? 0, text: msg.text, at: Date.now() };
+  mc.screens[msg.sessionId] = { seq: msg.seq ?? 0, text, at: Date.now() };
 }
 
 // Best available RAW screen for an agent: streamed frame first (full buffer,
@@ -681,6 +703,8 @@ function ingestDoc(msg) {
   };
 }
 
+let lastKeyFailAt = 0;
+
 function handleAck(msg) {
   // Both docCreate and research mint a new file and carry its id back so the
   // Library tab can jump straight to it; research additionally spins up an agent.
@@ -705,9 +729,13 @@ function handleAck(msg) {
     return;
   }
   // Key presses succeed silently — the screen mirror visibly updates; only
-  // surface a failure so a tap into thin air isn't confusing.
+  // surface a failure so a tap into thin air isn't confusing. Console typing can
+  // fail once per keystroke, so the complaint is rate-limited to one every 4s.
   if (msg.cmd === 'key') {
-    if (!msg.ok) toast(`Couldn't send — ${msg.detail || 'unknown error'}`);
+    if (msg.ok) return;
+    if (Date.now() - lastKeyFailAt < 4000) return;
+    lastKeyFailAt = Date.now();
+    toast(`Couldn't send — ${msg.detail || 'unknown error'}`);
     return;
   }
   toast(msg.ok ? msg.detail || 'Delivered' : `Failed — ${msg.detail || 'unknown error'}`);
@@ -746,6 +774,13 @@ export function kill(sessionId) {
 // "down", "enter", "esc") navigate/confirm. No trailing newline is added.
 export function sendKey(sessionId, key) {
   return send({ type: 'key', sessionId, key: String(key) });
+}
+// Literal typing from the console — every character reaches the tty exactly as
+// typed. Deliberately a DIFFERENT field from `key`: sending it as a key name
+// would make someone typing "up" press the up arrow.
+export function sendText(sessionId, text) {
+  if (!text) return false;
+  return send({ type: 'key', sessionId, text: String(text) });
 }
 export function launch(payload) {
   return send({ type: 'launch', ...payload });

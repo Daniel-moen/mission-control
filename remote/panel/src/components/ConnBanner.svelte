@@ -7,8 +7,8 @@
   const age = $derived(dataAge());
   const state = $derived(
     mc.link === 'offline'
-      ? { cls: 'border-crit/40 bg-crit/12 text-crit', msg: 'Offline — reconnecting…' }
-      : { cls: 'border-warn/40 bg-warn/12 text-warn', msg: 'Relay connected — your Mac is quiet or offline' },
+      ? { cls: 'border-crit/30 bg-crit/10 text-crit', msg: 'Offline — reconnecting…' }
+      : { cls: 'border-warn/30 bg-warn/10 text-warn', msg: 'Relay connected — your Mac is quiet or offline' },
   );
 </script>
 

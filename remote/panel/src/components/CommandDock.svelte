@@ -1,58 +1,51 @@
 <script>
-  import { stopAll } from '../lib/store.svelte.js';
   import Icon from './Icon.svelte';
 
-  let { active = 'fleet', onFleet, onLibrary, onData, onLaunch, onSettings, onMic } = $props();
-
-  function confirmStop() {
-    if (confirm('Send “Stop” to every agent still running?')) stopAll();
-  }
+  let { active = 'fleet', onFleet, onLibrary, onData, onLaunch, onSettings, onMic, onConsole } = $props();
 
   const navCls = (on) =>
-    `relative flex flex-1 flex-col items-center gap-1 rounded-2xl py-1.5 transition ${on ? 'text-accent bg-accent/10' : 'text-ink3'}`;
+    `relative flex flex-1 flex-col items-center gap-1 rounded-xl py-1.5 transition ${on ? 'text-ink' : 'text-ink3 hover:text-ink2'}`;
 </script>
 
 <nav class="fixed inset-x-0 bottom-0 z-50" style="padding-bottom:var(--sab)">
   <div
-    class="mx-auto flex max-w-[560px] items-end gap-1 border-t border-line bg-surface/75 px-3 pb-2 pt-2 backdrop-blur-2xl sm:mb-4 sm:rounded-[26px] sm:border"
-    style="box-shadow: inset 0 1px 0 rgba(147,200,255,0.08), 0 18px 50px -12px rgba(0,0,0,0.85)">
+    class="mx-auto flex max-w-[520px] items-end gap-1 border-t border-line bg-surface/90 px-3 pb-2 pt-2 backdrop-blur-xl sm:mb-4 sm:rounded-2xl sm:border"
+    style="box-shadow: 0 12px 40px -12px rgba(0,0,0,0.7)">
     <button onclick={onFleet} class={navCls(active === 'fleet')} aria-label="Fleet">
-      <Icon name="fleet" size={23} />
-      <span class="hud !text-inherit">Fleet</span>
+      <Icon name="fleet" size={22} />
+      <span class="text-[10px] font-medium">Fleet</span>
     </button>
     <button onclick={onLibrary} class={navCls(active === 'library')} aria-label="Library">
-      <Icon name="book" size={23} />
-      <span class="hud !text-inherit">Library</span>
+      <Icon name="book" size={22} />
+      <span class="text-[10px] font-medium">Library</span>
     </button>
     <button onclick={onData} class={navCls(active === 'data')} aria-label="Data">
-      <Icon name="pulse" size={23} />
-      <span class="hud !text-inherit">Data</span>
-    </button>
-    <button onclick={onLaunch} class={navCls(active === 'launch')} aria-label="Launch">
-      <Icon name="launch" size={23} />
-      <span class="hud !text-inherit">Launch</span>
+      <Icon name="pulse" size={22} />
+      <span class="text-[10px] font-medium">Data</span>
     </button>
 
-    <!-- hero mic: ringed, glowing, unmistakably THE button -->
+    <!-- voice: the primary action, centered and unmissable but calm -->
     <div class="flex flex-1 justify-center">
       <button
         onclick={onMic}
         aria-label="Voice command"
-        class="relative grid h-16 w-16 -translate-y-5 place-items-center rounded-full bg-gradient-to-b from-accent-bright to-accent text-accent-ink shadow-[0_10px_34px_-6px_rgba(34,217,238,0.65)] transition active:scale-90"
-        style="animation:mc-glow 3.4s ease-in-out infinite">
-        <span class="absolute -inset-1.5 rounded-full border border-accent/35"></span>
-        <span class="absolute -inset-3 rounded-full border border-accent/15"></span>
-        <Icon name="mic" size={28} stroke={2.2} />
+        class="grid h-14 w-14 -translate-y-4 place-items-center rounded-full bg-ink text-bg shadow-[0_8px_24px_-6px_rgba(0,0,0,0.6)] ring-1 ring-white/10 transition active:scale-90">
+        <Icon name="mic" size={26} stroke={2.2} />
       </button>
     </div>
 
-    <button onclick={confirmStop} class="{navCls(false)} !text-crit/80" aria-label="Stop all">
-      <Icon name="stop" size={22} fill={true} />
-      <span class="hud !text-inherit">Stop all</span>
+    <!-- straight into a terminal: pick one, full screen, type into it -->
+    <button onclick={onConsole} class={navCls(active === 'console')} aria-label="Terminal">
+      <Icon name="terminal" size={22} />
+      <span class="text-[10px] font-medium">Terminal</span>
+    </button>
+    <button onclick={onLaunch} class={navCls(active === 'launch')} aria-label="Launch">
+      <Icon name="launch" size={22} />
+      <span class="text-[10px] font-medium">Launch</span>
     </button>
     <button onclick={onSettings} class={navCls(active === 'settings')} aria-label="Settings">
       <Icon name="settings" size={22} />
-      <span class="hud !text-inherit">Settings</span>
+      <span class="text-[10px] font-medium">Settings</span>
     </button>
   </div>
 </nav>

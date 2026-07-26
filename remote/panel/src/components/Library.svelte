@@ -27,16 +27,16 @@
   let { onopen } = $props(); // onopen(docId)
 
   const KIND = {
-    plan: { icon: 'plan', text: 'text-accent', ring: 'border-accent/60 bg-accent/12 text-accent', chip: 'border-accent/40 text-accent', spine: 'from-accent/70 via-accent/25' },
-    research: { icon: 'research', text: 'text-mgr', ring: 'border-mgr/60 bg-mgr/12 text-mgr', chip: 'border-mgr/40 text-mgr', spine: 'from-mgr/70 via-mgr/25' },
+    plan: { icon: 'plan', text: 'text-accent', ring: 'border-accent/40 bg-accent/10 text-accent', chip: 'border-accent/30 text-accent', spine: 'from-accent/60 via-accent/20' },
+    research: { icon: 'research', text: 'text-mgr', ring: 'border-mgr/40 bg-mgr/10 text-mgr', chip: 'border-mgr/30 text-mgr', spine: 'from-mgr/60 via-mgr/20' },
     note: { icon: 'note', text: 'text-ink2', ring: 'border-line2 bg-raised/60 text-ink2', chip: 'border-line2 text-ink3', spine: 'from-line2 via-line' },
   };
   const kindOf = (k) => KIND[k] || KIND.note;
 
   const STATUS = {
     draft: 'border-line2 text-ink3',
-    active: 'border-accent/50 text-accent',
-    done: 'border-ok/50 text-ok',
+    active: 'border-accent/40 text-accent',
+    done: 'border-ok/40 text-ok',
     archived: 'border-line text-ink3/70',
   };
   const statusChip = (s) => STATUS[s] || STATUS.draft;
@@ -217,47 +217,45 @@
   }
 </script>
 
-<div class="mx-auto w-full max-w-[1400px] px-4 pt-4 sm:px-6">
-  <div class="mb-3 flex flex-wrap items-center gap-3">
-    <span class="hud !text-accent">Library</span>
-    <span class="h-px min-w-6 flex-1 bg-gradient-to-r from-line2 to-transparent"></span>
-    <button onclick={() => (researching = true)} class="flex min-h-[44px] items-center gap-2 rounded-xl bg-mgr px-3.5 py-2 font-mono text-[12px] font-bold text-[#160f2e] shadow-[0_0_24px_-8px_rgba(167,139,250,0.7)] transition active:scale-95">
+<div class="mx-auto w-full max-w-[1400px] px-4 pt-5 sm:px-6">
+  <div class="mb-4 flex flex-wrap items-center gap-2">
+    <h1 class="display mr-auto text-[20px] font-semibold leading-none tracking-tight">Library</h1>
+    <button onclick={() => (researching = true)} class="flex min-h-[40px] items-center gap-2 rounded-xl bg-ink px-3.5 py-2 text-[13px] font-semibold text-bg transition active:scale-95">
       <Icon name="research" size={15} /> Research
     </button>
-    <button onclick={() => (drafting = true)} class="flex min-h-[44px] items-center gap-2 rounded-xl border border-mgr/50 bg-mgr/10 px-3.5 py-2 font-mono text-[12px] font-semibold text-mgr transition active:scale-95">
+    <button onclick={() => (drafting = true)} class="flex min-h-[40px] items-center gap-2 rounded-xl border border-line bg-surface px-3.5 py-2 text-[13px] font-medium text-ink2 transition hover:border-line2 active:scale-95">
       <Icon name="bolt" size={15} /> Draft plan
     </button>
-    <button onclick={() => (picking = true)} class="flex min-h-[44px] items-center gap-2 rounded-xl border border-accent/50 bg-accent/10 px-3.5 py-2 font-mono text-[12px] font-semibold text-accent transition active:scale-95">
+    <button onclick={() => (picking = true)} class="flex min-h-[40px] items-center gap-2 rounded-xl border border-line bg-surface px-3.5 py-2 text-[13px] font-medium text-ink2 transition hover:border-line2 active:scale-95">
       <Icon name="note" size={15} /> New doc
     </button>
   </div>
 
   {#if hostTooOld}
-    <div class="panel rounded-[22px] p-8 text-center">
-      <div class="display text-[17px] font-bold">Your Mac app is out of date</div>
-      <p class="mx-auto mt-2 max-w-[440px] font-mono text-[12.5px] leading-relaxed text-ink3">The document library lives on your Mac. Rebuild and relaunch Mission Control there to start syncing plans, research, and notes.</p>
+    <div class="panel rounded-2xl p-8 text-center">
+      <div class="text-[16px] font-semibold">Your Mac app is out of date</div>
+      <p class="mx-auto mt-2 max-w-[440px] text-[13px] leading-relaxed text-ink3">The document library lives on your Mac. Rebuild and relaunch Mission Control there to start syncing plans, research, and notes.</p>
     </div>
   {:else}
     <!-- filter bar: kind (with counts) · status · tags -->
-    <div class="mb-3 flex flex-col gap-2.5">
-      <div class="flex flex-wrap gap-2">
+    <div class="mb-3 flex flex-col gap-2">
+      <div class="flex flex-wrap gap-1.5">
         {#each KIND_TABS as [k, label]}
-          <button onclick={() => (kindFilter = k)} class="flex min-h-[40px] items-center gap-1.5 rounded-full border px-3.5 py-1.5 font-mono text-[12px] transition active:scale-95 {kindFilter === k ? 'border-accent/60 bg-accent/12 text-accent' : 'border-line bg-raised/60 text-ink2'}">
+          <button onclick={() => (kindFilter = k)} class="flex min-h-[36px] items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-[13px] font-medium transition active:scale-95 {kindFilter === k ? 'border-line2 bg-raised text-ink' : 'border-line text-ink2 hover:border-line2'}">
             {label}
-            <span class="tabular-nums {kindFilter === k ? 'text-accent/70' : 'text-ink3'}">{kindCount(k)}</span>
+            <span class="tabular-nums text-ink3">{kindCount(k)}</span>
           </button>
         {/each}
-      </div>
-      <div class="flex flex-wrap gap-2">
+        <span class="mx-1 hidden self-center text-line2 sm:block">·</span>
         {#each STATUS_TABS as [s, label]}
-          <button onclick={() => (statusFilter = s)} class="min-h-[36px] rounded-full border px-3 py-1 font-mono text-[11.5px] transition active:scale-95 {statusFilter === s ? 'border-ink2/50 bg-raised text-ink' : 'border-line bg-raised/40 text-ink3'}">{label}</button>
+          <button onclick={() => (statusFilter = s)} class="min-h-[36px] rounded-full border px-3 py-1 text-[12.5px] transition active:scale-95 {statusFilter === s ? 'border-line2 bg-raised text-ink' : 'border-line text-ink3 hover:border-line2'}">{label}</button>
         {/each}
       </div>
       {#if tags.length}
-        <div class="flex flex-wrap gap-2">
-          <button onclick={() => (tagFilter = 'all')} class="flex min-h-[36px] items-center gap-1 rounded-full border px-3 py-1 font-mono text-[11.5px] transition active:scale-95 {tagFilter === 'all' ? 'border-ink2/50 bg-raised text-ink' : 'border-line bg-raised/40 text-ink3'}"><Icon name="tag" size={12} /> All tags</button>
+        <div class="flex flex-wrap gap-1.5">
+          <button onclick={() => (tagFilter = 'all')} class="flex min-h-[32px] items-center gap-1 rounded-full border px-3 py-1 text-[12px] transition active:scale-95 {tagFilter === 'all' ? 'border-line2 bg-raised text-ink' : 'border-line text-ink3'}"><Icon name="tag" size={12} /> All tags</button>
           {#each tags as t}
-            <button onclick={() => (tagFilter = tagFilter === t ? 'all' : t)} class="min-h-[36px] rounded-full border px-3 py-1 font-mono text-[11.5px] transition active:scale-95 {tagFilter === t ? 'border-accent/60 bg-accent/12 text-accent' : 'border-line bg-raised/40 text-ink3'}">#{t}</button>
+            <button onclick={() => (tagFilter = tagFilter === t ? 'all' : t)} class="min-h-[32px] rounded-full border px-3 py-1 text-[12px] transition active:scale-95 {tagFilter === t ? 'border-accent/40 bg-accent/10 text-accent' : 'border-line text-ink3'}">#{t}</button>
           {/each}
         </div>
       {/if}
@@ -266,29 +264,29 @@
     <!-- search -->
     <div class="mb-4 flex items-center gap-2">
       <div class="relative w-full max-w-md">
-        <span class="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-ink3"><Icon name="search" size={16} /></span>
+        <span class="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-ink3"><Icon name="search" size={16} /></span>
         <input
           bind:value={q}
-          placeholder="Search titles instantly, bodies deeply…"
-          class="panel h-11 w-full rounded-full pl-11 pr-4 font-mono text-[14px] outline-none transition focus:border-accent" />
+          placeholder="Search titles and full text…"
+          class="panel h-10 w-full rounded-xl pl-10 pr-4 text-[14px] outline-none transition focus:border-line2" />
       </div>
       {#if q.trim()}
-        <button onclick={() => (q = '')} class="h-11 flex-none rounded-full border border-line bg-surface px-4 font-mono text-[13px] font-semibold text-ink2 transition active:scale-95">Clear ✕</button>
+        <button onclick={() => (q = '')} class="h-10 flex-none rounded-xl border border-line bg-surface px-4 text-[13px] font-medium text-ink2 transition active:scale-95">Clear ✕</button>
       {/if}
     </div>
 
     {#if !mc.docs.length}
-      <div class="panel rounded-[22px] p-8 text-center">
-        <div class="mx-auto mb-3 grid h-14 w-14 place-items-center rounded-2xl border border-line bg-raised/60 text-accent"><Icon name="book" size={26} /></div>
-        <div class="display text-[17px] font-bold">Your library is empty</div>
-        <p class="mx-auto mt-2 max-w-[480px] font-mono text-[12.5px] leading-relaxed text-ink3">
-          The library is a folder of markdown files (<span class="text-ink2">~/.mission-control/library</span>) on your Mac — written by you or by agents, readable from anywhere. Send an agent to <span class="text-mgr">research</span> a topic, <span class="text-accent">draft a plan</span>, or start a note by hand.
+      <div class="panel rounded-2xl p-8 text-center">
+        <div class="mx-auto mb-3 grid h-14 w-14 place-items-center rounded-2xl border border-line bg-raised/60 text-ink3"><Icon name="book" size={26} /></div>
+        <div class="text-[16px] font-semibold">Your library is empty</div>
+        <p class="mx-auto mt-2 max-w-[480px] text-[13px] leading-relaxed text-ink3">
+          The library is a folder of markdown files (<span class="font-mono text-[12px] text-ink2">~/.mission-control/library</span>) on your Mac — written by you or by agents, readable from anywhere. Send an agent to research a topic, draft a plan, or start a note by hand.
         </p>
       </div>
     {:else if !localDocs.length && !bodyHits.length}
-      <div class="panel rounded-[22px] p-8 text-center">
-        <div class="display text-[16px] font-bold">Nothing matches</div>
-        <p class="mx-auto mt-2 max-w-[420px] font-mono text-[12.5px] leading-relaxed text-ink3">Try a different kind, status, tag, or search term.</p>
+      <div class="panel rounded-2xl p-8 text-center">
+        <div class="text-[15px] font-semibold">Nothing matches</div>
+        <p class="mx-auto mt-2 max-w-[420px] text-[13px] leading-relaxed text-ink3">Try a different kind, status, tag, or search term.</p>
       </div>
     {:else}
       {#if localDocs.length}
@@ -300,19 +298,18 @@
       {/if}
 
       {#if bodyHits.length}
-        <div class="mt-6 mb-3 flex items-center gap-3">
-          <span class="hud">Found in body — {bodyHits.length}</span>
-          <span class="h-px flex-1 bg-gradient-to-r from-line2 to-transparent"></span>
+        <div class="mt-6 mb-3 flex items-baseline gap-2">
+          <h2 class="text-[13px] font-semibold text-ink2">Found in body</h2>
+          <span class="text-[13px] tabular-nums text-ink3">{bodyHits.length}</span>
         </div>
         <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           {#each bodyHits as h (h.meta.id)}
-            <button onclick={() => onopen(h.meta.id)} class="panel panel-hover anim-rise relative flex flex-col gap-2 overflow-hidden rounded-[22px] p-5 text-left transition active:scale-[0.99]">
-              <span class="absolute inset-y-0 left-0 w-[3px] bg-gradient-to-b {kindOf(h.meta.kind).spine} to-transparent"></span>
+            <button onclick={() => onopen(h.meta.id)} class="panel panel-hover anim-rise relative flex flex-col gap-2 overflow-hidden rounded-2xl p-4 text-left transition active:scale-[0.99]">
               <div class="flex items-start gap-3">
-                <div class="grid h-9 w-9 flex-none place-items-center rounded-xl border {kindOf(h.meta.kind).ring}"><Icon name={kindOf(h.meta.kind).icon} size={18} /></div>
+                <div class="grid h-9 w-9 flex-none place-items-center rounded-lg border {kindOf(h.meta.kind).ring}"><Icon name={kindOf(h.meta.kind).icon} size={17} /></div>
                 <div class="min-w-0 flex-1">
-                  <div class="display truncate text-[16px] font-bold leading-tight">{h.meta.title}</div>
-                  {#if h.meta.subject}<div class="truncate font-mono text-[12px] text-ink2">{h.meta.subject}</div>{/if}
+                  <div class="truncate text-[15px] font-semibold leading-tight">{h.meta.title}</div>
+                  {#if h.meta.subject}<div class="truncate text-[12.5px] text-ink2">{h.meta.subject}</div>{/if}
                 </div>
               </div>
               <div class="flex flex-col gap-1.5">
@@ -330,60 +327,58 @@
 
 {#snippet card(d)}
   {@const k = kindOf(d.kind)}
-  <button onclick={() => onopen(d.id)} class="panel panel-hover anim-rise relative flex flex-col gap-2 overflow-hidden rounded-[22px] p-5 text-left transition active:scale-[0.99]">
-    <span class="absolute inset-y-0 left-0 w-[3px] bg-gradient-to-b {k.spine} to-transparent"></span>
+  <button onclick={() => onopen(d.id)} class="panel panel-hover anim-rise relative flex flex-col gap-2 overflow-hidden rounded-2xl p-4 text-left transition active:scale-[0.99]">
     <div class="flex items-start gap-3">
-      <div class="relative grid h-9 w-9 flex-none place-items-center rounded-xl border {k.ring}">
-        <Icon name={k.icon} size={18} />
+      <div class="relative grid h-9 w-9 flex-none place-items-center rounded-lg border {k.ring}">
+        <Icon name={k.icon} size={17} />
         {#if d.kind === 'research' && d.status === 'active'}
-          <span class="absolute -right-1 -top-1 flex h-3 w-3"><span class="absolute inline-flex h-full w-full rounded-full bg-accent/70" style="animation:mc-ping 1.6s ease-out infinite"></span><span class="relative inline-flex h-3 w-3 rounded-full bg-accent glow-accent"></span></span>
+          <span class="absolute -right-1 -top-1 flex h-2.5 w-2.5"><span class="absolute inline-flex h-full w-full rounded-full bg-accent/70" style="animation:mc-ping 1.6s ease-out infinite"></span><span class="relative inline-flex h-2.5 w-2.5 rounded-full bg-accent"></span></span>
         {/if}
       </div>
       <div class="min-w-0 flex-1">
-        <div class="display truncate text-[16px] font-bold leading-tight">{d.title}</div>
-        {#if d.subject}<div class="mt-0.5 truncate font-mono text-[12.5px] font-semibold {k.text}">{d.subject}</div>{/if}
+        <div class="truncate text-[15px] font-semibold leading-tight">{d.title}</div>
+        {#if d.subject}<div class="mt-0.5 truncate text-[12.5px] {k.text}">{d.subject}</div>{/if}
       </div>
-      <span class="flex-none rounded-md border px-1.5 py-px font-mono text-[10px] uppercase tracking-wider {statusChip(d.status)}">{docStatusLabel(d.status)}</span>
+      <span class="flex-none rounded-md border px-1.5 py-px text-[10px] font-medium uppercase tracking-wide {statusChip(d.status)}">{docStatusLabel(d.status)}</span>
     </div>
 
     {#if d.preview}
-      <p class="line-clamp-2 font-mono text-[12px] leading-relaxed text-ink3">{d.preview}</p>
+      <p class="line-clamp-2 text-[12.5px] leading-relaxed text-ink3">{d.preview}</p>
     {/if}
 
     {#if (d.tags || []).length}
       <div class="flex flex-wrap gap-1.5">
         {#each d.tags.slice(0, 4) as t}
-          <span class="rounded-md border {k.chip} px-1.5 py-px font-mono text-[10.5px]">#{t}</span>
+          <span class="rounded-md border {k.chip} px-1.5 py-px text-[11px]">#{t}</span>
         {/each}
       </div>
     {/if}
 
-    <div class="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] text-ink3">
+    <div class="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-ink3">
       {#if d.folder}<span class="flex items-center gap-1"><Icon name="folder" size={12} />{d.folder}</span>{/if}
       <span>{ago(d.updatedAt, mc.now)}</span>
       {#if d.words}<span>{d.words.toLocaleString()} words</span>{/if}
-      <span class="rounded-md border px-1.5 py-px {d.session ? 'border-mgr/40 text-mgr' : 'border-line2 text-ink3'}">{d.session ? 'agent' : 'you'}</span>
+      <span class="rounded-md border px-1.5 py-px {d.session ? 'border-mgr/30 text-mgr' : 'border-line2 text-ink3'}">{d.session ? 'agent' : 'you'}</span>
     </div>
   </button>
 {/snippet}
 
 <!-- new-doc kind picker -->
 {#if picking}
-  <div class="fixed inset-0 z-[80] flex items-end justify-center bg-bg/80 backdrop-blur-sm sm:items-center" onclick={(e) => e.target === e.currentTarget && (picking = false)} role="presentation">
-    <div class="panel anim-rise w-full max-w-[460px] rounded-t-[26px] p-5 sm:rounded-[26px]" style="padding-bottom:calc(20px + var(--sab))">
-      <div class="mb-3 flex items-center gap-3">
-        <span class="hud !text-accent">New document</span>
-        <span class="h-px flex-1 bg-gradient-to-r from-line2 to-transparent"></span>
-        <button onclick={() => (picking = false)} aria-label="Close" class="grid h-11 w-11 flex-none place-items-center rounded-xl text-ink2 transition hover:bg-raised"><Icon name="close" size={20} /></button>
+  <div class="fixed inset-0 z-[80] flex items-end justify-center bg-black/60 backdrop-blur-sm sm:items-center" onclick={(e) => e.target === e.currentTarget && (picking = false)} role="presentation">
+    <div class="panel anim-rise w-full max-w-[460px] rounded-t-2xl p-5 sm:rounded-2xl" style="padding-bottom:calc(20px + var(--sab))">
+      <div class="mb-4 flex items-center gap-3">
+        <h3 class="flex-1 text-[16px] font-semibold">New document</h3>
+        <button onclick={() => (picking = false)} aria-label="Close" class="grid h-10 w-10 flex-none place-items-center rounded-xl text-ink2 transition hover:bg-raised"><Icon name="close" size={20} /></button>
       </div>
-      <div class="grid gap-2.5">
+      <div class="grid gap-2">
         {#each [['plan', 'A build plan you can hand to a fleet'], ['research', 'Send an agent to research and write it for you'], ['note', 'A free-form note to keep']] as [k, blurb]}
           {@const kk = kindOf(k)}
-          <button onclick={() => newDoc(k)} class="flex items-center gap-3 rounded-xl border border-line bg-raised/60 p-3.5 text-left transition active:scale-[0.98]">
-            <div class="grid h-10 w-10 flex-none place-items-center rounded-xl border {kk.ring}"><Icon name={kk.icon} size={19} /></div>
+          <button onclick={() => newDoc(k)} class="flex items-center gap-3 rounded-xl border border-line bg-raised/50 p-3.5 text-left transition hover:border-line2 active:scale-[0.98]">
+            <div class="grid h-10 w-10 flex-none place-items-center rounded-lg border {kk.ring}"><Icon name={kk.icon} size={18} /></div>
             <div class="min-w-0">
-              <div class="display text-[15px] font-bold {kk.text}">{kindLabel(k)}</div>
-              <div class="font-mono text-[11.5px] leading-snug text-ink3">{blurb}</div>
+              <div class="text-[14px] font-semibold">{kindLabel(k)}</div>
+              <div class="text-[12.5px] leading-snug text-ink3">{blurb}</div>
             </div>
           </button>
         {/each}
@@ -394,66 +389,64 @@
 
 <!-- research sheet -->
 {#if researching}
-  <div class="fixed inset-0 z-[80] flex items-end justify-center bg-bg/80 backdrop-blur-sm sm:items-center" onclick={(e) => e.target === e.currentTarget && (researching = false)} role="presentation">
-    <div class="panel anim-rise w-full max-w-[560px] rounded-t-[26px] p-5 sm:rounded-[26px]" style="padding-bottom:calc(20px + var(--sab))">
-      <div class="mb-3 flex items-center gap-3">
-        <span class="hud !text-mgr">Research with an agent</span>
-        <span class="h-px flex-1 bg-gradient-to-r from-line2 to-transparent"></span>
+  <div class="fixed inset-0 z-[80] flex items-end justify-center bg-black/60 backdrop-blur-sm sm:items-center" onclick={(e) => e.target === e.currentTarget && (researching = false)} role="presentation">
+    <div class="panel anim-rise w-full max-w-[560px] rounded-t-2xl p-5 sm:rounded-2xl" style="padding-bottom:calc(20px + var(--sab))">
+      <div class="mb-4 flex items-center gap-2">
+        <h3 class="flex-1 text-[16px] font-semibold">Research with an agent</h3>
         {#if speechSupported}
-          <button onclick={toggleResearchMic} aria-label="Dictate topic" class="grid h-11 w-11 flex-none place-items-center rounded-xl border transition active:scale-95 {rMic ? 'border-crit bg-crit/15 text-crit glow-crit' : 'border-line bg-raised/60 text-ink2'}" style={rMic ? 'animation:mc-ring 1.4s ease-out infinite' : ''}><Icon name="mic" size={18} /></button>
+          <button onclick={toggleResearchMic} aria-label="Dictate topic" class="grid h-10 w-10 flex-none place-items-center rounded-xl border transition active:scale-95 {rMic ? 'border-crit bg-crit/12 text-crit' : 'border-line bg-raised/60 text-ink2'}" style={rMic ? 'animation:mc-ring 1.4s ease-out infinite' : ''}><Icon name="mic" size={18} /></button>
         {/if}
-        <button onclick={() => (researching = false)} aria-label="Close" class="grid h-11 w-11 flex-none place-items-center rounded-xl text-ink2 transition hover:bg-raised"><Icon name="close" size={20} /></button>
+        <button onclick={() => (researching = false)} aria-label="Close" class="grid h-10 w-10 flex-none place-items-center rounded-xl text-ink2 transition hover:bg-raised"><Icon name="close" size={20} /></button>
       </div>
-      <textarea bind:value={rTopic} rows="3" placeholder="What should the agent research?" class="min-h-20 w-full resize-y rounded-xl border border-line bg-inset px-4 py-3 text-[16px] leading-relaxed text-ink outline-none transition placeholder:text-ink3 focus:border-mgr/70 noscroll"></textarea>
-      <input bind:value={rSubject} placeholder="Subject / company (optional)" class="mt-3 w-full rounded-xl border border-line bg-inset px-4 py-3 text-[15px] text-ink outline-none transition placeholder:text-ink3 focus:border-mgr/70" />
-      <input bind:value={rTags} placeholder="Tags, comma separated (optional)" class="mt-3 w-full rounded-xl border border-line bg-inset px-4 py-3 font-mono text-[14px] text-ink outline-none transition placeholder:text-ink3 focus:border-mgr/70" />
-      <input bind:value={rDir} oninput={() => (rDirTouched = true)} placeholder="~/path/to/project (optional)" class="mt-3 w-full rounded-xl border border-line bg-inset px-4 py-3 font-mono text-[14px] text-ink outline-none transition placeholder:text-ink3 focus:border-mgr/70" />
+      <textarea bind:value={rTopic} rows="3" placeholder="What should the agent research?" class="min-h-20 w-full resize-y rounded-xl border border-line bg-inset px-4 py-3 text-[16px] leading-relaxed text-ink outline-none transition placeholder:text-ink3 focus:border-line2 noscroll"></textarea>
+      <input bind:value={rSubject} placeholder="Subject / company (optional)" class="mt-3 w-full rounded-xl border border-line bg-inset px-4 py-3 text-[15px] text-ink outline-none transition placeholder:text-ink3 focus:border-line2" />
+      <input bind:value={rTags} placeholder="Tags, comma separated (optional)" class="mt-3 w-full rounded-xl border border-line bg-inset px-4 py-3 text-[14px] text-ink outline-none transition placeholder:text-ink3 focus:border-line2" />
+      <input bind:value={rDir} oninput={() => (rDirTouched = true)} placeholder="~/path/to/project (optional)" class="mt-3 w-full rounded-xl border border-line bg-inset px-4 py-3 font-mono text-[13px] text-ink outline-none transition placeholder:text-ink3 focus:border-line2" />
       {#if mc.knownDirs.length}
-        <div class="mt-2 flex flex-wrap gap-2">
+        <div class="mt-2 flex flex-wrap gap-1.5">
           {#each mc.knownDirs as dd}
-            <button onclick={() => { rDir = dd; rDirTouched = true; }} class="min-h-[40px] rounded-xl border px-3 py-1.5 font-mono text-[12px] transition active:scale-95 {dd === rDir ? 'border-mgr/60 bg-mgr/12 text-mgr' : 'border-line bg-raised/60 text-ink2'}">{dd.split('/').filter(Boolean).pop() || dd}</button>
+            <button onclick={() => { rDir = dd; rDirTouched = true; }} class="min-h-[36px] rounded-lg border px-3 py-1.5 text-[13px] transition active:scale-95 {dd === rDir ? 'border-line2 bg-raised text-ink' : 'border-line text-ink2'}">{dd.split('/').filter(Boolean).pop() || dd}</button>
           {/each}
         </div>
       {/if}
-      <div class="mt-3 flex items-center gap-3">
-        <select bind:value={rModel} class="min-h-[48px] flex-1 rounded-xl border border-line2 bg-raised px-4 py-3 text-[15px] text-ink outline-none transition focus:border-mgr/70">
+      <div class="mt-4 flex items-center gap-3">
+        <select bind:value={rModel} class="min-h-[46px] flex-1 rounded-xl border border-line bg-raised px-4 py-3 text-[14px] text-ink outline-none transition focus:border-line2">
           {#each models as m}<option value={m.flag}>{m.label}</option>{/each}
         </select>
-        <button onclick={launchResearch} class="min-h-[48px] rounded-xl bg-mgr px-5 font-mono text-[13px] font-bold uppercase tracking-[0.14em] text-[#160f2e] transition active:scale-95">Research</button>
+        <button onclick={launchResearch} class="min-h-[46px] rounded-xl bg-ink px-5 text-[14px] font-semibold text-bg transition active:scale-95">Research</button>
       </div>
-      <p class="mt-3 font-mono text-[11.5px] leading-relaxed text-ink3">One agent researches and writes its report straight into the library — you can read it here as it lands.</p>
+      <p class="mt-3 text-[12.5px] leading-relaxed text-ink3">One agent researches and writes its report straight into the library — you can read it here as it lands.</p>
     </div>
   </div>
 {/if}
 
 <!-- draft-a-plan-with-agent sheet -->
 {#if drafting}
-  <div class="fixed inset-0 z-[80] flex items-end justify-center bg-bg/80 backdrop-blur-sm sm:items-center" onclick={(e) => e.target === e.currentTarget && (drafting = false)} role="presentation">
-    <div class="panel anim-rise w-full max-w-[560px] rounded-t-[26px] p-5 sm:rounded-[26px]" style="padding-bottom:calc(20px + var(--sab))">
-      <div class="mb-3 flex items-center gap-3">
-        <span class="hud !text-mgr">Draft a plan with an agent</span>
-        <span class="h-px flex-1 bg-gradient-to-r from-line2 to-transparent"></span>
+  <div class="fixed inset-0 z-[80] flex items-end justify-center bg-black/60 backdrop-blur-sm sm:items-center" onclick={(e) => e.target === e.currentTarget && (drafting = false)} role="presentation">
+    <div class="panel anim-rise w-full max-w-[560px] rounded-t-2xl p-5 sm:rounded-2xl" style="padding-bottom:calc(20px + var(--sab))">
+      <div class="mb-4 flex items-center gap-2">
+        <h3 class="flex-1 text-[16px] font-semibold">Draft a plan with an agent</h3>
         {#if speechSupported}
-          <button onclick={toggleDraftMic} aria-label="Dictate goal" class="grid h-11 w-11 flex-none place-items-center rounded-xl border transition active:scale-95 {dMic ? 'border-crit bg-crit/15 text-crit glow-crit' : 'border-line bg-raised/60 text-ink2'}" style={dMic ? 'animation:mc-ring 1.4s ease-out infinite' : ''}><Icon name="mic" size={18} /></button>
+          <button onclick={toggleDraftMic} aria-label="Dictate goal" class="grid h-10 w-10 flex-none place-items-center rounded-xl border transition active:scale-95 {dMic ? 'border-crit bg-crit/12 text-crit' : 'border-line bg-raised/60 text-ink2'}" style={dMic ? 'animation:mc-ring 1.4s ease-out infinite' : ''}><Icon name="mic" size={18} /></button>
         {/if}
-        <button onclick={() => (drafting = false)} aria-label="Close" class="grid h-11 w-11 flex-none place-items-center rounded-xl text-ink2 transition hover:bg-raised"><Icon name="close" size={20} /></button>
+        <button onclick={() => (drafting = false)} aria-label="Close" class="grid h-10 w-10 flex-none place-items-center rounded-xl text-ink2 transition hover:bg-raised"><Icon name="close" size={20} /></button>
       </div>
-      <textarea bind:value={goal} rows="3" placeholder="What should the plan achieve?" class="min-h-20 w-full resize-y rounded-xl border border-line bg-inset px-4 py-3 text-[16px] leading-relaxed text-ink outline-none transition placeholder:text-ink3 focus:border-mgr/70 noscroll"></textarea>
-      <input bind:value={dDir} oninput={() => (dDirTouched = true)} placeholder="~/path/to/project" class="mt-3 w-full rounded-xl border border-line bg-inset px-4 py-3 font-mono text-[14px] text-ink outline-none transition placeholder:text-ink3 focus:border-mgr/70" />
+      <textarea bind:value={goal} rows="3" placeholder="What should the plan achieve?" class="min-h-20 w-full resize-y rounded-xl border border-line bg-inset px-4 py-3 text-[16px] leading-relaxed text-ink outline-none transition placeholder:text-ink3 focus:border-line2 noscroll"></textarea>
+      <input bind:value={dDir} oninput={() => (dDirTouched = true)} placeholder="~/path/to/project" class="mt-3 w-full rounded-xl border border-line bg-inset px-4 py-3 font-mono text-[13px] text-ink outline-none transition placeholder:text-ink3 focus:border-line2" />
       {#if mc.knownDirs.length}
-        <div class="mt-2 flex flex-wrap gap-2">
+        <div class="mt-2 flex flex-wrap gap-1.5">
           {#each mc.knownDirs as dd}
-            <button onclick={() => { dDir = dd; dDirTouched = true; }} class="min-h-[40px] rounded-xl border px-3 py-1.5 font-mono text-[12px] transition active:scale-95 {dd === dDir ? 'border-mgr/60 bg-mgr/12 text-mgr' : 'border-line bg-raised/60 text-ink2'}">{dd.split('/').filter(Boolean).pop() || dd}</button>
+            <button onclick={() => { dDir = dd; dDirTouched = true; }} class="min-h-[36px] rounded-lg border px-3 py-1.5 text-[13px] transition active:scale-95 {dd === dDir ? 'border-line2 bg-raised text-ink' : 'border-line text-ink2'}">{dd.split('/').filter(Boolean).pop() || dd}</button>
           {/each}
         </div>
       {/if}
-      <div class="mt-3 flex items-center gap-3">
-        <select bind:value={dModel} class="min-h-[48px] flex-1 rounded-xl border border-line2 bg-raised px-4 py-3 text-[15px] text-ink outline-none transition focus:border-mgr/70">
+      <div class="mt-4 flex items-center gap-3">
+        <select bind:value={dModel} class="min-h-[46px] flex-1 rounded-xl border border-line bg-raised px-4 py-3 text-[14px] text-ink outline-none transition focus:border-line2">
           {#each models as m}<option value={m.flag}>{m.label}</option>{/each}
         </select>
-        <button onclick={launchDraft} class="min-h-[48px] rounded-xl bg-mgr px-5 font-mono text-[13px] font-bold uppercase tracking-[0.14em] text-[#160f2e] transition active:scale-95">Draft</button>
+        <button onclick={launchDraft} class="min-h-[46px] rounded-xl bg-ink px-5 text-[14px] font-semibold text-bg transition active:scale-95">Draft</button>
       </div>
-      <p class="mt-3 font-mono text-[11.5px] leading-relaxed text-ink3">Launches one agent in read-only plan mode. It explores the project, drafts the plan, and the plan file appears here — nothing gets built until you say so.</p>
+      <p class="mt-3 text-[12.5px] leading-relaxed text-ink3">Launches one agent in read-only plan mode. It explores the project, drafts the plan, and the plan file appears here — nothing gets built until you say so.</p>
     </div>
   </div>
 {/if}

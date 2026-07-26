@@ -10,6 +10,16 @@ export default defineConfig({
     svelte({ preprocess: vitePreprocess() }),
     tailwindcss(),
   ],
+  server: {
+    // The panel opens its WebSocket against location.host, so dev mode proxies
+    // /ws through to a local relay (server.js) — run it on 8899 (or MC_RELAY).
+    proxy: {
+      '/ws': {
+        target: `ws://localhost:${process.env.MC_RELAY || 8899}`,
+        ws: true,
+      },
+    },
+  },
   build: {
     outDir: '../dist',
     emptyOutDir: true,
