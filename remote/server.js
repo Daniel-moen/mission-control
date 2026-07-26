@@ -25,6 +25,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { WebSocketServer } = require('ws');
+const { createApi } = require('./api');
 
 const PORT = process.env.PORT || 8080;
 const TOKEN = process.env.MC_TOKEN || '';
@@ -88,6 +89,16 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // REST API for machine callers (OpenClaw etc.) — see api.js.
+  if (pathname === '/api' || pathname.startsWith('/api/')) {
+    api.handle(req, res, url).catch((err) => {
+      console.error('api error:', err);
+      if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'internal error' }));
+    });
+    return;
+  }
+
   // Hashed, fingerprinted assets — safe to cache forever.
   if (pathname.startsWith('/assets/')) {
     const rel = path.normalize(pathname).replace(/^(\.\.[/\\])+/, '');
@@ -122,6 +133,13 @@ const wss = new WebSocketServer({
 let host = null; // the Mac's socket (at most one)
 let lastSnapshot = null; // most recent snapshot JSON string, for late joiners
 const viewers = new Set();
+
+const api = createApi({
+  tokenOk,
+  hostOnline: () => host !== null,
+  latestSnapshot: () => lastSnapshot,
+  sendToHost: (obj) => sendTo(host, obj),
+});
 
 server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url, 'http://x');
@@ -171,13 +189,15 @@ wss.on('connection', (ws) => {
 
     ws.on('message', (data) => {
       const text = data.toString();
-      let type;
+      let frame;
       try {
-        type = JSON.parse(text).type;
+        frame = JSON.parse(text);
       } catch {
         return;
       }
-      if (type === 'snapshot') lastSnapshot = text;
+      if (!frame || typeof frame.type !== 'string') return;
+      if (frame.type === 'snapshot') lastSnapshot = text;
+      api.onHostFrame(frame); // settle any pending REST requests
       fanOutToViewers(text); // snapshots and acks both go to every viewer
     });
 

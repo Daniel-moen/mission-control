@@ -75,8 +75,19 @@ final class AgentManager: ObservableObject {
     private var knownSessions: Set<String> = []
     private let settings = Settings.shared
 
-    /// Sessions whose transcript changed within this window are shown.
+    /// How far back the transcript sweep looks when finding sessions. It is a
+    /// DISCOVERY heuristic only — never a liveness test. An agent that is idling
+    /// on your input writes nothing (Claude Code batch-writes transcript lines
+    /// when a turn or tool call completes), so after this long its file looks as
+    /// cold as one from last week while its process sits right there. Liveness
+    /// comes from the process scan; see `liveTranscripts` and `reapDepartedSessions`.
     private let discoveryWindow: TimeInterval = 20 * 60
+
+    /// sessionId → transcript path, for sessions found via their live process
+    /// rather than the recency sweep. Misses are remembered briefly too, so a
+    /// process with no transcript doesn't re-walk the projects tree every tick.
+    private var transcriptPathCache: [String: String] = [:]
+    private var transcriptMisses: [String: Date] = [:]
 
     var activeCount: Int { agents.filter { $0.status == .active }.count }
 
@@ -575,7 +586,7 @@ final class AgentManager: ObservableObject {
         let now = Date()
         var seen = Set<String>()
 
-        for (path, mtime) in recentTranscripts() {
+        for (path, mtime) in recentTranscripts() + liveTranscripts() {
             let sid = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
             if suppressed.contains(sid) { continue }
             seen.insert(sid)
@@ -600,10 +611,22 @@ final class AgentManager: ObservableObject {
             updateStatus(run, now: now)
         }
 
-        // Drop sessions that fell out of the discovery window.
-        let stale = agents.filter { !seen.contains($0.sessionId) }
-        for run in stale { byId.removeValue(forKey: run.sessionId) }
-        if !stale.isEmpty { agents.removeAll { !seen.contains($0.sessionId) } }
+        // Drop sessions that fell out of the discovery window — but only when no
+        // live process backs them. Transcript silence is not death: an agent
+        // waiting on you writes nothing at all, and evicting it here would take a
+        // running agent, its terminal and its TTY off the board while you were
+        // still sitting in front of it. Departures are `reapDepartedSessions`'
+        // job, which watches the process scan and waits out its races.
+        // `everBound` matters as much as `processAlive`: the latter starts out
+        // optimistically true, so without it a transcript that never had a
+        // process behind it (an old one-shot run, a session copied from another
+        // machine) would sit on the board forever instead of ageing out.
+        let stale = agents.filter { !seen.contains($0.sessionId) && !($0.everBound && $0.processAlive) }
+        if !stale.isEmpty {
+            let goneIds = Set(stale.map { $0.sessionId })
+            for id in goneIds { byId.removeValue(forKey: id) }
+            agents.removeAll { goneIds.contains($0.sessionId) }
+        }
 
         // Kick off a liveness scan; it reaps departed sessions on completion.
         refreshLivenessIfNeeded()
@@ -710,6 +733,46 @@ final class AgentManager: ObservableObject {
         return sent
     }
 
+    /// Transcripts of live `claude` processes the recency sweep can't see. The
+    /// sweep finds sessions by file mtime, so a session that has been idle longer
+    /// than `discoveryWindow` is invisible to it — including at launch, when a
+    /// quiet-but-running agent would otherwise never be adopted at all. The
+    /// process scan knows those sessions (Claude Code's own pid→sessionId
+    /// registry), so we look their transcripts up by name and hand them to the
+    /// same discovery path, real mtime included.
+    private func liveTranscripts() -> [(String, Date)] {
+        guard !liveProcs.isEmpty else { return [] }
+        let fm = FileManager.default
+        var out: [(String, Date)] = []
+        for p in liveProcs where !p.sessionId.isEmpty {
+            guard byId[p.sessionId] == nil, !suppressed.contains(p.sessionId),
+                  let path = transcriptPath(forSession: p.sessionId) else { continue }
+            let mtime = (try? fm.attributesOfItem(atPath: path)[.modificationDate] as? Date) ?? nil
+            out.append((path, mtime ?? Date.distantPast))
+        }
+        return out
+    }
+
+    /// Where a session's transcript lives, located by filename across the
+    /// projects tree. Cached both ways: the recency sweep normally supplies these
+    /// paths, so this walk only ever runs for the long-idle stragglers.
+    private func transcriptPath(forSession sid: String) -> String? {
+        let fm = FileManager.default
+        if let cached = transcriptPathCache[sid], fm.fileExists(atPath: cached) { return cached }
+        if let missed = transcriptMisses[sid], Date().timeIntervalSince(missed) < 30 { return nil }
+        guard let projects = try? fm.contentsOfDirectory(atPath: projectsDir) else { return nil }
+        for proj in projects {
+            let path = "\(projectsDir)/\(proj)/\(sid).jsonl"
+            if fm.fileExists(atPath: path) {
+                transcriptPathCache[sid] = path
+                transcriptMisses[sid] = nil
+                return path
+            }
+        }
+        transcriptMisses[sid] = Date()
+        return nil
+    }
+
     private func recentTranscripts() -> [(String, Date)] {
         let fm = FileManager.default
         guard let projects = try? fm.contentsOfDirectory(atPath: projectsDir) else { return [] }
@@ -806,6 +869,15 @@ final class AgentManager: ObservableObject {
     func sendKey(_ key: String, to run: AgentRun) -> Bool {
         guard let info = run.terminal else { return false }
         return term.sendKey(key, to: info)
+    }
+
+    /// Literal passthrough for the remote console: the characters a browser typed,
+    /// delivered to the agent's terminal exactly as given — no key-name mapping,
+    /// no trailing newline.
+    @discardableResult
+    func sendRaw(_ text: String, to run: AgentRun) -> Bool {
+        guard let info = run.terminal else { return false }
+        return term.sendRaw(text, to: info)
     }
 
     // MARK: Event parsing (works on both stream-json and transcript lines)

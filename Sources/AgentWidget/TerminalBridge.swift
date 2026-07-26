@@ -174,12 +174,21 @@ final class TerminalBridge {
 
     /// Send a single raw keystroke (no trailing newline) so a remote viewer can
     /// drive Claude Code's interactive selection prompts — pressing a digit
-    /// picks a numbered option; named keys navigate/confirm. WezTerm and iTerm2
-    /// deliver the exact bytes to the pane by TTY; other terminals fall back to
-    /// synthesized keystrokes into the focused window (needs Accessibility).
+    /// picks a numbered option; named keys navigate/confirm.
     @discardableResult
     func sendKey(_ key: String, to info: TerminalInfo) -> Bool {
         let seq = Self.keySequence(key)
+        guard !seq.isEmpty else { return false }
+        return sendRaw(seq, to: info)
+    }
+
+    /// Deliver bytes to the terminal EXACTLY as given — no key-name mapping, no
+    /// trailing newline. This is the remote console's passthrough path: whatever
+    /// the browser typed lands in the tty as typed. WezTerm and iTerm2 address the
+    /// pane by TTY; other terminals fall back to synthesized keystrokes into the
+    /// focused window (needs Accessibility).
+    @discardableResult
+    func sendRaw(_ seq: String, to info: TerminalInfo) -> Bool {
         guard !seq.isEmpty else { return false }
         switch info.app {
         case "WezTerm":
@@ -189,18 +198,35 @@ final class TerminalBridge {
             return osascript(iTermSendRawScript, [info.tty, seq])?.contains("ok") == true
         default:
             guard accessibilityTrusted(prompt: true) else { return false }
-            activateBundle(info)
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.25) { [weak self] in
-                self?.typeUnicode(seq)   // no pressReturn — a keystroke, not a line
+            // Synthesized keys land wherever the focus is, so the agent's own
+            // tab has to be the selected one first. Doing that per keystroke
+            // would cost an AppleScript round trip each time, so it's done once
+            // per burst: when the target changes, when the app isn't frontmost,
+            // or when the last send to this tty has gone cold.
+            let stale = lastRawTty != info.tty || Date().timeIntervalSince(lastRawAt) > 3 || !isFrontmost(info)
+            lastRawTty = info.tty
+            lastRawAt = Date()
+            if stale { focus(info) }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + (stale ? 0.25 : 0)) { [weak self] in
+                self?.postRaw(seq)   // no pressReturn — keystrokes, not a line
             }
             return true
         }
     }
 
+    /// Where the last synthesized-keystroke send went, so a console typing into
+    /// one terminal doesn't re-focus it on every character.
+    private var lastRawTty = ""
+    private var lastRawAt = Date.distantPast
+
     /// Map a key name to the bytes a terminal expects. Single visible characters
-    /// (digits/letters) pass through as-is; the rest are the usual VT sequences.
+    /// (digits/letters) pass through as-is; named keys and `ctrl-x` combos map to
+    /// their VT sequences. An unrecognised multi-character name maps to NOTHING
+    /// on purpose — literal typing has its own path (`sendRaw`), so guessing here
+    /// would turn someone typing the word "up" into an arrow key.
     static func keySequence(_ key: String) -> String {
-        switch key.lowercased() {
+        let k = key.lowercased()
+        switch k {
         case "up":              return "\u{1b}[A"
         case "down":            return "\u{1b}[B"
         case "right":           return "\u{1b}[C"
@@ -208,8 +234,30 @@ final class TerminalBridge {
         case "enter", "return": return "\r"
         case "esc", "escape":   return "\u{1b}"
         case "tab":             return "\t"
+        case "shift-tab":       return "\u{1b}[Z"
         case "space":           return " "
-        default:                return key.count == 1 ? key : ""
+        case "backspace":       return "\u{7f}"
+        case "delete", "del":   return "\u{1b}[3~"
+        case "home":            return "\u{1b}[H"
+        case "end":             return "\u{1b}[F"
+        case "pageup":          return "\u{1b}[5~"
+        case "pagedown":        return "\u{1b}[6~"
+        default:
+            // "ctrl-c" / "c-c" → the control byte a terminal produces when you
+            // hold Control: ⌃A is 0x01 … ⌃Z is 0x1a.
+            for prefix in ["ctrl-", "ctrl+", "c-"] where k.hasPrefix(prefix) {
+                let rest = k.dropFirst(prefix.count)
+                guard rest.count == 1, let a = rest.first?.asciiValue else { break }
+                switch a {
+                case 97...122: return String(UnicodeScalar(a - 96))   // a…z
+                case 91:       return "\u{1b}"                        // [ → ESC
+                case 92:       return "\u{1c}"                        // \
+                case 93:       return "\u{1d}"                        // ]
+                default:       break
+                }
+                break
+            }
+            return key.count == 1 ? key : ""
         }
     }
 
@@ -631,6 +679,61 @@ final class TerminalBridge {
         return AXIsProcessTrustedWithOptions([key: prompt] as CFDictionary)
     }
 
+    /// Escape sequences and control bytes don't survive `keyboardSetUnicodeString`
+    /// — a terminal that receives ESC as a "typed character" does nothing with it
+    /// — so the ones that matter are posted as REAL virtual keys instead, with
+    /// Control held where the byte is a control code. Anything else is typed.
+    private func postRaw(_ seq: String) {
+        if let vk = Self.virtualKeys[seq] {
+            postKey(vk.code, flags: vk.flags)
+            return
+        }
+        // A lone control byte (⌃C, ⌃D, ⌃Z …) → its letter with Control down.
+        if seq.unicodeScalars.count == 1, let s = seq.unicodeScalars.first, (1...26).contains(s.value),
+           let code = Self.letterKeys[Character(UnicodeScalar(s.value + 96)!)] {
+            postKey(code, flags: .maskControl)
+            return
+        }
+        typeUnicode(seq)
+    }
+
+    /// VT sequence → the macOS virtual key that produces it.
+    private static let virtualKeys: [String: (code: CGKeyCode, flags: CGEventFlags)] = [
+        "\u{1b}[A": (0x7E, []), "\u{1b}[B": (0x7D, []), "\u{1b}[C": (0x7C, []), "\u{1b}[D": (0x7B, []),
+        "\r": (0x24, []), "\u{1b}": (0x35, []), "\t": (0x30, []), "\u{1b}[Z": (0x30, .maskShift),
+        "\u{7f}": (0x33, []), "\u{1b}[3~": (0x75, []),
+        "\u{1b}[H": (0x73, []), "\u{1b}[F": (0x77, []),
+        "\u{1b}[5~": (0x74, []), "\u{1b}[6~": (0x79, []),
+    ]
+
+    /// a–z virtual keycodes, for Control combos on the keystroke fallback.
+    private static let letterKeys: [Character: CGKeyCode] = [
+        "a": 0x00, "b": 0x0B, "c": 0x08, "d": 0x02, "e": 0x0E, "f": 0x03, "g": 0x05,
+        "h": 0x04, "i": 0x22, "j": 0x26, "k": 0x28, "l": 0x25, "m": 0x2E, "n": 0x2D,
+        "o": 0x1F, "p": 0x23, "q": 0x0C, "r": 0x0F, "s": 0x01, "t": 0x11, "u": 0x20,
+        "v": 0x09, "w": 0x0D, "x": 0x07, "y": 0x10, "z": 0x06,
+    ]
+
+    private func postKey(_ code: CGKeyCode, flags: CGEventFlags) {
+        let src = CGEventSource(stateID: .combinedSessionState)
+        if let down = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: true) {
+            down.flags = flags
+            down.post(tap: .cghidEventTap)
+        }
+        if let up = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: false) {
+            up.flags = flags
+            up.post(tap: .cghidEventTap)
+        }
+    }
+
+    /// Is this terminal already the active app? Compared by bundle path, since
+    /// that's all a TerminalInfo carries.
+    private func isFrontmost(_ info: TerminalInfo) -> Bool {
+        guard !info.bundlePath.isEmpty,
+              let front = NSWorkspace.shared.frontmostApplication?.bundleURL else { return false }
+        return front.standardizedFileURL.path == URL(fileURLWithPath: info.bundlePath).standardizedFileURL.path
+    }
+
     private func typeUnicode(_ text: String) {
         let src = CGEventSource(stateID: .combinedSessionState)
         for scalar in text.unicodeScalars {
@@ -648,9 +751,7 @@ final class TerminalBridge {
     }
 
     private func pressReturn() {
-        let src = CGEventSource(stateID: .combinedSessionState)
-        CGEvent(keyboardEventSource: src, virtualKey: 0x24, keyDown: true)?.post(tap: .cghidEventTap)
-        CGEvent(keyboardEventSource: src, virtualKey: 0x24, keyDown: false)?.post(tap: .cghidEventTap)
+        postKey(0x24, flags: [])
     }
 
     private func activateBundle(_ info: TerminalInfo) {
@@ -738,7 +839,13 @@ final class TerminalBridge {
             // works when the app is quarantine-translocated (launched straight
             // from Downloads/a DMG), where it runs from a random /private/var
             // AppTranslocation directory no fixed candidate can predict.
-            let derived = runShell(#"ps -axww -o command= | sed -n 's|^\(.*\)/wezterm-gui.*|\1/wezterm|p' | head -1"#)
+            //
+            // `comm=` (the executable path alone), NOT `command=` (path + args):
+            // this very script mentions wezterm-gui, so its own `sh -c …` process
+            // shows up in an args listing and — ps is not ordered by pid, so
+            // `head -1` really can pick it — yields a nonexistent path, silently
+            // killing every WezTerm screen read, reply and keystroke.
+            let derived = runShell(#"ps -axww -o comm= | grep -m1 '/wezterm-gui$' | sed 's|/wezterm-gui$|/wezterm|'"#)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if !derived.isEmpty, fm.isExecutableFile(atPath: derived) { found = derived }
         }

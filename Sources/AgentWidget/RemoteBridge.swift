@@ -14,8 +14,10 @@ import Combine
 ///   relay → host:  {type:"reply", sessionId, text} type into that agent's terminal
 ///                  {type:"broadcast", text}        send to every controllable agent
 ///                  {type:"kill", sessionId}        terminate that agent's process
-///                  {type:"key", sessionId, key}    raw keystroke (menu digit, arrows, …)
-///                  {type:"watch", sessionId}       lease: stream that terminal (renewed ~3s)
+///                  {type:"key", sessionId, key}    named keystroke (menu digit, arrows, ctrl-c, …)
+///                  {type:"key", sessionId, text}   literal typing from the remote console, verbatim
+///                  {type:"watch", sessionId, hot?} lease: stream that terminal (renewed ~3s;
+///                                                  hot ⇒ someone is typing into it, mirror at ~3 Hz)
 ///                  {type:"launch", mission, dir, managerModel?, workerModels[], docId?, docMode?}
 ///                  {type:"research", topic, subject, dir, model, tags[]}  seed a doc, dispatch an agent to fill it
 ///                  {type:"docGet|docSave|docCreate|docDelete|docMeta|docSearch", …}  document library
@@ -40,8 +42,15 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
     /// lease is fresh, that session's full buffer (with scrollback) streams to
     /// viewers as {type:"screen"} frames at ~1 Hz.
     private var watchLeases: [String: Date] = [:]
+    /// Sessions a viewer is actively TYPING into from the remote console
+    /// ({type:"watch", hot:true}): sessionId → expiry. While one is fresh the
+    /// mirror runs at ~3 Hz instead of 1 Hz, so typing looks like typing.
+    private var hotLeases: [String: Date] = [:]
+    private var hotTimer: Timer?
     private var streamSeqs: [String: Int] = [:]
     private var streamLast: [String: String] = [:]
+    /// How many delta frames a session has sent since its last full one.
+    private var framesSinceFull: [String: Int] = [:]
     private var capturingWatched = false
     /// Previous host CPU tick counters, for the 1 Hz load delta.
     private var lastCPUTicks: (user: UInt64, system: UInt64, idle: UInt64, nice: UInt64)?
@@ -106,6 +115,9 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
         reconnectWork = nil
         snapshotTimer?.invalidate()
         snapshotTimer = nil
+        hotTimer?.invalidate()
+        hotTimer = nil
+        hotLeases.removeAll()
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         generation += 1
@@ -207,15 +219,26 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
                 detail: n > 0 ? "Broadcast to \(n) agent\(n == 1 ? "" : "s")" : "No reachable agents")
 
         case "key":
-            guard let sid = obj["sessionId"] as? String,
-                  let key = obj["key"] as? String, !key.isEmpty else { return }
+            guard let sid = obj["sessionId"] as? String else { return }
             guard let run = manager.agent(withSessionId: sid) else {
                 ack(false, cmd: "key", detail: "That agent is gone"); return
             }
-            if manager.sendKey(key, to: run) {
-                ack(true, cmd: "key", detail: "Sent to \(run.folderName)")
-            } else {
-                ack(false, cmd: "key", detail: "Couldn't reach \(run.folderName)'s terminal")
+            // Two separate fields on purpose: `key` is a NAME the host maps to
+            // bytes ("up", "esc", "ctrl-c"); `text` is literal passthrough from
+            // the remote console, typed verbatim. Folding them into one would
+            // turn someone typing the word "up" into an arrow key.
+            if let text = obj["text"] as? String, !text.isEmpty {
+                // Console typing runs at keystroke rate — an ack per character
+                // would be broadcast to every viewer, so only failures speak up.
+                if !manager.sendRaw(text, to: run) {
+                    ack(false, cmd: "key", detail: "Couldn't reach \(run.folderName)'s terminal")
+                }
+            } else if let key = obj["key"] as? String, !key.isEmpty {
+                if manager.sendKey(key, to: run) {
+                    ack(true, cmd: "key", detail: "Sent to \(run.folderName)")
+                } else {
+                    ack(false, cmd: "key", detail: "Couldn't reach \(run.folderName)'s terminal")
+                }
             }
 
         case "kill":
@@ -231,7 +254,22 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
             // A lease, not a user action — no ack. Renewed continuously while
             // a panel has that agent's terminal open; expires on its own.
             guard let sid = obj["sessionId"] as? String, !sid.isEmpty else { return }
+            // A lease taken from cold means someone just opened this terminal:
+            // forget what the last watcher had so the whole buffer is resent,
+            // even if nothing on screen has moved since.
+            if (watchLeases[sid] ?? .distantPast) < Date() {
+                streamLast[sid] = nil
+                framesSinceFull[sid] = Self.fullScreenEvery
+            }
             watchLeases[sid] = Date().addingTimeInterval(8)
+            // `hot` = someone is TYPING into this terminal from the remote
+            // console, so 1 Hz isn't enough. Only ever extended here, never
+            // cleared: a second viewer holding a plain lease on the same session
+            // mustn't knock the console back down to the slow cadence.
+            if obj["hot"] as? Bool == true {
+                hotLeases[sid] = Date().addingTimeInterval(6)
+                syncHotTimer()
+            }
 
         case "launch":
             var mission = ((obj["mission"] as? String) ?? "")
@@ -281,11 +319,14 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
             guard managerModel != nil || !workerModels.isEmpty else {
                 ack(false, cmd: "launch", detail: "No agents in the plan"); return
             }
+            guard let launchDir = resolvedDir(dir) else {
+                ack(false, cmd: "launch", detail: "No such folder: \(dir)"); return
+            }
             let plan = AgentManager.FleetPlan(
-                mission: mission, dir: dir,
+                mission: mission, dir: launchDir,
                 managerModel: managerModel, workerModels: workerModels, planMode: planMode)
             manager.launchFleet(plan)
-            if !dir.isEmpty { settings.lastLaunchDir = dir }
+            if !launchDir.isEmpty { settings.lastLaunchDir = launchDir }
             let n = plan.agentCount
             ack(true, cmd: "launch",
                 detail: n == 1 ? "Agent launching on your Mac" : "Launching \(n) agents on your Mac")
@@ -299,21 +340,27 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
             let rdir = ((obj["dir"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let model = (obj["model"] as? String) ?? ""   // "" ⇒ CLI default
             let tags = (obj["tags"] as? [String]) ?? []
+            // Before the stub, not after: a doc seeded for an agent that can never
+            // launch sits in the library reading `active` — "research in progress" —
+            // for as long as anyone cares to wait for it.
+            guard let researchDir = resolvedDir(rdir) else {
+                ack(false, cmd: "research", detail: "No such folder: \(rdir)"); return
+            }
             let title = subject.isEmpty ? topic : "\(subject) — \(topic)"
             // Seed the file now so it appears in the library as `active` the
             // instant the agent starts, and so the agent has a path to write to.
             let stub = "# \(title)\n\n_Research in progress…_\n"
             guard let id = DocLibrary.shared.create(
                 title: title, kind: .research, status: .active,
-                subject: subject, tags: tags, dir: rdir, body: stub) else {
+                subject: subject, tags: tags, dir: researchDir, body: stub) else {
                 ack(false, cmd: "research", detail: "Couldn't start the research"); return
             }
             let plan = AgentManager.FleetPlan(
                 mission: researchMission(topic: topic, subject: subject,
                                          id: id, path: DocLibrary.shared.path(of: id)),
-                dir: rdir, managerModel: nil, workerModels: [model], planMode: false)
+                dir: researchDir, managerModel: nil, workerModels: [model], planMode: false)
             manager.launchFleet(plan)
-            if !rdir.isEmpty { settings.lastLaunchDir = rdir }
+            if !researchDir.isEmpty { settings.lastLaunchDir = researchDir }
             sendJSON(["type": "ack", "ok": true, "cmd": "research",
                       "detail": "Researching on your Mac", "id": id])
 
@@ -397,6 +444,26 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
                   "content": body, "updatedAt": meta.updatedAt.timeIntervalSince1970])
     }
 
+    /// `dir` back, once we know a shell can actually `cd` into it — nil if it
+    /// names nothing, or names a file. An agent launches as `cd <dir> && claude`,
+    /// so a folder that doesn't exist short-circuits the `&&` and no agent ever
+    /// starts. Nothing downstream notices: the terminal window opens either way,
+    /// and a remote caller has already been told its work is under way. Catch it
+    /// here, while the ack can still carry the bad news.
+    private func resolvedDir(_ dir: String) -> String? {
+        guard !dir.isEmpty else { return dir }   // empty ⇒ the agent's home directory
+        var path = (dir as NSString).expandingTildeInPath
+        // Resolve a relative dir against home, not against the app's own cwd —
+        // which under launchd is `/`, where nothing the user might type exists.
+        // The dir travels onward unexpanded either way; this only decides whether
+        // to believe in it.
+        if !path.hasPrefix("/") { path = (NSHomeDirectory() as NSString).appendingPathComponent(path) }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir),
+              isDir.boolValue else { return nil }
+        return dir
+    }
+
     /// The brief handed to a research agent: research the topic and overwrite the
     /// seeded file with a standalone report, keeping the frontmatter and marking
     /// the doc done when finished.
@@ -422,6 +489,10 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
 
     private func setViewers(_ n: Int) {
         guard viewerCount != n else { return }
+        // A viewer that just arrived holds no baseline, so a delta frame would be
+        // meaningless to it — drop every remembered buffer so the next capture
+        // resends whole screens.
+        if n > viewerCount { resetStreamBaselines() }
         viewerCount = n
         // Someone is watching remotely — poll like the popover were open so the
         // panel's feed reads as live; drop back when the last viewer leaves.
@@ -471,6 +542,7 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
                 self.screens = self.screens.filter { liveIds.contains($0.key) }
                 self.streamSeqs = self.streamSeqs.filter { liveIds.contains($0.key) }
                 self.streamLast = self.streamLast.filter { liveIds.contains($0.key) }
+                self.framesSinceFull = self.framesSinceFull.filter { liveIds.contains($0.key) }
                 self.capturingScreens = false
             }
         }
@@ -503,14 +575,81 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
                 self.capturingWatched = false
                 for (sid, text) in captured {
                     self.screens[sid] = Self.trimScreen(text)   // snapshot rides along
-                    guard text != self.streamLast[sid] else { continue }
+                    let prev = self.streamLast[sid]
+                    guard text != prev else { continue }
                     self.streamLast[sid] = text
                     let seq = (self.streamSeqs[sid] ?? 0) + 1
                     self.streamSeqs[sid] = seq
-                    self.sendJSON(["type": "screen", "sessionId": sid, "seq": seq, "text": text])
+                    self.sendScreen(sid: sid, seq: seq, text: text, prev: prev)
                 }
             }
         }
+    }
+
+    /// A viewer that joins mid-stream (or misses a frame) can't apply a delta, so
+    /// a full frame has to come round regularly for it to catch up.
+    private static let fullScreenEvery = 8
+
+    /// Forget every remembered buffer, so the next capture of each watched
+    /// session sends a whole screen rather than a delta nobody can apply.
+    private func resetStreamBaselines() {
+        streamLast.removeAll()
+        framesSinceFull.removeAll()
+    }
+
+    /// Push one {type:"screen"} frame. Terminal output is mostly append-only, so
+    /// when the new buffer shares a long prefix with the one the viewer already
+    /// holds we send only the tail, plus `keep` — how many leading UTF-16 units of
+    /// the previous frame still stand. Typing at 3 Hz then costs bytes per frame
+    /// instead of the whole 64 KB scrollback.
+    private func sendScreen(sid: String, seq: Int, text: String, prev: String?) {
+        let since = framesSinceFull[sid] ?? Self.fullScreenEvery
+        if let prev, since + 1 < Self.fullScreenEvery {
+            let units = Array(text.utf16)
+            let keep = Self.commonUTF16Prefix(units, Array(prev.utf16))
+            // Only worth it when most of the screen is unchanged.
+            if keep > units.count / 2 {
+                framesSinceFull[sid] = since + 1
+                sendJSON(["type": "screen", "sessionId": sid, "seq": seq, "keep": keep,
+                          "text": String(decoding: units[keep...], as: UTF16.self)])
+                return
+            }
+        }
+        framesSinceFull[sid] = 0
+        sendJSON(["type": "screen", "sessionId": sid, "seq": seq, "text": text])
+    }
+
+    /// Length of the shared leading run, in UTF-16 units (what a JS string index
+    /// counts), never splitting a surrogate pair.
+    private static func commonUTF16Prefix(_ a: [UInt16], _ b: [UInt16]) -> Int {
+        var i = 0
+        while i < a.count, i < b.count, a[i] == b[i] { i += 1 }
+        if i > 0, (0xD800...0xDBFF).contains(a[i - 1]) { i -= 1 }   // don't cut mid-pair
+        return i
+    }
+
+    /// The ~3 Hz mirror for terminals being typed into. The timer exists only
+    /// while a hot lease is fresh; `captureWatchedIfDue`'s in-flight guard keeps a
+    /// slow AppleScript pass from piling up behind itself.
+    private func syncHotTimer() {
+        let now = Date()
+        hotLeases = hotLeases.filter { $0.value > now }
+        if hotLeases.isEmpty {
+            hotTimer?.invalidate()
+            hotTimer = nil
+            return
+        }
+        guard hotTimer == nil else { return }
+        let t = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            guard self.connected, self.hotLeases.contains(where: { $0.value > Date() }) else {
+                self.syncHotTimer()   // expired or disconnected — stand the timer down
+                return
+            }
+            self.captureWatchedIfDue()
+        }
+        RunLoop.main.add(t, forMode: .common)
+        hotTimer = t
     }
 
     /// Keep the tail of the screen (what's actually on view) and cap the size

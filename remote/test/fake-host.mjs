@@ -471,19 +471,80 @@ const CHROME_LINES = [
   '  ⎿ Grep("tokenize") — 9 matches in 3 files',
 ];
 
-function screenFrame(sessionId, lease) {
-  // Buffer gains a couple of lines per second, capped at ~120 lines of
-  // scrollback — simulates streaming output on top of history.
+// What a viewer would see: the scrollback plus the shell's current input line —
+// so characters typed from the remote console echo back the way a real tty does.
+function renderLease(lease) {
+  return [...lease.lines, `❯ ${lease.input}█`].join('\n');
+}
+
+// Grow the buffer the way a working agent would: a couple of lines a second,
+// capped at ~120 lines of scrollback.
+function growLease(sessionId, lease) {
   const gained = 2 + Math.floor(Math.random() * 2);
   for (let i = 0; i < gained; i++) {
-    lease.seq += 1;
-    const chrome = CHROME_LINES[lease.seq % CHROME_LINES.length];
+    lease.grown += 1;
+    const chrome = CHROME_LINES[lease.grown % CHROME_LINES.length];
     lease.lines.push(
-      lease.seq % 5 === 0 ? chrome : `    [${sessionId}] output line ${lease.seq}: computed chunk ${lease.seq * 7 % 997}`
+      lease.grown % 5 === 0 ? chrome : `    [${sessionId}] output line ${lease.grown}: computed chunk ${lease.grown * 7 % 997}`
     );
   }
   if (lease.lines.length > 120) lease.lines = lease.lines.slice(-120);
-  return { type: 'screen', sessionId, seq: lease.seq, text: lease.lines.join('\n') };
+}
+
+const FULL_SCREEN_EVERY = 8; // …frames, so a viewer joining mid-stream catches up
+
+// Emit a {type:'screen'} frame if the buffer moved, as a prefix delta when most
+// of it is unchanged — the same encoding RemoteBridge.sendScreen uses, so the
+// panel's delta path gets exercised without the Mac.
+function screenFrame(sessionId, lease) {
+  const text = renderLease(lease);
+  if (text === lease.last) return null;
+  const prev = lease.last;
+  lease.last = text;
+  lease.seq += 1;
+  if (prev != null && lease.sinceFull + 1 < FULL_SCREEN_EVERY) {
+    let keep = 0;
+    while (keep < text.length && keep < prev.length && text[keep] === prev[keep]) keep += 1;
+    if (keep > text.length / 2) {
+      lease.sinceFull += 1;
+      return { type: 'screen', sessionId, seq: lease.seq, keep, text: text.slice(keep) };
+    }
+  }
+  lease.sinceFull = 0;
+  return { type: 'screen', sessionId, seq: lease.seq, text };
+}
+
+function newLease(sessionId) {
+  return { lastSeen: 0, hotUntil: 0, seq: 0, grown: 0, sinceFull: 0, last: null, input: '', lines: seedBuffer(sessionId) };
+}
+
+// Apply what the console sent. `text` is literal typing; `key` is a name. Both
+// land in the fake shell's input line so the round trip is visible on screen.
+function applyInput(sessionId, { text, key }) {
+  const lease = leases.get(sessionId);
+  if (!lease) return;
+  if (text) {
+    lease.input += text;
+    return;
+  }
+  switch (key) {
+    case 'enter':
+      lease.lines.push(`❯ ${lease.input}`, `  ⎿ (fake host) ran ${JSON.stringify(lease.input)}`);
+      lease.input = '';
+      break;
+    case 'backspace':
+      lease.input = lease.input.slice(0, -1);
+      break;
+    case 'esc':
+      lease.input = '';
+      break;
+    case 'tab':
+      lease.input += '\t';
+      break;
+    default:
+      lease.lines.push(`  ⎿ (fake host) key ${key}`);
+  }
+  if (lease.lines.length > 120) lease.lines = lease.lines.slice(-120);
 }
 
 // ---------------------------------------------------------------------------
@@ -518,11 +579,14 @@ function connect() {
         return;
 
       case 'watch': {
-        const lease = leases.get(msg.sessionId) ?? { lastSeen: 0, seq: 0, lines: seedBuffer(msg.sessionId) };
+        const lease = leases.get(msg.sessionId) ?? newLease(msg.sessionId);
         const fresh = lease.lastSeen === 0;
         lease.lastSeen = Date.now();
+        // A hot lease means someone is typing into that terminal from the
+        // console — mirror it at ~3 Hz, exactly as the real host does.
+        if (msg.hot) lease.hotUntil = Date.now() + 6000;
         leases.set(msg.sessionId, lease);
-        if (fresh) log(`watch lease opened for ${msg.sessionId}`);
+        if (fresh) log(`watch lease opened for ${msg.sessionId}${msg.hot ? ' (hot)' : ''}`);
         return;
       }
 
@@ -537,6 +601,14 @@ function connect() {
         return;
 
       case 'key':
+        // Console passthrough carries `text` (literal, verbatim); the key bar and
+        // menu taps carry `key` (a name). Only the latter is worth acking — a
+        // per-character ack would be broadcast to every viewer.
+        applyInput(msg.sessionId, { text: msg.text, key: msg.key });
+        if (msg.text) {
+          log(`type → ${msg.sessionId ?? '?'}: ${JSON.stringify(msg.text)}`);
+          return;
+        }
         log(`key → ${msg.sessionId ?? '?'}: ${msg.key ?? '?'}`);
         send({ type: 'ack', ok: true, cmd: 'key', detail: `Sent ${msg.key ?? 'key'}` });
         return;
@@ -683,6 +755,11 @@ function connect() {
       }
 
       case 'launch': {
+        // RemoteBridge rejects a launch with nothing to do (no mission, no doc).
+        if (!String(msg.mission ?? '').trim() && !msg.docId && !msg.planId) {
+          send({ type: 'ack', ok: false, cmd: 'launch', detail: 'Mission is empty' });
+          return;
+        }
         log(`launch in ${msg.dir ?? '?'}${msg.planId ? ` [plan:${msg.planId}]` : ''}${msg.planMode ? ' [planMode]' : ''}: ${JSON.stringify(msg.mission ?? '')}`);
         send({ type: 'ack', ok: true, cmd: 'launch', detail: 'Launching…' });
         setTimeout(() => {
@@ -734,7 +811,7 @@ function send(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
 }
 
-// 1 Hz: snapshot + any live screen streams.
+// 1 Hz: snapshot, buffer growth, and a frame per watched session.
 setInterval(() => {
   send(snapshot());
   const now = Date.now();
@@ -744,9 +821,22 @@ setInterval(() => {
       leases.delete(sessionId);
       continue;
     }
-    send(screenFrame(sessionId, lease));
+    growLease(sessionId, lease);
+    const frame = screenFrame(sessionId, lease);
+    if (frame) send(frame);
   }
 }, 1000);
+
+// ~3 Hz: hot sessions only, and only when the buffer actually moved — that's
+// what makes typing from the console look like typing.
+setInterval(() => {
+  const now = Date.now();
+  for (const [sessionId, lease] of leases) {
+    if (lease.hotUntil < now) continue;
+    const frame = screenFrame(sessionId, lease);
+    if (frame) send(frame);
+  }
+}, 300);
 
 connect();
 log(`fake host starting (relay port ${PORT}, token ${TOKEN === 'test' ? "'test'" : 'set'})`);
