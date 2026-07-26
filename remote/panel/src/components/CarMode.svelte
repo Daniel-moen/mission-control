@@ -13,7 +13,6 @@
   } from '../lib/store.svelte.js';
   import { TONE } from '../lib/tone.js';
   import { dictate, speechSupported } from '../lib/speech.js';
-  import { extractDir, dirBase } from '../lib/dirmatch.js';
   import Icon from './Icon.svelte';
 
   let { onclose } = $props();
@@ -107,27 +106,9 @@
       reply(target.agent.id, t);
       return;
     }
-    // The dispatcher: a spoken "… in the cover v3 directory" picks the project
-    // itself — fuzzy-matched against the host's known dirs, since dictation
-    // garbles folder names. No reference → the selected chip.
-    let mission = t;
-    let launchDir = dir;
-    const ref = extractDir(t, mc.knownDirs);
-    if (ref) {
-      if (!ref.ok) {
-        const msg = `Couldn't find a project called “${ref.phrase}”`;
-        toast(msg);
-        if (voiceOn) speak(`Couldn't find a project called ${ref.phrase}. Try again.`);
-        return;
-      }
-      launchDir = ref.dir;
-      if (ref.cleaned) mission = ref.cleaned;
-      setDir(ref.dir); // the chip follows, so the next launch lands there too
-    }
-    if (!launch({ mission, dir: (launchDir || '').trim(), managerModel: null, workerModels: [''] })) return;
-    const name = dirBase(launchDir);
-    toast(`Launching agent${name ? ' in ' + name : ''}`);
-    if (voiceOn) speak(`Launching agent${name ? ' in ' + name : ''}.`);
+    if (!launch({ mission: t, dir: dir.trim(), managerModel: null, workerModels: [''] })) return;
+    toast(`Launching agent${dirName ? ' in ' + dirName : ''}`);
+    if (voiceOn) speak(`Launching agent${dirName ? ' in ' + dirName : ''}.`);
   }
   function toggleMic() {
     if (micSess) {
@@ -326,7 +307,7 @@
       {:else}
         <div class="flex flex-1 flex-col items-center justify-center gap-4 text-center">
           <div class="text-[28px] font-bold tracking-tight">No agents running</div>
-          <div class="max-w-[340px] text-[16px] leading-relaxed text-ink3">Pick a project and speak a mission — or just say it: “fix the login page in the shop project”.</div>
+          <div class="text-[16px] text-ink3">Pick a project below and speak a mission to launch one.</div>
         </div>
       {/if}
 
@@ -338,9 +319,9 @@
     {/if}
   </main>
 
-  <!-- launch target chips: only where the mic means "new agent" -->
+  <!-- launch target: the list of previous project dirs, all visible at once -->
   {#if screen === 'list' && mc.knownDirs.length && !micSess}
-    <div class="flex flex-none gap-2 overflow-x-auto px-4 pb-2 noscroll">
+    <div class="flex max-h-[30dvh] flex-none flex-wrap gap-2 overflow-y-auto px-4 pb-2 noscroll">
       {#each mc.knownDirs as d (d)}
         <button
           onclick={() => setDir(d)}
