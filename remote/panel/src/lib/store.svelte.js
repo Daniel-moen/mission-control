@@ -68,7 +68,7 @@ export const mc = $state({
   now: Date.now(), // 1 Hz clock for staleness ages ("live" / "6s ago")
 });
 
-export const PANEL_BUILD = 'v17 · 2026-07-26 · studio redesign';
+export const PANEL_BUILD = 'v18 · 2026-07-26 · command center';
 
 // ---- status helpers ---------------------------------------------------------
 // v8 status semantics: working = cyan, needs-you = amber, done = green,

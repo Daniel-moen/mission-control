@@ -1,7 +1,8 @@
 <script>
+  // Phone bottom dock: the three places + Launch, with voice in the center.
   import Icon from './Icon.svelte';
 
-  let { active = 'fleet', onFleet, onLibrary, onData, onLaunch, onSettings, onMic, onConsole } = $props();
+  let { active = 'agents', onAgents, onOverview, onLibrary, onLaunch, onMic } = $props();
 
   const navCls = (on) =>
     `relative flex flex-1 flex-col items-center gap-1 rounded-xl py-1.5 transition ${on ? 'text-ink' : 'text-ink3 hover:text-ink2'}`;
@@ -9,22 +10,18 @@
 
 <nav class="fixed inset-x-0 bottom-0 z-50" style="padding-bottom:var(--sab)">
   <div
-    class="mx-auto flex max-w-[520px] items-end gap-1 border-t border-line bg-surface/90 px-3 pb-2 pt-2 backdrop-blur-xl sm:mb-4 sm:rounded-2xl sm:border"
+    class="mx-auto flex max-w-[440px] items-end gap-1 border-t border-line bg-surface/90 px-3 pb-2 pt-2 backdrop-blur-xl sm:mb-4 sm:rounded-2xl sm:border"
     style="box-shadow: 0 12px 40px -12px rgba(0,0,0,0.7)">
-    <button onclick={onFleet} class={navCls(active === 'fleet')} aria-label="Fleet">
+    <button onclick={onAgents} class={navCls(active === 'agents')} aria-label="Agents">
       <Icon name="fleet" size={22} />
-      <span class="text-[10px] font-medium">Fleet</span>
+      <span class="text-[10px] font-medium">Agents</span>
     </button>
-    <button onclick={onLibrary} class={navCls(active === 'library')} aria-label="Library">
-      <Icon name="book" size={22} />
-      <span class="text-[10px] font-medium">Library</span>
-    </button>
-    <button onclick={onData} class={navCls(active === 'data')} aria-label="Data">
+    <button onclick={onOverview} class={navCls(active === 'overview')} aria-label="Overview">
       <Icon name="pulse" size={22} />
-      <span class="text-[10px] font-medium">Data</span>
+      <span class="text-[10px] font-medium">Overview</span>
     </button>
 
-    <!-- voice: the primary action, centered and unmissable but calm -->
+    <!-- voice: the primary action, centered -->
     <div class="flex flex-1 justify-center">
       <button
         onclick={onMic}
@@ -34,18 +31,13 @@
       </button>
     </div>
 
-    <!-- straight into a terminal: pick one, full screen, type into it -->
-    <button onclick={onConsole} class={navCls(active === 'console')} aria-label="Terminal">
-      <Icon name="terminal" size={22} />
-      <span class="text-[10px] font-medium">Terminal</span>
+    <button onclick={onLibrary} class={navCls(active === 'library')} aria-label="Library">
+      <Icon name="book" size={22} />
+      <span class="text-[10px] font-medium">Library</span>
     </button>
     <button onclick={onLaunch} class={navCls(active === 'launch')} aria-label="Launch">
       <Icon name="launch" size={22} />
       <span class="text-[10px] font-medium">Launch</span>
-    </button>
-    <button onclick={onSettings} class={navCls(active === 'settings')} aria-label="Settings">
-      <Icon name="settings" size={22} />
-      <span class="text-[10px] font-medium">Settings</span>
     </button>
   </div>
 </nav>

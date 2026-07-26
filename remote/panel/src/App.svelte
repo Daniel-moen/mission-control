@@ -4,8 +4,10 @@
   import Gate from './components/Gate.svelte';
   import StatusStrip from './components/StatusStrip.svelte';
   import ConnBanner from './components/ConnBanner.svelte';
-  import Dashboard from './components/Dashboard.svelte';
-  import DataDeck from './components/DataDeck.svelte';
+  import Sidebar from './components/Sidebar.svelte';
+  import Roster from './components/Roster.svelte';
+  import Overview from './components/Overview.svelte';
+  import AttentionQueue from './components/AttentionQueue.svelte';
   import Library from './components/Library.svelte';
   import DocView from './components/DocView.svelte';
   import CommandDock from './components/CommandDock.svelte';
@@ -17,45 +19,74 @@
   import TvMode from './components/TvMode.svelte';
   import TerminalConsole from './components/TerminalConsole.svelte';
 
-  let tab = $state('fleet'); // 'fleet' | 'library' | 'data' — main content area
+  // ---- layout mode ---------------------------------------------------------
+  // Desktop (≥1024px) = split view: sidebar roster + main pane.
+  // Phone = tabbed: Agents / Overview / Library with a bottom dock.
+  let isDesktop = $state(typeof matchMedia !== 'undefined' && matchMedia('(min-width: 1024px)').matches);
+
+  let tab = $state('agents'); // phone: 'agents' | 'overview' | 'library'
+  let view = $state('overview'); // desktop main pane: 'overview' | 'library'
+  let sel = $state(null); // desktop: agent filling the main pane
+  let openAgentId = $state(null); // phone: full-screen agent workspace
+  let openDoc = $state(null); // { id, edit } — full-screen document workspace
   // #tv = the ambient wall display (TV mode). Hash-routed so a TV browser can
   // be pointed straight at …/?token=XXX#tv and never touch the app chrome.
   let tvOn = $state(typeof location !== 'undefined' && location.hash === '#tv');
   let sheet = $state(null); // 'launch' | 'settings' | null
-  let openAgentId = $state(null); // full-screen agent workspace
-  let openDoc = $state(null); // { id, edit } — full-screen document workspace
   // The terminal console: { agentId } with null meaning "show the picker".
-  // Held separately from openAgentId so closing it drops you back where you were.
   let console_ = $state(null);
   let lastConsoleId = $state(null); // reopen on the terminal you were last driving
   let launchDocMeta = $state(null); // { ...doc meta, mode } attached to the Launch sheet
   let composer = $state(null); // { target } | null
 
-  const active = $derived(console_ ? 'console' : sheet || tab);
+  const dockActive = $derived(sheet || tab);
 
   function openConsole(id = null) {
     lastConsoleId = id ?? lastConsoleId;
     console_ = { agentId: lastConsoleId };
   }
 
-  onMount(() => {
-    initToken();
-    const syncTv = () => (tvOn = location.hash === '#tv');
-    window.addEventListener('hashchange', syncTv);
-    return () => window.removeEventListener('hashchange', syncTv);
-  });
-
   function openAgent(id) {
-    openAgentId = id;
+    if (isDesktop) sel = id;
+    else openAgentId = id;
   }
 
-  function goto(t) {
-    tab = t;
+  function nav(t) {
+    if (isDesktop) {
+      view = t === 'agents' ? 'overview' : t;
+      sel = null;
+    } else {
+      tab = t;
+    }
     sheet = null;
     openAgentId = null;
     openDoc = null;
     console_ = null;
   }
+
+  onMount(() => {
+    initToken();
+    const syncTv = () => (tvOn = location.hash === '#tv');
+    window.addEventListener('hashchange', syncTv);
+    const mq = matchMedia('(min-width: 1024px)');
+    const syncMq = () => {
+      isDesktop = mq.matches;
+      // Carry an open agent across the breakpoint instead of dropping it.
+      if (isDesktop && openAgentId) {
+        sel = openAgentId;
+        openAgentId = null;
+      } else if (!isDesktop && sel) {
+        openAgentId = sel;
+        sel = null;
+        tab = 'agents';
+      }
+    };
+    mq.addEventListener('change', syncMq);
+    return () => {
+      window.removeEventListener('hashchange', syncTv);
+      mq.removeEventListener('change', syncMq);
+    };
+  });
 
   // A doc just created from the Library — open it. A hand-made note/plan opens
   // in the EDITOR (it's empty, you type into it now); a research doc opens in the
@@ -79,7 +110,7 @@
   function closeLaunch(dest) {
     sheet = null;
     launchDocMeta = null;
-    if (dest === 'fleet') goto('fleet');
+    if (dest === 'fleet') nav('agents');
   }
 </script>
 
@@ -91,28 +122,57 @@
   <TvMode onclose={() => (location.hash = '')} />
 {/if}
 
-<StatusStrip />
-<ConnBanner />
+{#if isDesktop}
+  <!-- ============ DESKTOP: split view ============ -->
+  <div class="flex h-dvh">
+    <Sidebar
+      {view}
+      selectedId={sel}
+      onnav={nav}
+      onselect={openAgent}
+      onLaunch={() => (sheet = 'launch')}
+      onSettings={() => (sheet = 'settings')}
+      onMic={() => (composer = { target: 'all' })} />
 
-<div class="pb-32">
-  {#if tab === 'data'}
-    <DataDeck onopen={openAgent} />
-  {:else if tab === 'library'}
-    <Library onopen={(id) => (openDoc = { id, edit: false })} />
-  {:else}
-    <Dashboard onopen={openAgent} />
-  {/if}
-</div>
+    <main class="flex min-h-0 min-w-0 flex-1 flex-col">
+      <ConnBanner />
+      {#if sel}
+        <AgentView inline agentId={sel} onclose={() => (sel = null)} onconsole={openConsole} />
+      {:else if view === 'library'}
+        <div class="min-h-0 flex-1 overflow-y-auto pb-8 noscroll"><Library onopen={(id) => (openDoc = { id, edit: false })} /></div>
+      {:else}
+        <div class="min-h-0 flex-1 overflow-y-auto noscroll"><Overview onopen={openAgent} /></div>
+      {/if}
+    </main>
+  </div>
+{:else}
+  <!-- ============ PHONE: tabs + dock ============ -->
+  <StatusStrip onSettings={() => (sheet = 'settings')} />
+  <ConnBanner />
 
-<CommandDock
-  {active}
-  onFleet={() => goto('fleet')}
-  onLibrary={() => goto('library')}
-  onData={() => goto('data')}
-  onLaunch={() => (sheet = 'launch')}
-  onSettings={() => (sheet = 'settings')}
-  onConsole={() => openConsole()}
-  onMic={() => (composer = { target: 'all' })} />
+  <div class="pb-32">
+    {#if tab === 'overview'}
+      <Overview onopen={openAgent} />
+    {:else if tab === 'library'}
+      <Library onopen={(id) => (openDoc = { id, edit: false })} />
+    {:else}
+      <div class="mx-auto flex w-full max-w-[720px] flex-col gap-4 px-3 pt-4 sm:px-6">
+        <AttentionQueue onopen={openAgent} />
+        <div class="panel rounded-2xl p-1.5">
+          <Roster selectedId={null} onselect={openAgent} />
+        </div>
+      </div>
+    {/if}
+  </div>
+
+  <CommandDock
+    active={dockActive}
+    onAgents={() => nav('agents')}
+    onOverview={() => nav('overview')}
+    onLibrary={() => nav('library')}
+    onLaunch={() => (sheet = 'launch')}
+    onMic={() => (composer = { target: 'all' })} />
+{/if}
 
 {#if openDoc}
   <DocView docId={openDoc.id} startEditing={openDoc.edit} onclose={() => (openDoc = null)} onlaunch={launchDoc} />

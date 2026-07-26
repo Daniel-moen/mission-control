@@ -1,13 +1,14 @@
 <script>
-  // The Data tab: every number worth knowing, on one screen. Order of
-  // importance, top to bottom: headline stat tiles (burn / spend / tokens /
-  // fleet) → burn-over-time graph → token economics + machine health → the
-  // per-agent burn board. All figures ride the existing 1 Hz snapshot; text
-  // wears ink tokens, the swatch/spark beside it carries identity.
+  // Overview — the one dashboard. Order of importance, top to bottom:
+  // things that need YOU (answerable inline) → headline numbers → burn over
+  // time → token economics + machine health → per-agent table → live activity.
+  // This replaced both the old home telemetry section and the Data tab.
   import {
     mc, fmtTokens, fmtInt, fmtMem, counts, agentStatus, statusLabel,
     agentName, sparkOf,
   } from '../lib/store.svelte.js';
+  import AttentionQueue from './AttentionQueue.svelte';
+  import ActivityFeed from './ActivityFeed.svelte';
   import Graph from './Graph.svelte';
   import TokenMix from './TokenMix.svelte';
   import Sparkline from './Sparkline.svelte';
@@ -82,8 +83,7 @@
   });
   const barTone = (pct) => (pct >= 90 ? 'var(--color-crit)' : pct >= 70 ? 'var(--color-warn)' : 'var(--color-accent)');
 
-  // Burn board: heaviest sessions first. Token share drives the row bar
-  // (sequential, single hue — magnitude only; status keeps its own dot+label).
+  // Agent table: heaviest sessions first. Token share drives the row bar.
   const board = $derived.by(() => {
     const rows = [...mc.agents].sort((a, b) => (b.tokens ?? 0) - (a.tokens ?? 0));
     const top = Math.max(...rows.map((a) => a.tokens ?? 0), 1);
@@ -92,15 +92,14 @@
   const dotCls = { working: 'bg-accent', waiting: 'bg-warn', done: 'bg-ink3', exited: 'bg-crit' };
 </script>
 
-<div class="mx-auto flex w-full max-w-[1400px] flex-col gap-4 px-4 pt-5 sm:px-6">
-  <div>
-    <h1 class="display text-[20px] font-semibold leading-none tracking-tight">Data</h1>
-    <div class="mt-1.5 text-[13px] text-ink3">Live fleet telemetry</div>
-  </div>
+<div class="mx-auto flex w-full max-w-[1200px] flex-col gap-4 px-4 pt-5 pb-8 sm:px-6">
+  <!-- what needs you, answerable right here. Desktop only — on the phone the
+       Agents tab already leads with this queue. -->
+  <div class="hidden lg:block empty:hidden"><AttentionQueue {onopen} /></div>
 
   {#if hasData}
     <!-- headline stat tiles -->
-    <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
       {#each tiles as t (t.label)}
         <div class="panel anim-rise relative overflow-hidden rounded-2xl p-4">
           <div class="hud flex items-center gap-2">
@@ -125,7 +124,7 @@
     <Graph />
 
     <!-- token economics + machine health -->
-    <div class="grid grid-cols-1 gap-3.5 lg:grid-cols-2">
+    <div class="grid grid-cols-1 gap-3 xl:grid-cols-2">
       <TokenMix />
 
       <div class="panel flex flex-col rounded-2xl p-5">
@@ -153,13 +152,13 @@
       </div>
     </div>
 
-    <!-- per-agent burn board -->
+    <!-- per-agent table -->
     {#if board.length}
-      <div class="mt-2 flex items-baseline gap-2">
-        <h2 class="text-[13px] font-semibold text-ink2">Burn by agent</h2>
-        <span class="text-[13px] tabular-nums text-ink3">{board.length}</span>
-      </div>
-      <div class="panel -mt-1 overflow-hidden rounded-2xl">
+      <div class="panel overflow-hidden rounded-2xl">
+        <div class="flex items-baseline gap-2 border-b border-line px-5 py-3">
+          <h2 class="text-[13px] font-semibold text-ink2">Agents</h2>
+          <span class="text-[13px] tabular-nums text-ink3">{board.length}</span>
+        </div>
         <div class="overflow-x-auto noscroll">
           <table class="w-full min-w-[640px] border-collapse text-left">
             <thead>
@@ -202,13 +201,18 @@
         </div>
       </div>
     {/if}
+
+    <!-- live activity -->
+    {#if mc.activity.length}
+      <ActivityFeed {onopen} />
+    {/if}
   {:else}
     <div class="mt-14 flex flex-col items-center gap-3 text-center">
       <div class="grid h-14 w-14 place-items-center rounded-2xl border border-line bg-surface text-ink3">
         <Icon name="pulse" size={26} />
       </div>
-      <div class="text-[17px] font-semibold text-ink2">No telemetry yet</div>
-      <div class="max-w-xs text-[14px] text-ink3">Launch an agent and this deck lights up with live burn, spend and machine data.</div>
+      <div class="text-[16px] font-semibold text-ink2">Nothing to show yet</div>
+      <div class="max-w-xs text-[14px] text-ink3">Launch an agent and this overview lights up with live status, burn and spend.</div>
     </div>
   {/if}
 </div>

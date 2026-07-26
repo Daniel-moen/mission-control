@@ -15,7 +15,9 @@
   import ConnBanner from './ConnBanner.svelte';
   import Icon from './Icon.svelte';
 
-  let { agentId, onclose, onconsole = null } = $props();
+  // `inline` renders the workspace as a normal pane (desktop split view's main
+  // area) instead of a full-screen overlay (phone).
+  let { agentId, onclose, onconsole = null, inline = false } = $props();
 
   const agent = $derived(mc.agents.find((a) => a.id === agentId));
   const cls = $derived(agent ? agentStatus(agent) : 'done');
@@ -67,15 +69,17 @@
 </script>
 
 {#if agent}
-  <div class="anim-slide fixed inset-0 z-[70] flex flex-col bg-bg">
+  <div class={inline ? 'flex h-full min-h-0 flex-col bg-bg' : 'anim-slide fixed inset-0 z-[70] flex flex-col bg-bg'}>
     <!-- header: status-colored hairline up top -->
     <header
       class="relative flex flex-none items-center gap-3 border-b border-line bg-surface/85 px-4 backdrop-blur-xl sm:px-6"
       style="padding-top:calc(10px + var(--sat));padding-bottom:10px">
       <span class="absolute inset-x-0 top-0 h-[2px] {t.edge}"></span>
-      <button onclick={onclose} aria-label="Back" class="grid h-10 w-10 flex-none place-items-center rounded-xl text-ink2 transition hover:bg-raised">
-        <Icon name="back" size={22} />
-      </button>
+      {#if !inline}
+        <button onclick={onclose} aria-label="Back" class="grid h-10 w-10 flex-none place-items-center rounded-xl text-ink2 transition hover:bg-raised">
+          <Icon name="back" size={22} />
+        </button>
+      {/if}
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2">
           <h2 class="truncate text-[18px] font-semibold tracking-tight">{agentName(agent)}</h2>
@@ -106,9 +110,14 @@
         {#if cls === 'working'}<span class="h-1.5 w-1.5 rounded-full bg-accent" style="animation:mc-pulse 1.4s steps(2) infinite"></span>{/if}
         {statusLabel(cls)}
       </span>
+      {#if inline}
+        <button onclick={onclose} aria-label="Close workspace" class="grid h-9 w-9 flex-none place-items-center rounded-lg text-ink3 transition hover:bg-raised hover:text-ink2">
+          <Icon name="close" size={18} />
+        </button>
+      {/if}
     </header>
 
-    <ConnBanner />
+    {#if !inline}<ConnBanner />{/if}
 
     <!-- body: terminal centerpiece + side rail -->
     <main class="mx-auto grid min-h-0 w-full max-w-[1400px] flex-1 grid-cols-1 gap-4 overflow-y-auto p-4 noscroll sm:p-5 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)] lg:overflow-hidden">
