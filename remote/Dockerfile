@@ -1,4 +1,4 @@
-# Build the Svelte panel and run the relay in one image.
+# Build the React panel and run the relay in one image.
 # We use a Dockerfile (rather than Railway's auto-builder) for a deterministic
 # Node version and a reliable cross-platform install.
 FROM node:20-slim

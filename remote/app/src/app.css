@@ -1,0 +1,423 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/inter';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/600.css';
+
+/* ============================================================
+   Mission Control v23 — "STUDIO MOTION"
+   Calm, modern, minimal. Warm graphite surfaces, hairline
+   borders, Inter for UI, mono only where text IS terminal or
+   numbers. Color is reserved for state: green = working/live,
+   amber = needs you, red = failed, violet = manager. Everything
+   else is neutral. Depth comes from shadow + spacing + motion —
+   never from glows, gradients or chrome theater.
+   ============================================================ */
+@theme {
+  /* neutral planes — warm graphite, no blue cast */
+  --color-bg: #111113;
+  --color-surface: #18181b;
+  --color-raised: #202024;
+  --color-inset: #0c0c0e;
+  --color-line: #26262b;
+  --color-line2: #37373e;
+
+  /* ink */
+  --color-ink: #f3f3f4;
+  --color-ink2: #a7a7b0;
+  --color-ink3: #6d6d78;
+
+  /* the one accent: live green (working, linked, live) */
+  --color-accent: #3ecf8e;
+  --color-accent-bright: #5fe3a8;
+  --color-accent-ink: #06281a; /* text on accent fills */
+
+  /* status — always paired with a label, never colour alone.
+     working = accent green, needs-you = warn amber,
+     done = neutral, exited = crit red, manager = violet. */
+  --color-ok: #3ecf8e;
+  --color-warn: #f0b429;
+  --color-crit: #f26d64;
+  --color-mgr: #a78bfa;
+
+  /* telemetry series on dark neutral — labeled in every legend */
+  --color-s1: #34b27b; /* output      */
+  --color-s2: #8a68ec; /* fresh input */
+  --color-s3: #c08a2a; /* cache read  */
+  --color-s4: #d97788; /* cache write */
+
+  /* scrim behind sheets, palettes, full-screen overlays */
+  --color-overlay: rgba(6, 6, 8, 0.6);
+
+  /* ---- Studio Glass -------------------------------------------------------
+     The app floats over a full-bleed photograph, so every panel is frosted
+     glass rather than an opaque plane. Hairlines are white at 12 % (they read
+     over any photo); fills are dark so white text never loses contrast. */
+  --color-glass: rgba(18, 18, 22, 0.52); /* panels                    */
+  --color-glass-strong: rgba(14, 14, 18, 0.74); /* sheets / dense windows    */
+  --color-glass-soft: rgba(255, 255, 255, 0.06); /* chips, secondary pills    */
+  --color-glass-line: rgba(255, 255, 255, 0.12); /* hairline on glass         */
+  --color-glass-line2: rgba(255, 255, 255, 0.22);
+  --color-term: rgba(8, 8, 10, 0.86); /* terminal stays near-opaque */
+
+  --font-sans: 'Inter Variable', -apple-system, system-ui, 'SF Pro Text', 'Segoe UI', sans-serif;
+  --font-display: 'Inter Variable', -apple-system, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', 'Menlo', monospace;
+
+  --radius-xl2: 14px;
+  --radius-xl3: 18px;
+
+  /* depth scale — used for real elevation only (cards / sheets / popovers) */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-2: 0 8px 24px -8px rgba(0, 0, 0, 0.5);
+  --shadow-3: 0 24px 64px -16px rgba(0, 0, 0, 0.65);
+}
+
+:root {
+  color-scheme: dark;
+  /* Blur is expensive on the iPad — never stack more than ~4 large glass
+     surfaces at once, and keep windows few and large rather than many small. */
+  --blur: 28px;
+  --sat: env(safe-area-inset-top);
+  --sab: env(safe-area-inset-bottom);
+  --sal: env(safe-area-inset-left);
+  --sar: env(safe-area-inset-right);
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Element defaults live in @layer base so that Tailwind utilities (which sit in
+   the later `utilities` layer) always win — e.g. `text-accent-ink` on a
+   <button> must beat `button { color: inherit }`. Unlayered rules would
+   otherwise override every layered utility regardless of specificity. */
+@layer base {
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    /* Deep graphite behind the backdrop photo — if the image is slow, missing
+       or still decoding, the app never shows a white flash. */
+    background: var(--color-bg);
+    background-image: radial-gradient(120% 90% at 50% 0%, #1b1b21 0%, #111113 45%, #0a0a0c 100%);
+    background-attachment: fixed;
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overscroll-behavior: none;
+    touch-action: manipulation;
+    /* Safety net: a long unbroken token must never scroll the whole viewport.
+       `clip` (not `hidden`) avoids turning body into a scroll container, so
+       sticky headers keep working. */
+    overflow-x: clip;
+  }
+
+  button {
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+}
+
+::selection {
+  background: color-mix(in oklab, var(--color-accent) 30%, transparent);
+}
+
+/* ---- surfaces ----------------------------------------------------------------
+   Everything the eye lands on is glass floating over the backdrop photo. The
+   opaque `.panel` survives only for the few places where a photo behind the
+   content would hurt (nested cards inside a window). */
+/* The inset top hairline is what sells glass: a lit edge where the pane
+   catches the light, the same trick a real frosted panel plays. */
+.glass {
+  background: var(--color-glass);
+  border: 1px solid var(--color-glass-line);
+  border-radius: 22px;
+  box-shadow: var(--shadow-3), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(150%);
+  backdrop-filter: blur(var(--blur)) saturate(150%);
+}
+.glass-strong {
+  background: var(--color-glass-strong);
+  border: 1px solid var(--color-glass-line);
+  border-radius: 22px;
+  box-shadow: var(--shadow-3), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(150%);
+  backdrop-filter: blur(var(--blur)) saturate(150%);
+}
+/* Chips, secondary pills, hover fills — a lift, not a plane. */
+.glass-soft {
+  background: var(--color-glass-soft);
+  border: 1px solid var(--color-glass-line);
+}
+.glass-soft-hover:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--color-glass-line2);
+}
+/* A pill is the app's button shape. 40–44px tall, fully round. */
+.pill {
+  border-radius: 9999px;
+}
+
+.panel {
+  background: var(--color-surface);
+  border: 1px solid var(--color-line);
+  box-shadow: var(--shadow-1);
+}
+.panel-hover:hover {
+  border-color: var(--color-line2);
+}
+
+/* Section / micro label. Small, quiet, sans, sentence case — no mono shouting. */
+.label {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--color-ink3);
+}
+
+.display {
+  font-family: var(--font-display);
+  letter-spacing: -0.01em;
+}
+
+/* Figures align in columns and never jitter as they tick. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- terminal ----------------------------------------------------------------
+   Terminal text is the one place mono is allowed to carry body copy. It never
+   animates — a moving transcript is an unreadable transcript. */
+.term {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre;
+  tab-size: 2;
+  color: var(--color-ink2);
+  /* Readability beats glass here — the transcript sits on near-opaque dark. */
+  background: var(--color-term);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.term-wrap {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---- rendered markdown (document viewer) ------------------------------------ */
+.md {
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--color-ink);
+  word-break: break-word;
+}
+.md > :first-child {
+  margin-top: 0;
+}
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  font-family: var(--font-display);
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
+  margin: 1.6em 0 0.5em;
+}
+.md h1 {
+  font-size: 24px;
+}
+.md h2 {
+  font-size: 19px;
+  padding-bottom: 0.35em;
+  border-bottom: 1px solid var(--color-line);
+}
+.md h3 {
+  font-size: 16px;
+}
+.md h4 {
+  font-size: 14px;
+  color: var(--color-ink2);
+}
+.md p {
+  margin: 0.7em 0;
+}
+.md a {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--color-accent) 40%, transparent);
+}
+/* Tailwind's preflight strips list styles — restore them inside prose. */
+.md ul,
+.md ol {
+  margin: 0.7em 0;
+  padding-left: 1.5em;
+}
+.md ul {
+  list-style: disc;
+}
+.md ol {
+  list-style: decimal;
+}
+.md ul ul {
+  list-style: circle;
+}
+.md li {
+  margin: 0.3em 0;
+}
+.md li::marker {
+  color: var(--color-ink3);
+}
+.md input[type='checkbox'] {
+  accent-color: var(--color-accent);
+  margin-right: 0.45em;
+  transform: translateY(1px);
+}
+.md code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: var(--color-raised);
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+  padding: 0.12em 0.4em;
+  color: var(--color-ink);
+}
+.md pre {
+  background: var(--color-inset);
+  border: 1px solid var(--color-line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin: 0.9em 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.md pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--color-ink2);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.md blockquote {
+  margin: 0.9em 0;
+  padding: 0.2em 0 0.2em 1em;
+  border-left: 3px solid var(--color-line2);
+  color: var(--color-ink2);
+}
+.md hr {
+  border: 0;
+  border-top: 1px solid var(--color-line);
+  margin: 1.4em 0;
+}
+.md table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0.9em 0;
+  font-size: 13.5px;
+}
+.md th,
+.md td {
+  border: 1px solid var(--color-line);
+  padding: 6px 12px;
+  text-align: left;
+}
+.md th {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-ink2);
+  background: var(--color-raised);
+}
+.md img {
+  max-width: 100%;
+  border-radius: 10px;
+}
+
+/* hide scrollbars but keep scrolling */
+.noscroll::-webkit-scrollbar {
+  display: none;
+}
+.noscroll {
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ---- motion ------------------------------------------------------------------
+   Everything that can be a spring is a spring (lib/motion.js). These keyframes
+   cover the few loops springs can't do: the working dot's ping, a quiet pulse,
+   and the loading spinner. Nothing else loops. */
+@keyframes mc-ping {
+  0% {
+    transform: scale(1);
+    opacity: 0.45;
+  }
+  80%,
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+@keyframes mc-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@keyframes mc-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* The backdrop photo breathes — 90s, barely perceptible. Not a slideshow. */
+@keyframes mc-drift {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(1.06);
+  }
+}
+.anim-drift {
+  animation: mc-drift 90s ease-in-out infinite alternate;
+}
+
+.anim-ping {
+  animation: mc-ping 1.6s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+.anim-pulse {
+  animation: mc-pulse 1.8s ease-in-out infinite;
+}
+.anim-spin {
+  animation: mc-spin 0.7s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.06s !important;
+  }
+}

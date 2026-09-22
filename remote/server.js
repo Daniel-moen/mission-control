@@ -13,7 +13,7 @@
 // hand them through. Bodies come back as `doc`/`docSearchResult` frames folded
 // into the same host→viewer fan-out as snapshots and acks.
 //
-// The panel is a built Svelte SPA in ./dist (see `npm run build`). This server
+// The panel is a built React SPA in ./dist (see `npm run build`). This server
 // serves those static assets plus a /health check, and runs the WebSocket relay.
 //
 // Auth: every WebSocket connection must present the shared MC_TOKEN.
