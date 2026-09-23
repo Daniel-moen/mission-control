@@ -11,6 +11,7 @@ import Combine
 ///                  {type:"ack", ok, cmd, detail, id?}     result of an executed command
 ///                  {type:"doc", id, …, content}    one document's body, sent on demand
 ///                  {type:"docSearchResult", q, hits}      library full-text search hits
+///                  {type:"push", title, body, tag?, url?, urgent?} Web Push for phones (Mia)
 ///   relay → host:  {type:"reply", sessionId, text} type into that agent's terminal
 ///                  {type:"broadcast", text}        send to every controllable agent
 ///                  {type:"kill", sessionId}        terminate that agent's process
@@ -22,11 +23,19 @@ import Combine
 ///                  {type:"research", topic, subject, dir, model, tags[]}  seed a doc, dispatch an agent to fill it
 ///                  {type:"docGet|docSave|docCreate|docDelete|docMeta|docSearch", …}  document library
 ///                  {type:"viewers", count}         how many panels are watching
+///                  {type:"pushKey", key}           relay's VAPID public key (echoed in the snapshot)
+///                  {type:"miaSend|miaAnswer|miaRead|miaTaskAdd|miaTaskCancel|miaTaskSet|
+///                         miaStart|miaStop|miaSetModel|miaSchedule|miaPushTest", …}  Mia (docs/mia.md §8)
 final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     @Published private(set) var connected = false
     @Published private(set) var viewerCount = 0
 
     private weak var manager: AgentManager?
+    /// Mia's event bus — owns the snapshot's `mia` block and the mia* commands.
+    /// Set by the AppDelegate; wires its push frames to this socket.
+    weak var mia: MiaManager? {
+        didSet { mia?.onPush = { [weak self] frame in self?.sendPush(frame) } }
+    }
     private let settings = Settings.shared
     /// Our own bridge for reading terminal screens — stateless, so a second
     /// instance alongside AgentManager's is harmless.
@@ -196,6 +205,12 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
         switch type {
         case "viewers":
             setViewers(obj["count"] as? Int ?? 0)
+
+        case "pushKey":
+            if let key = obj["key"] as? String, !key.isEmpty { mia?.pushKey = key }
+
+        case let t where t.hasPrefix("mia"):
+            handleMia(t, obj)
 
         case "reply":
             guard let sid = obj["sessionId"] as? String,
@@ -431,6 +446,60 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
         default:
             break
         }
+    }
+
+    // MARK: Mia
+
+    private func handleMia(_ type: String, _ obj: [String: Any]) {
+        guard let mia else { ack(false, cmd: type, detail: "Mia isn't available"); return }
+        func str(_ k: String) -> String { (obj[k] as? String) ?? "" }
+        let r: MiaManager.Outcome
+        switch type {
+        case "miaSend":
+            r = mia.send(text: str("text"))
+        case "miaAnswer":
+            r = mia.answer(questionId: str("questionId"), text: str("text"))
+        case "miaRead":
+            r = mia.markRead(upTo: str("upTo"))
+        case "miaTaskAdd":
+            let p = (obj["priority"] as? NSNumber)?.intValue ?? Int(str("priority")) ?? 3
+            r = mia.addTask(title: str("title"), detail: str("detail"), dir: str("dir"),
+                            priority: p >= 1 ? p : 3)
+        case "miaTaskCancel":
+            r = mia.cancelTask(id: (obj["id"] as? NSNumber)?.stringValue ?? str("id"))
+        case "miaTaskSet":
+            r = mia.setTask(id: (obj["id"] as? NSNumber)?.stringValue ?? str("id"),
+                            field: str("field"), value: obj["value"])
+        case "miaStart":
+            r = mia.start()
+        case "miaStop":
+            r = mia.stop()
+        case "miaSetModel":
+            r = mia.setModel(str("model"))
+        case "miaSchedule":
+            // The item may travel nested ({op, item:{…}}) or flat ({op, id, at, …}).
+            var item = (obj["item"] as? [String: Any]) ?? obj
+            item["type"] = nil; item["op"] = nil
+            r = mia.schedule(op: str("op"), item: item)
+        case "miaPushTest":
+            sendPush(["type": "push", "title": "Mia", "body": "Test notification from Mission Control",
+                      "tag": "mia-test", "url": "/#mia", "urgent": false])
+            r = .init(ok: connected, detail: connected ? "Test push sent" : "Relay not connected")
+        default:
+            r = .init(ok: false, detail: "Unknown command \(type)")
+        }
+        var frame: [String: Any] = ["type": "ack", "ok": r.ok, "cmd": type, "detail": r.detail]
+        if let id = r.id { frame["id"] = id }
+        sendJSON(frame)
+    }
+
+    /// A Web Push request for the relay to fan out to subscribed phones. Not
+    /// queued: a push that can't go out now is stale by the time it could.
+    private func sendPush(_ frame: [String: Any]) {
+        guard connected else { return }
+        var f = frame
+        f["type"] = "push"
+        sendJSON(f)
     }
 
     /// Ship one document's full body to the panel. Silently drops if the id
@@ -784,6 +853,7 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
                 "statusLabel": run.status.label,
                 "activity": run.activity,
                 "isManager": run.isManager,
+                "isMia": run.isMia,
                 "controllable": run.terminal?.controllable ?? false,
                 "cost": run.costUSD,
                 "turns": run.numTurns,
@@ -825,6 +895,7 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
                 }
             }
             if let fleetId = run.fleetId { a["fleetId"] = fleetId.uuidString }
+            if let tid = run.miaTaskId { a["miaTaskId"] = tid }
             if let plan = run.latestPlan { a["plan"] = plan.text }
             if let screen = screens[run.sessionId], !screen.isEmpty { a["screen"] = screen }
             return a
@@ -862,6 +933,8 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
             "models": ModelChoice.allCases.map {
                 ["flag": $0.flag, "label": $0.label, "short": $0.short, "blurb": $0.blurb]
             },
+            // Mia, the persistent assistant: thread, tasks, questions, schedule.
+            "mia": mia?.snapshotBlock() ?? ["enabled": false, "online": false],
         ]
     }
 }

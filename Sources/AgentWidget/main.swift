@@ -7,6 +7,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     /// Streams the fleet to the remote panel and executes its commands.
     /// Self-managing: connects/disconnects as the remote settings change.
     private(set) var remote: RemoteBridge?
+    /// Mia, the persistent assistant — supervises her session and is the
+    /// event bus around it. Idle unless enabled in settings.
+    private(set) var mia: MiaManager?
     var statusItem: NSStatusItem!
     var popover: NSPopover!
     private var cancellables = Set<AnyCancellable>()
@@ -32,6 +35,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         // Bring the remote panel bridge up (it no-ops unless enabled in settings).
         remote = RemoteBridge(manager: manager)
+        let mia = MiaManager(manager: manager)
+        self.mia = mia
+        remote?.mia = mia
 
         // A frosted-glass popover hosting the same root UI, anchored to the icon.
         let pop = NSPopover()

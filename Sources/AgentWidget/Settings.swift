@@ -60,6 +60,20 @@ final class Settings: ObservableObject {
         didSet { defaults.set(remoteToken, forKey: Keys.remoteToken) }
     }
 
+    /// Keep Mia — the persistent assistant session — running. Off by default:
+    /// she is a long-lived Opus session with her own mailbox.
+    @Published var miaEnabled: Bool {
+        didSet { defaults.set(miaEnabled, forKey: Keys.miaEnabled) }
+    }
+    /// Model Mia (and, by default, her executors) run on.
+    @Published var miaModel: String {
+        didSet { defaults.set(miaModel, forKey: Keys.miaModel) }
+    }
+    /// Id of the newest Mia message the panel has marked read.
+    @Published var miaReadUpTo: String {
+        didSet { defaults.set(miaReadUpTo, forKey: Keys.miaReadUpTo) }
+    }
+
     /// Typed view of the user's chosen launch terminal, defaulting to the
     /// always-present Terminal.app when nothing's been picked yet.
     var launchTerminal: TerminalBridge.LaunchTerminal {
@@ -81,6 +95,9 @@ final class Settings: ObservableObject {
         static let remoteEnabled = "remoteEnabled"
         static let remoteURL = "remoteURL"
         static let remoteToken = "remoteToken"
+        static let miaEnabled = "miaEnabled"
+        static let miaModel = "miaModel"
+        static let miaReadUpTo = "miaReadUpTo"
     }
 
     /// Move a just-used folder to the front of the pick-list, deduped and capped.
@@ -110,5 +127,8 @@ final class Settings: ObservableObject {
         remoteEnabled = bool(Keys.remoteEnabled, default: false)
         remoteURL = store.string(forKey: Keys.remoteURL) ?? ""
         remoteToken = store.string(forKey: Keys.remoteToken) ?? ""
+        miaEnabled = bool(Keys.miaEnabled, default: false)
+        miaModel = store.string(forKey: Keys.miaModel) ?? "claude-opus-5-5"
+        miaReadUpTo = store.string(forKey: Keys.miaReadUpTo) ?? ""
     }
 }

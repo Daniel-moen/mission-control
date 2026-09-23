@@ -17,6 +17,10 @@ export default defineConfig({
         target: `ws://localhost:${process.env.MC_RELAY || 8899}`,
         ws: true,
       },
+      // The Mia tab's push subscription talks to the relay over plain HTTP.
+      '/push': {
+        target: `http://localhost:${process.env.MC_RELAY || 8899}`,
+      },
     },
   },
   build: {

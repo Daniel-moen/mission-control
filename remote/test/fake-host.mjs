@@ -407,6 +407,143 @@ the capacity to absorb the migration.
 `;
 }
 
+// ---------------------------------------------------------------------------
+// Mia, the assistant (docs/mia.md). The snapshot carries a `mia` block; the
+// mia* commands mutate it and ack the way MiaManager does. `miaPushTest` also
+// emits a host `push` frame, which the relay turns into a Web Push.
+
+const iso = (msAgo = 0) => new Date(Date.now() - msAgo).toISOString();
+const mia = {
+  enabled: true,
+  online: true,
+  sessionId: 'mia-session-0001',
+  model: 'claude-opus-5-5',
+  restarts: 0,
+  readUpTo: null,
+  pushKey: null, // filled from the relay's {type:'pushKey'} on connect
+  messages: [
+    { id: 'm_1', at: iso(600000), from: 'daniel', kind: 'chat', text: 'Add dark mode to the settings page in acme' },
+    { id: 'm_2', at: iso(590000), from: 'mia', kind: 'question', text: 'Only the settings page, or the whole app?', options: ['Settings only', 'Whole app'], taskId: '0001', questionId: 'q_seed1' },
+  ],
+  tasks: [
+    {
+      id: '0001', title: 'Add dark mode to settings', detail: 'Add dark mode to the settings page in acme',
+      dir: '/Users/demo/acme', status: 'asking', priority: 2, createdAt: iso(600000), updatedAt: iso(590000),
+      questions: [{ id: 'q_seed1', text: 'Only the settings page, or the whole app?', options: ['Settings only', 'Whole app'], askedAt: iso(590000), answer: null, answeredAt: null }],
+      executor: null, log: [], result: null,
+    },
+  ],
+  schedule: {
+    heartbeats: [{ id: 'hb_inbox', label: 'Inbox check', everyMinutes: 30, prompt: 'Check the inbox.', enabled: true }],
+    reminders: [],
+  },
+};
+let miaMsgSeq = 2;
+
+function miaBlock() {
+  const pendingQuestions = [];
+  for (const t of mia.tasks) {
+    for (const q of t.questions || []) {
+      if (q.answer == null) pendingQuestions.push({ questionId: q.id, taskId: t.id, text: q.text, options: q.options || [], askedAt: q.askedAt });
+    }
+  }
+  return { ...mia, messages: mia.messages.slice(-200), pendingQuestions };
+}
+
+function miaMessage(fields) {
+  miaMsgSeq += 1;
+  const m = { id: `m_${miaMsgSeq}`, at: iso(), ...fields };
+  mia.messages.push(m);
+  return m;
+}
+
+// Returns the ack to send for a mia* command, or null if `type` isn't one.
+function handleMia(type, msg) {
+  const ack = (ok, detail, extra = {}) => ({ type: 'ack', cmd: type, ok, detail, ...extra });
+  const task = (id) => mia.tasks.find((t) => t.id === String(id));
+  switch (type) {
+    case 'miaSend': {
+      const text = String(msg.text ?? '').trim();
+      if (!text) return ack(false, 'Message is empty');
+      miaMessage({ from: 'daniel', kind: 'chat', text });
+      return ack(true, 'Sent to Mia');
+    }
+    case 'miaAnswer': {
+      const text = String(msg.text ?? '').trim();
+      let hit = null;
+      for (const t of mia.tasks) for (const q of t.questions || []) if (q.id === msg.questionId) hit = { t, q };
+      if (!hit) return ack(false, `No question ${msg.questionId}`);
+      if (!text) return ack(false, 'Answer is empty');
+      hit.q.answer = text;
+      hit.q.answeredAt = iso();
+      if (hit.t.status === 'asking') hit.t.status = 'queued';
+      hit.t.updatedAt = iso();
+      miaMessage({ from: 'daniel', kind: 'answer', text, questionId: hit.q.id, taskId: hit.t.id });
+      return ack(true, 'Answer delivered');
+    }
+    case 'miaRead':
+      if (!mia.messages.some((m) => m.id === msg.upTo)) return ack(false, `No message ${msg.upTo}`);
+      mia.readUpTo = msg.upTo;
+      return ack(true, 'Marked read');
+    case 'miaTaskAdd': {
+      const title = String(msg.title ?? '').trim();
+      if (!title) return ack(false, 'Title is empty');
+      const max = mia.tasks.reduce((n, t) => Math.max(n, Number(t.id) || 0), 0);
+      const id = String(max + 1).padStart(4, '0');
+      mia.tasks.push({
+        id, title, detail: msg.detail ?? '', dir: msg.dir ?? null, status: 'queued',
+        priority: Number.isInteger(msg.priority) ? msg.priority : 3,
+        createdAt: iso(), updatedAt: iso(), questions: [], executor: null, log: [], result: null,
+      });
+      return ack(true, `Task ${id} queued`, { id });
+    }
+    case 'miaTaskCancel': {
+      const t = task(msg.id);
+      if (!t) return ack(false, `No task ${msg.id}`);
+      t.status = 'cancelled';
+      t.updatedAt = iso();
+      return ack(true, `Task ${t.id} cancelled`);
+    }
+    case 'miaTaskSet': {
+      const t = task(msg.id);
+      if (!t) return ack(false, `No task ${msg.id}`);
+      if (!['status', 'priority', 'dir'].includes(msg.field)) return ack(false, `Can't set ${msg.field}`);
+      t[msg.field] = msg.field === 'priority' ? Number(msg.value) : msg.value;
+      t.updatedAt = iso();
+      return ack(true, `Task ${t.id} ${msg.field} set`);
+    }
+    case 'miaStart':
+      mia.enabled = true;
+      mia.online = true;
+      return ack(true, 'Mia starting');
+    case 'miaStop':
+      mia.enabled = false;
+      mia.online = false;
+      return ack(true, 'Mia stopped');
+    case 'miaSetModel':
+      if (!String(msg.model ?? '').trim()) return ack(false, 'Model is empty');
+      mia.model = String(msg.model);
+      return ack(true, `Model set to ${mia.model}`);
+    case 'miaSchedule': {
+      const s = mia.schedule;
+      const item = msg.item || {};
+      switch (msg.op) {
+        case 'addReminder': s.reminders.push({ id: item.id || `r_${Date.now()}`, at: item.at, text: item.text, taskId: item.taskId ?? null, fired: false }); break;
+        case 'removeReminder': s.reminders = s.reminders.filter((r) => r.id !== (item.id ?? msg.id)); break;
+        case 'setHeartbeat': s.heartbeats = [...s.heartbeats.filter((h) => h.id !== item.id), item]; break;
+        case 'removeHeartbeat': s.heartbeats = s.heartbeats.filter((h) => h.id !== (item.id ?? msg.id)); break;
+        default: return ack(false, `Unknown schedule op ${msg.op}`);
+      }
+      return ack(true, 'Schedule updated');
+    }
+    case 'miaPushTest':
+      send({ type: 'push', title: 'Mia', body: 'Test notification from Mission Control', tag: 'mia-test', url: '/#mia', urgent: false });
+      return ack(true, 'Test push sent');
+    default:
+      return null;
+  }
+}
+
 let tick = 0;
 let launchSeq = 0;
 
@@ -452,6 +589,7 @@ function snapshot() {
     knownDirs: ['/Users/demo/acme', '/Users/demo/webapp', '/Users/demo/shop', '/Users/demo/tools'],
     lastDir: '/Users/demo/acme',
     models: MODELS,
+    mia: miaBlock(),
     system: { cpu: 18 + Math.random() * 20, cores: 12, memUsedMB: 14200, memTotalMB: 32768 },
   };
 }
@@ -576,6 +714,11 @@ function connect() {
     switch (type) {
       case 'viewers':
         log(`relay: ${msg.count} viewer(s)`);
+        return;
+
+      case 'pushKey':
+        mia.pushKey = msg.key ?? null;
+        log('relay: push key received');
         return;
 
       case 'watch': {
@@ -780,8 +923,15 @@ function connect() {
         return;
       }
 
-      default:
+      default: {
+        const miaAck = handleMia(type, msg);
+        if (miaAck) {
+          log(`${type}: ${miaAck.ok ? 'ok' : 'rejected'} — ${miaAck.detail}`);
+          send(miaAck);
+          return;
+        }
         log(`unhandled message: ${msg.type}`);
+      }
     }
   });
 

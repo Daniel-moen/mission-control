@@ -182,6 +182,7 @@ struct RootView: View {
             Toggle("Expand live feeds by default", isOn: $settings.expandFeeds)
             Divider()
             Toggle("📡 Remote panel (iPad)", isOn: $settings.remoteEnabled)
+            Toggle("✦ Mia (assistant)", isOn: $settings.miaEnabled)
             if !settings.remoteURL.isEmpty {
                 Button("Open remote panel in browser") {
                     if let url = panelLink() { NSWorkspace.shared.open(url) }

@@ -5,17 +5,21 @@
 //
 // Asserts auth, agent listing/detail/loose-matching, live screen reads, reply/
 // key/kill/broadcast/launch acks, the full doc CRUD + search cycle, and the
-// one-shot research flow (active → done).
+// one-shot research flow (active → done), and Mia (/api/v1/mia*).
 
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import os from 'node:os';
+import fs from 'node:fs';
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const PORT = 8897;
 const TOKEN = 'test';
 const BASE = `http://localhost:${PORT}/api/v1`;
+// Keep the relay's push store out of the repo.
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'mc-api-'));
 
 let passed = 0;
 let failed = 0;
@@ -29,7 +33,7 @@ function ok(cond, label) {
 function boot(cmd, args, name) {
   const p = spawn(cmd, args, {
     cwd: path.join(DIR, '..'),
-    env: { ...process.env, MC_TOKEN: TOKEN, PORT: String(PORT) },
+    env: { ...process.env, MC_TOKEN: TOKEN, PORT: String(PORT), PUSH_STORE: path.join(TMP, 'push-subscriptions.json') },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   p.stdout.on('data', (d) => process.env.API_TEST_VERBOSE && console.log(`[${name}]`, d.toString().trim()));
@@ -143,6 +147,30 @@ async function main() {
   const report = await api('GET', `/docs/${research.data.id}`);
   ok(report.status === 200 && report.data.doc.status === 'done', 'research doc flips to done');
 
+  console.log('mia');
+  ok(index.data.endpoints['GET  /api/v1/mia'], 'index lists the Mia routes');
+  const miaGet = await api('GET', '/mia');
+  ok(miaGet.status === 200 && miaGet.data.mia && Array.isArray(miaGet.data.mia.tasks), 'GET /mia returns the mia block');
+  ok(miaGet.data.mia.pendingQuestions.some((q) => q.questionId === 'q_seed1'), 'mia block lists the pending question');
+  const miaMsg = await api('POST', '/mia/message', { text: 'Anything in my inbox?' });
+  ok(miaMsg.status === 200 && miaMsg.data.ok, 'message acks ok');
+  ok((await api('POST', '/mia/message', {})).status === 400, 'message without text is a 400');
+  const badAnswer = await api('POST', '/mia/answer', { questionId: 'q_nope', text: 'Yes' });
+  ok(badAnswer.status === 422 && badAnswer.data.ok === false, 'answer to an unknown question is a 422');
+  ok((await api('POST', '/mia/answer', { text: 'Yes' })).status === 400, 'answer without questionId is a 400');
+  const answer = await api('POST', '/mia/answer', { questionId: 'q_seed1', text: 'Whole app' });
+  ok(answer.status === 200 && answer.data.ok, 'answer acks ok');
+  const task = await api('POST', '/mia/tasks', { title: 'Renew the SSL cert', detail: 'expires Friday', dir: '/Users/demo/tools', priority: 1 });
+  ok(task.status === 200 && task.data.ok && /^\d{4}$/.test(task.data.id), 'task add acks with a task id');
+  ok((await api('POST', '/mia/tasks', { detail: 'no title' })).status === 400, 'task without a title is a 400');
+  ok((await api('POST', '/mia/tasks', { title: 'x', priority: 'high' })).status === 400, 'non-numeric priority is a 400');
+  await sleep(1200); // next snapshot tick
+  const miaAfter = (await api('GET', '/mia')).data.mia;
+  ok(miaAfter.tasks.some((t) => t.id === task.data.id && t.priority === 1 && t.dir === '/Users/demo/tools'), 'new task shows up in the mia block');
+  ok(!miaAfter.pendingQuestions.some((q) => q.questionId === 'q_seed1'), 'answered question is no longer pending');
+  ok(miaAfter.messages.some((m) => m.from === 'daniel' && m.text === 'Anything in my inbox?'), 'message shows up in the thread');
+  ok((await api('GET', '/mia', null, { token: '' })).status === 401, 'mia routes need the token');
+
   console.log('errors');
   ok((await api('GET', '/nope')).status === 404, 'unknown route is a 404');
   ok((await api('POST', '/launch', {})).status === 422 || (await api('POST', '/launch', {})).data.ok === false, 'empty launch is rejected by the host');
@@ -153,4 +181,7 @@ async function main() {
 
 main()
   .catch((err) => { console.error(err); process.exitCode = 1; })
-  .finally(() => { for (const p of procs) p.kill(); });
+  .finally(() => {
+    for (const p of procs) p.kill();
+    fs.rmSync(TMP, { recursive: true, force: true });
+  });

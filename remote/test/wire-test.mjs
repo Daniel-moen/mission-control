@@ -8,6 +8,11 @@
 // frame crosses the actual server.js fan-out, so a break anywhere in the
 // allowlist, the host handlers, or the wire shapes surfaces here.
 //
+// Steps 11+ cover Mia (docs/mia.md §8): every mia* command crosses the relay and
+// is acked, the host learns the VAPID key, /push/* is token-gated, and a host
+// `push` frame becomes a Web Push (web-push is mocked via test/mock-web-push.cjs,
+// preloaded into the relay) without ever reaching a viewer.
+//
 // Run:  cd remote && node test/wire-test.mjs   (or: npm run test:wire)
 // One ok/FAIL line per assertion; non-zero exit on any failure; no child
 // process or port is left behind, even when an assertion throws.
@@ -15,6 +20,8 @@
 import net from 'net';
 import http from 'http';
 import path from 'path';
+import os from 'os';
+import fs from 'fs';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import WebSocket from 'ws';
@@ -22,6 +29,8 @@ import WebSocket from 'ws';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SERVER = path.join(HERE, '..', 'server.js');
 const HOST = path.join(HERE, 'fake-host.mjs');
+const MOCK_PUSH = path.join(HERE, 'mock-web-push.cjs');
+const PUSH_STORE = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'mc-wire-')), 'push-subscriptions.json');
 const TOKEN = 'test';
 
 const children = [];
@@ -41,9 +50,9 @@ function freePort() {
   });
 }
 
-function spawnNode(file, port, label) {
+function spawnNode(file, port, label, extraEnv = {}) {
   const child = spawn(process.execPath, [file], {
-    env: { ...process.env, MC_TOKEN: TOKEN, PORT: String(port) },
+    env: { ...process.env, MC_TOKEN: TOKEN, PORT: String(port), ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   child._label = label;
@@ -62,6 +71,7 @@ function cleanup() {
   torndown = true;
   for (const ws of sockets) { try { ws.terminate(); } catch {} }
   for (const c of children) { try { c.kill('SIGKILL'); } catch {} }
+  try { fs.rmSync(path.dirname(PUSH_STORE), { recursive: true, force: true }); } catch {}
 }
 process.on('exit', cleanup);
 process.on('SIGINT', () => { cleanup(); process.exit(130); });
@@ -148,13 +158,39 @@ function assert(cond, msg) {
 }
 
 const isSnap = (m) => m.type === 'snapshot';
+
+// Plain HTTP against the relay; `token` goes in a Bearer header, `query` in ?token=.
+async function http_(port, method, route, { body, token, query } = {}) {
+  const qs = query != null ? `?token=${encodeURIComponent(query)}` : '';
+  const res = await fetch(`http://localhost:${port}${route}${qs}`, {
+    method,
+    headers: {
+      ...(token != null ? { authorization: `Bearer ${token}` } : {}),
+      ...(body ? { 'content-type': 'application/json' } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  let data = null;
+  try { data = await res.json(); } catch {}
+  return { status: res.status, data };
+}
+
+const fakeSub = (name) => ({
+  endpoint: `https://push.example.test/${name}`,
+  keys: { p256dh: 'BPlaceholderP256dhKeyForTests', auth: 'placeholderAuth' },
+});
 const docIn = (snap, id) => (snap.docs || []).find((d) => d.id === id);
 
 // ---- the run ----------------------------------------------------------------
 
 async function main() {
   const port = await freePort();
-  spawnNode(SERVER, port, 'server');
+  const server = spawnNode(SERVER, port, 'server', {
+    NODE_OPTIONS: `--require ${MOCK_PUSH}`,
+    PUSH_STORE,
+    VAPID_PUBLIC_KEY: '',
+    VAPID_PRIVATE_KEY: '',
+  });
   await waitHealthy(port, 8000);
   spawnNode(HOST, port, 'fake-host');
 
@@ -293,6 +329,104 @@ async function main() {
       good.on('open', () => { clearTimeout(t); resolve(); });
       good.on('error', (e) => { clearTimeout(t); reject(e); });
     });
+  });
+
+  // ---- Mia ------------------------------------------------------------------
+
+  // 11 — the snapshot's mia block passes through untouched.
+  await step('11. snapshot carries the mia block', async () => {
+    const snap = await v.waitFrom(0, (m) => isSnap(m) && m.mia, 5000, 'snapshot with mia');
+    for (const k of ['enabled', 'online', 'model', 'messages', 'tasks', 'pendingQuestions', 'schedule']) {
+      assert(k in snap.mia, `mia block missing '${k}'`);
+    }
+    assert(snap.mia.pendingQuestions.some((q) => q.questionId === 'q_seed1'), 'seeded question not pending');
+  });
+
+  // 12 — every mia* command type crosses the relay and is acked by the host.
+  await step('12. all eleven mia* commands pass through and are acked', async () => {
+    const cmds = [
+      { type: 'miaSend', text: 'hello Mia' },
+      { type: 'miaAnswer', questionId: 'q_seed1', text: 'Whole app' },
+      { type: 'miaRead', upTo: 'm_2' },
+      { type: 'miaTaskAdd', title: 'Wire task', detail: 'from the wire test', dir: '/Users/demo/shop', priority: 1 },
+      { type: 'miaTaskSet', id: '0001', field: 'priority', value: 1 },
+      { type: 'miaTaskCancel', id: '0001' },
+      { type: 'miaStop' },
+      { type: 'miaStart' },
+      { type: 'miaSetModel', model: 'claude-opus-5-5' },
+      { type: 'miaSchedule', op: 'addReminder', item: { id: 'r_wire', at: '2030-01-01T09:00:00Z', text: 'Chase the invoice' } },
+      { type: 'miaPushTest' },
+    ];
+    for (const c of cmds) {
+      const mk = v.mark();
+      v.send(c);
+      const ack = await v.waitFrom(mk, (m) => m.type === 'ack' && m.cmd === c.type, 5000, `${c.type} ack`);
+      assert(ack.ok === true, `${c.type} ack not ok: ${ack.detail}`);
+      if (c.type === 'miaTaskAdd') assert(/^\d{4}$/.test(ack.id || ''), `miaTaskAdd ack id was ${ack.id}`);
+    }
+    const snap = await v.waitFrom(v.mark(), isSnap, 4000, 'snapshot after mia commands');
+    assert(snap.mia.tasks.some((t) => t.title === 'Wire task' && t.priority === 1), 'added task missing from snapshot');
+    assert(!snap.mia.pendingQuestions.some((q) => q.questionId === 'q_seed1'), 'answered question still pending');
+    assert(snap.mia.schedule.reminders.some((r) => r.id === 'r_wire'), 'reminder missing from snapshot');
+  });
+
+  // 13 — /push/key is token-gated; the host was told the same key on connect.
+  let pushKey = null;
+  await step('13. /push/key needs the token and matches the key the host got', async () => {
+    assert((await http_(port, 'GET', '/push/key')).status === 401, 'no token was accepted');
+    assert((await http_(port, 'GET', '/push/key', { token: 'wrong' })).status === 401, 'bad token was accepted');
+    const viaBearer = await http_(port, 'GET', '/push/key', { token: TOKEN });
+    assert(viaBearer.status === 200 && typeof viaBearer.data.key === 'string' && viaBearer.data.key.length > 40, 'bearer: no key');
+    const viaQuery = await http_(port, 'GET', '/push/key', { query: TOKEN });
+    assert(viaQuery.status === 200 && viaQuery.data.key === viaBearer.data.key, '?token= did not return the same key');
+    pushKey = viaBearer.data.key;
+    const snap = await v.waitFrom(v.mark(), (m) => isSnap(m) && m.mia?.pushKey, 4000, 'snapshot with mia.pushKey');
+    assert(snap.mia.pushKey === pushKey, 'host was sent a different pushKey');
+  });
+
+  // 14 — /push/subscribe is token-gated, validates, and persists to PUSH_STORE.
+  await step('14. /push/subscribe needs the token, validates, and persists', async () => {
+    assert((await http_(port, 'POST', '/push/subscribe', { body: fakeSub('phone') })).status === 401, 'no token was accepted');
+    assert((await http_(port, 'POST', '/push/subscribe', { body: { endpoint: 'nope' }, token: TOKEN })).status === 400, 'junk subscription accepted');
+    const a = await http_(port, 'POST', '/push/subscribe', { body: { ...fakeSub('phone'), label: 'iPhone' }, token: TOKEN });
+    assert(a.status === 200 && a.data.ok, `subscribe failed: ${a.status}`);
+    const again = await http_(port, 'POST', '/push/subscribe', { body: fakeSub('phone'), query: TOKEN });
+    assert(again.status === 200 && again.data.subscriptions === 1, 're-subscribing duplicated the endpoint');
+    const gone = await http_(port, 'POST', '/push/subscribe', { body: fakeSub('gone'), token: TOKEN });
+    assert(gone.data.subscriptions === 2, 'second subscription not stored');
+    const stored = JSON.parse(fs.readFileSync(PUSH_STORE, 'utf8'));
+    assert(stored.length === 2 && stored.some((s) => s.endpoint.endsWith('/phone')), 'PUSH_STORE not written');
+  });
+
+  // 15 — a host push frame → Web Push to every subscription; never to viewers;
+  // a 410 endpoint is dropped.
+  await step('15. host push frame reaches subscriptions, not viewers; 410 is dropped', async () => {
+    const mk = v.mark();
+    const outBefore = server._out.length;
+    v.send({ type: 'miaPushTest' });
+    await v.waitFrom(mk, (m) => m.type === 'ack' && m.cmd === 'miaPushTest', 5000, 'miaPushTest ack');
+    const deadline = Date.now() + 4000;
+    while (!server._out.slice(outBefore).includes('MOCK_PUSH') && Date.now() < deadline) await sleep(50);
+    const line = server._out.slice(outBefore).split('\n').find((l) => l.startsWith('MOCK_PUSH '));
+    assert(line, 'no web push was sent');
+    const sent = JSON.parse(line.slice('MOCK_PUSH '.length));
+    assert(sent.endpoint.endsWith('/phone'), `pushed to ${sent.endpoint}`);
+    const p = sent.payload;
+    assert(p.title === 'Mia' && p.body.includes('Test notification') && p.tag === 'mia-test' && p.url === '/#mia' && p.urgent === false, `payload wrong: ${JSON.stringify(p)}`);
+    await sleep(500);
+    assert(!v.msgs.slice(mk).some((m) => m.type === 'push'), 'push frame was fanned out to a viewer');
+    const health = await http_(port, 'GET', '/health');
+    assert(health.data.pushSubscriptions === 1, `gone endpoint not dropped (${health.data.pushSubscriptions} left)`);
+    const stored = JSON.parse(fs.readFileSync(PUSH_STORE, 'utf8'));
+    assert(stored.length === 1 && stored[0].endpoint.endsWith('/phone'), 'drop not persisted');
+  });
+
+  // 16 — /push/unsubscribe is token-gated and removes the endpoint.
+  await step('16. /push/unsubscribe needs the token and removes the endpoint', async () => {
+    const body = { endpoint: fakeSub('phone').endpoint };
+    assert((await http_(port, 'POST', '/push/unsubscribe', { body })).status === 401, 'no token was accepted');
+    const r = await http_(port, 'POST', '/push/unsubscribe', { body, token: TOKEN });
+    assert(r.status === 200 && r.data.removed === true && r.data.subscriptions === 0, `unsubscribe: ${JSON.stringify(r.data)}`);
   });
 }
 

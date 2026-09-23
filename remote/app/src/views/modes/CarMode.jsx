@@ -16,6 +16,7 @@ import {
   fmtInt,
   fmtTokens,
   allDirs,
+  miaAnswer,
 } from '../../lib/store.js';
 import { useAgents, useLink, useWakeLock } from '../../lib/hooks.js';
 import { TONE } from '../../lib/tone.js';
@@ -71,6 +72,26 @@ function Slab({ tone = 'plain', radius = 'rounded-[26px]', className = '', child
 // prompt, or a dead process. Identical on the ask screen and inside a focused
 // agent, which is why it lives on its own.
 function AskControls({ item }) {
+  // A question from Mia: her options as slabs; the mic answers in words.
+  if (item.kind === 'mia') {
+    const q = item.question;
+    return (
+      <>
+        {(q.options || []).slice(0, 6).map((o, i) => (
+          <Slab
+            key={`${i}:${o}`}
+            onClick={() => miaAnswer(q.questionId, String(o))}
+            className="min-h-[76px] justify-start gap-4 px-6 text-left landscape:min-h-[62px] landscape:gap-3 landscape:px-4"
+          >
+            <span className="grid h-11 w-11 flex-none place-items-center rounded-2xl border border-glass-line bg-white/[0.09] font-mono text-[20px] font-bold text-ink landscape:h-9 landscape:w-9 landscape:text-[16px]">
+              {i + 1}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-[21px] font-medium landscape:text-[17px]">{String(o)}</span>
+          </Slab>
+        ))}
+      </>
+    );
+  }
   const a = item.agent;
   if (item.kind === 'exited') {
     return (
@@ -136,7 +157,11 @@ export default function CarMode({ onClose }) {
 
   // attentionInfo() parses the streamed screen, so the list has to recompute
   // when a screen frame lands — not just when the agent array changes.
-  const items = useMemo(() => attentionList(agents), [agents, screens]);
+  // Mia's open questions ride along (kind 'mia', no agent) — read aloud and
+  // answerable by voice like any other ask.
+  const mia = useMC((s) => s.mia);
+  const miaLocal = useMC((s) => s.miaLocal);
+  const items = useMemo(() => attentionList(agents, mia), [agents, screens, mia, miaLocal]);
   const c = useMemo(() => counts(agents), [agents]);
 
   const [idx, setIdx] = useState(0);
@@ -207,10 +232,19 @@ export default function CarMode({ onClose }) {
   }, []);
   useEffect(() => {
     for (const it of items) {
-      if (announced.current.has(it.agent.id)) continue;
-      announced.current.add(it.agent.id);
-      if (voiceRef.current)
+      if (announced.current.has(it.key)) continue;
+      announced.current.add(it.key);
+      if (!voiceRef.current) continue;
+      if (it.kind === 'mia') {
+        const opts = (it.question.options || []).map(String);
         speak(
+          `Mia asks: ${it.question.text || 'a question'}` +
+            (opts.length ? ` Options: ${opts.slice(0, -1).join(', ')}${opts.length > 1 ? ', or ' : ''}${opts[opts.length - 1]}.` : '') +
+            ' Tap an option, or tap the mic and say your answer.',
+        );
+        continue;
+      }
+      speak(
           `${agentName(it.agent)} needs you. ` +
             (it.kind === 'exited'
               ? 'The process exited.'
@@ -218,7 +252,7 @@ export default function CarMode({ onClose }) {
         );
     }
     // Prune as items clear, so an agent that needs you twice is announced twice.
-    const ids = new Set(items.map((i) => i.agent.id));
+    const ids = new Set(items.map((i) => i.key));
     for (const id of [...announced.current]) if (!ids.has(id)) announced.current.delete(id);
   }, [items, speak]);
 
@@ -234,9 +268,11 @@ export default function CarMode({ onClose }) {
 
   const micTarget = focused
     ? { kind: 'reply', agent: focused }
-    : screen === 'ask' && cur
-      ? { kind: 'reply', agent: cur.agent }
-      : { kind: 'launch' };
+    : screen === 'ask' && cur?.kind === 'mia'
+      ? { kind: 'mia', questionId: cur.question.questionId }
+      : screen === 'ask' && cur
+        ? { kind: 'reply', agent: cur.agent }
+        : { kind: 'launch' };
 
   // The dictation callbacks outlive the render that created them, so where the
   // words go is read from a ref at send time rather than captured.
@@ -244,6 +280,10 @@ export default function CarMode({ onClose }) {
   sendRef.current = (text) => {
     const t = (text || '').trim();
     if (!t) return;
+    if (micTarget.kind === 'mia') {
+      if (miaAnswer(micTarget.questionId, t) && voiceRef.current) speak('Sent to Mia.');
+      return;
+    }
     if (micTarget.kind === 'reply') {
       reply(micTarget.agent.id, t);
       return;
@@ -389,7 +429,7 @@ export default function CarMode({ onClose }) {
                 )}
                 <div className="min-w-0 flex-1 text-center">
                   <div className="truncate text-[30px] font-bold tracking-tight landscape:text-[22px]">
-                    {agentName(cur.agent)}
+                    {cur.kind === 'mia' ? 'Mia' : agentName(cur.agent)}
                   </div>
                   {items.length > 1 && (
                     <div className="tnum mt-0.5 text-[14px] text-ink3 landscape:mt-0 landscape:text-[12px]">
@@ -410,7 +450,9 @@ export default function CarMode({ onClose }) {
               </div>
 
               <p className="flex-none px-1 py-2 text-center text-[22px] font-medium leading-snug text-warn landscape:py-1 landscape:text-[17px]">
-                {cur.kind === 'exited'
+                {cur.kind === 'mia'
+                  ? cur.question.text || 'Mia has a question'
+                  : cur.kind === 'exited'
                   ? 'Process exited unexpectedly'
                   : cur.prompt?.question || cur.agent.activity || 'Waiting for your input'}
               </p>
@@ -572,7 +614,9 @@ export default function CarMode({ onClose }) {
             <span className="truncate">
               {listening
                 ? 'Tap to send'
-                : micTarget.kind === 'reply'
+                : micTarget.kind === 'mia'
+                  ? 'Answer Mia'
+                  : micTarget.kind === 'reply'
                   ? `Reply to ${agentName(micTarget.agent)}`
                   : `New agent${dirName ? ' · ' + dirName : ''}`}
             </span>
@@ -592,7 +636,7 @@ function FocusedAgent({ agent, items, listening, draft, transcript, onBack }) {
   const done = todos.filter((td) => td.status === 'completed').length;
   // A waiting agent opened from the list may not be in `items` yet (its screen
   // hasn't streamed) — fall back to a promptless ask so the controls still work.
-  const item = items.find((i) => i.agent.id === agent.id) || {
+  const item = items.find((i) => i.agent?.id === agent.id) || {
     agent,
     kind: st === 'exited' ? 'exited' : 'waiting',
     prompt: null,

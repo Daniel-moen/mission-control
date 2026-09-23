@@ -1,6 +1,6 @@
 import { motion, AnimatePresence } from 'motion/react';
 import { useShallow } from 'zustand/react/shallow';
-import { useMC, counts, agentStatus, agentName, fmtTokens } from '../../lib/store.js';
+import { useMC, counts, agentStatus, agentName, fmtTokens, isMiaAgent, miaOpenQuestions } from '../../lib/store.js';
 import { fmtMoney } from '../../lib/format.js';
 import { useNow } from '../../lib/hooks.js';
 import { spring, ease } from '../../lib/motion.js';
@@ -20,15 +20,18 @@ function greetingFor(h) {
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
-export default function Home({ onOpenAgent, onFleet, onLaunch }) {
+export default function Home({ onOpenAgent, onFleet, onLaunch, onMia }) {
   const now = useNow();
   const { agents, summary, link } = useMC(
     useShallow((s) => ({ agents: s.agents, summary: s.summary, link: s.link })),
   );
 
   const c = counts(agents);
-  const waiting = agents.filter((a) => agentStatus(a) === 'waiting');
+  // Mia idles at her prompt between events — never count that as a question.
+  const waiting = agents.filter((a) => agentStatus(a) === 'waiting' && !isMiaAgent(a));
+  c.waiting = waiting.length;
   const first = waiting[0] || null;
+  const miaQs = useMC((st) => miaOpenQuestions(st.mia, st.miaLocal).length);
   const s = summary || {};
 
   // One sentence, and it has to be true. Link trouble outranks fleet news —
@@ -36,6 +39,8 @@ export default function Home({ onOpenAgent, onFleet, onLaunch }) {
   let sentence;
   if (link === 'offline') sentence = 'Reconnecting to your Mac…';
   else if (link === 'relay') sentence = 'Your Mac is offline.';
+  else if (miaQs && !c.waiting)
+    sentence = `Mia has ${miaQs === 1 ? 'a question' : `${miaQs} questions`} for you`;
   else if (c.working && c.waiting)
     sentence = `${plural(c.working, 'agent', 'agents')} working · ${plural(c.waiting, 'needs', 'need')} you`;
   else if (c.working) sentence = `${plural(c.working, 'agent', 'agents')} working — nothing waiting on you`;
@@ -44,7 +49,9 @@ export default function Home({ onOpenAgent, onFleet, onLaunch }) {
   else if (agents.length) sentence = `All quiet — ${plural(c.done, 'agent', 'agents')} finished, nothing waiting`;
   else sentence = 'No agents running.';
 
-  const cta = c.waiting && first
+  const cta = miaQs && !c.waiting
+    ? { label: 'Answer Mia', variant: 'warn', icon: 'mia', onClick: () => onMia?.() }
+    : c.waiting && first
     ? { label: `Answer ${agentName(first)}`, variant: 'warn', icon: 'alert', onClick: () => onOpenAgent?.(first.id) }
     : c.working
       ? { label: 'Open fleet', variant: 'secondary', icon: 'agents', onClick: () => onFleet?.() }

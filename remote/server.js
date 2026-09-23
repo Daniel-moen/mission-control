@@ -16,6 +16,12 @@
 // The panel is a built React SPA in ./dist (see `npm run build`). This server
 // serves those static assets plus a /health check, and runs the WebSocket relay.
 //
+// Mia (docs/mia.md §8): the mia* viewer commands are allowlisted like the rest,
+// and the snapshot's `mia` block rides through untouched. The one exception to
+// "dumb pipe" is Web Push (push.js): host `push` frames are consumed here and
+// turned into notifications, never fanned out to viewers, and the host is told
+// the VAPID public key (`pushKey`) on connect.
+//
 // Auth: every WebSocket connection must present the shared MC_TOKEN.
 
 'use strict';
@@ -26,6 +32,7 @@ const fs = require('fs');
 const path = require('path');
 const { WebSocketServer } = require('ws');
 const { createApi } = require('./api');
+const { createPush } = require('./push');
 
 const PORT = process.env.PORT || 8080;
 const TOKEN = process.env.MC_TOKEN || '';
@@ -41,6 +48,8 @@ function tokenOk(candidate) {
   const b = crypto.createHash('sha256').update(TOKEN).digest();
   return crypto.timingSafeEqual(a, b);
 }
+
+const push = createPush({ tokenOk });
 
 // ---------------------------------------------------------------------------
 // HTTP: serve the built SPA + a health check.
@@ -85,7 +94,7 @@ const server = http.createServer((req, res) => {
 
   if (pathname === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, host: host !== null, viewers: viewers.size }));
+    res.end(JSON.stringify({ ok: true, host: host !== null, viewers: viewers.size, pushSubscriptions: push.count() }));
     return;
   }
 
@@ -93,6 +102,16 @@ const server = http.createServer((req, res) => {
   if (pathname === '/api' || pathname.startsWith('/api/')) {
     api.handle(req, res, url).catch((err) => {
       console.error('api error:', err);
+      if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'internal error' }));
+    });
+    return;
+  }
+
+  // Web Push subscription management (token-auth) — see push.js.
+  if (pathname.startsWith('/push/')) {
+    push.handle(req, res, url).catch((err) => {
+      console.error('push error:', err);
       if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: 'internal error' }));
     });
@@ -186,6 +205,7 @@ wss.on('connection', (ws) => {
     console.log('host connected');
     tellHostViewerCount();
     tellViewersHostState();
+    sendTo(ws, { type: 'pushKey', key: push.publicKey });
 
     ws.on('message', (data) => {
       const text = data.toString();
@@ -196,6 +216,12 @@ wss.on('connection', (ws) => {
         return;
       }
       if (!frame || typeof frame.type !== 'string') return;
+      if (frame.type === 'push') {
+        // Mia notifications → Web Push. Viewers already get the message via
+        // the snapshot, so this frame stops here.
+        push.send(frame).catch((err) => console.error('push send error:', err));
+        return;
+      }
       if (frame.type === 'snapshot') lastSnapshot = text;
       api.onHostFrame(frame); // settle any pending REST requests
       fanOutToViewers(text); // snapshots and acks both go to every viewer
@@ -233,6 +259,9 @@ wss.on('connection', (ws) => {
       // Legacy plan* aliases: an old cached panel may still send these, and the
       // host handles them as doc* equivalents.
       'planGet', 'planSave', 'planCreate', 'planDelete',
+      // Mia, the persistent assistant (docs/mia.md §8).
+      'miaSend', 'miaAnswer', 'miaRead', 'miaTaskAdd', 'miaTaskCancel', 'miaTaskSet',
+      'miaStart', 'miaStop', 'miaSetModel', 'miaSchedule', 'miaPushTest',
     ];
     if (!allowed.includes(msg.type)) return;
     if (!host) {

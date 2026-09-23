@@ -143,6 +143,10 @@ function createApi({ tokenOk, sendToHost, hostOnline, latestSnapshot }) {
       'PUT  /api/v1/docs/:id {content}': 'overwrite a document body',
       'PATCH /api/v1/docs/:id {kind?, status?, subject?, tags?, dir?}': 'update document metadata',
       'DELETE /api/v1/docs/:id': 'delete a document',
+      'GET  /api/v1/mia': 'Mia, the assistant: status, conversation, tasks, pending questions, schedule',
+      'POST /api/v1/mia/message {text}': 'send Mia a chat message',
+      'POST /api/v1/mia/answer {questionId, text}': 'answer one of Mia\'s pending questions',
+      'POST /api/v1/mia/tasks {title, detail?, dir?, priority?}': 'queue a task for Mia (priority 1 = highest, default 3)',
     },
   };
 
@@ -330,6 +334,43 @@ function createApi({ tokenOk, sendToHost, hostOnline, latestSnapshot }) {
 
       if (m === 'DELETE') {
         return sendAndAck(res, 'docDelete', { type: 'docDelete', id });
+      }
+    }
+
+    // ---- Mia, the assistant (docs/mia.md §8) --------------------------------
+    if (route[0] === 'mia') {
+      if (route.length === 1 && m === 'GET') {
+        const snap = snapshot();
+        if (!snap) return json(res, 502, { ok: false, error: 'no snapshot yet — Mac may be offline' });
+        if (!snap.mia) return json(res, 404, { ok: false, error: 'the Mac is not reporting Mia (app too old, or Mia not set up)' });
+        return json(res, 200, { ok: true, mia: snap.mia });
+      }
+
+      if (route[1] === 'message' && route.length === 2 && m === 'POST') {
+        const text = String(body.text ?? '').trim();
+        if (!text) return json(res, 400, { ok: false, error: 'text is required' });
+        return sendAndAck(res, 'miaSend', { type: 'miaSend', text });
+      }
+
+      if (route[1] === 'answer' && route.length === 2 && m === 'POST') {
+        const questionId = String(body.questionId ?? '').trim();
+        const text = String(body.text ?? '').trim();
+        if (!questionId || !text) return json(res, 400, { ok: false, error: 'questionId and text are required' });
+        return sendAndAck(res, 'miaAnswer', { type: 'miaAnswer', questionId, text });
+      }
+
+      if (route[1] === 'tasks' && route.length === 2 && m === 'POST') {
+        const title = String(body.title ?? '').trim();
+        if (!title) return json(res, 400, { ok: false, error: 'title is required' });
+        const payload = { type: 'miaTaskAdd', title };
+        if (body.detail != null) payload.detail = String(body.detail);
+        if (body.dir != null) payload.dir = String(body.dir);
+        if (body.priority != null) {
+          const p = Number(body.priority);
+          if (!Number.isInteger(p) || p < 1) return json(res, 400, { ok: false, error: 'priority must be a positive integer (1 = highest)' });
+          payload.priority = p;
+        }
+        return sendAndAck(res, 'miaTaskAdd', payload);
       }
     }
 

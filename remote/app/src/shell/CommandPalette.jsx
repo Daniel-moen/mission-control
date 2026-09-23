@@ -50,6 +50,7 @@ export default function CommandPalette({ open, onClose, onOpenAgent, onNav, onLa
   const actions = useMemo(
     () => [
       { id: 'a:launch', label: 'Launch an agent', icon: 'launch', run: () => onLaunch?.() },
+      { id: 'a:mia', label: 'Open Mia', icon: 'mia', run: () => onNav?.('mia') },
       { id: 'a:fleet', label: 'Open fleet', icon: 'agents', run: () => onNav?.('fleet') },
       { id: 'a:insights', label: 'Open insights', icon: 'overview', run: () => onNav?.('insights') },
       { id: 'a:library', label: 'Open library', icon: 'library', run: () => onNav?.('library') },

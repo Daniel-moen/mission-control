@@ -1,6 +1,6 @@
 ---
 name: mission-control
-description: Monitor and command the Claude Code agent fleet on Daniel's Mac via the Mission Control REST API — check what agents are doing, read their terminals, answer their questions, send instructions, kill runaways, launch new agents or fleets, run one-shot research, and read/write the plans-and-research document library. Use whenever Daniel asks about his agents, his Mac's fleet, Mission Control, widget-claude, or wants something built/researched on the Mac.
+description: Monitor and command the Claude Code agent fleet on Daniel's Mac via the Mission Control REST API — check what agents are doing, read their terminals, answer their questions, send instructions, kill runaways, launch new agents or fleets, run one-shot research, read/write the plans-and-research document library, and talk to Mia, his task-running assistant. Use whenever Daniel asks about his agents, Mia, his Mac's fleet, Mission Control, widget-claude, or wants something built/researched on the Mac.
 ---
 
 # Mission Control
@@ -110,6 +110,35 @@ curl -sf -X DELETE -H "$AUTH" "$BASE/docs/<id>"
 ```
 
 `kind`: plan | research | note. `status`: draft | active | done | archived.
+
+## Mia (Daniel's assistant)
+
+Mia is a long-lived assistant session on the Mac. She takes tasks, asks Daniel
+questions when she must, hands the work to executor agents, and reports back.
+Talk to her instead of launching agents yourself when Daniel says "tell Mia",
+"add to Mia's list", or wants something tracked to completion.
+
+```bash
+curl -sf -H "$AUTH" "$BASE/mia"     # status, conversation, tasks, pendingQuestions, schedule
+
+# Chat with her (delivered into her session):
+curl -sf -X POST -H "$AUTH" -H 'content-type: application/json' \
+  -d '{"text":"What is still open?"}' "$BASE/mia/message"
+
+# Answer one of her pending questions (questionId from pendingQuestions):
+curl -sf -X POST -H "$AUTH" -H 'content-type: application/json' \
+  -d '{"questionId":"q_…","text":"Whole app"}' "$BASE/mia/answer"
+
+# Queue a task (priority 1 = highest, default 3; dir optional):
+curl -sf -X POST -H "$AUTH" -H 'content-type: application/json' \
+  -d '{"title":"Add dark mode to settings","detail":"whole app","dir":"~/jobcarver","priority":2}' "$BASE/mia/tasks"
+# → {"ok":true,"id":"0009",...}
+```
+
+- Task `status`: queued → asking → running → checking → done | failed | cancelled.
+- `GET /mia` is a 404 when the Mac app doesn't report Mia yet (not set up).
+- Mia answers asynchronously — her replies appear in `messages` (and as push
+  notifications on Daniel's phone); poll `GET /mia` rather than waiting on the POST.
 
 ## Ground rules
 

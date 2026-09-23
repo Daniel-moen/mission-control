@@ -72,7 +72,9 @@ struct AgentCard: View {
             StatusRing(progress: agent.progress, color: tint, active: agent.isLive,
                        glyph: agent.status.glyph, size: 30, animate: manager.popoverVisible)
             VStack(alignment: .leading, spacing: 3) {
-                Text(agent.prompt.isEmpty ? "(session \(agent.sessionId.prefix(8)))" : agent.prompt)
+                Text(agent.isMia ? "✦ Mia — assistant"
+                     : agent.miaTaskId.map { "✦ Mia task \($0) — executor" }
+                     ?? (agent.prompt.isEmpty ? "(session \(agent.sessionId.prefix(8)))" : agent.prompt))
                     .font(.system(size: 12.5, weight: .semibold))
                     .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 Sparkline(samples: agent.activitySamples(), color: tint)

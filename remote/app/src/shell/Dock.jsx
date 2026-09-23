@@ -5,6 +5,7 @@ import Icon from '../ui/Icon.jsx';
 import Button from '../ui/Button.jsx';
 
 const ITEMS = [
+  { key: 'mia', label: 'Mia', icon: 'mia' },
   { key: 'home', label: 'Home', icon: 'sparkles' },
   { key: 'fleet', label: 'Fleet', icon: 'agents' },
   { key: 'insights', label: 'Insights', icon: 'overview' },
@@ -14,7 +15,7 @@ const ITEMS = [
 // The floating dock. One highlight glides between segments (shared layoutId);
 // the mic is the raised primary, because talking to the fleet is the fastest
 // thing you can do from a phone in a mount.
-export default function Dock({ active = 'home', onSelect, onMic, onLaunch }) {
+export default function Dock({ active = 'home', badges = {}, onSelect, onMic, onLaunch }) {
   const desktop = useMedia('(min-width: 1024px)');
   return (
     <LayoutGroup id="dock">
@@ -33,12 +34,13 @@ export default function Dock({ active = 'home', onSelect, onMic, onLaunch }) {
         >
           {ITEMS.map((it) => {
             const on = active === it.key;
+            const badge = badges[it.key] || 0;
             return (
               <motion.button
                 {...press}
                 key={it.key}
                 onClick={() => onSelect?.(it.key)}
-                aria-label={it.label}
+                aria-label={badge ? `${it.label}, ${badge} new` : it.label}
                 aria-pressed={on}
                 className={`pill relative flex h-11 items-center gap-2 px-3.5 text-[13px] font-medium transition-colors sm:px-4 ${
                   on ? 'text-ink' : 'text-ink2 hover:text-ink'
@@ -52,7 +54,21 @@ export default function Dock({ active = 'home', onSelect, onMic, onLaunch }) {
                   />
                 )}
                 <span className="relative flex items-center gap-2">
-                  <Icon name={it.icon} size={18} />
+                  <span className="relative flex">
+                    <Icon name={it.icon} size={18} />
+                    {/* Amber = something is waiting on you, the same meaning it has everywhere. */}
+                    {badge > 0 && (
+                      <motion.span
+                        key={badge > 9 ? '9+' : badge}
+                        initial={{ scale: 0.6, opacity: 0 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        transition={spring.snappy}
+                        className="tnum absolute -right-2 -top-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-warn px-1 text-[9.5px] font-bold leading-none text-[#241a02]"
+                      >
+                        {badge > 9 ? '9+' : badge}
+                      </motion.span>
+                    )}
+                  </span>
                   <span className="hidden sm:inline">{it.label}</span>
                 </span>
               </motion.button>

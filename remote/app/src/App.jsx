@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AnimatePresence } from 'motion/react';
-import { useMC } from './lib/store.js';
+import { useMC, miaBadge } from './lib/store.js';
 import { useMedia } from './lib/hooks.js';
 
 import Backdrop from './shell/Backdrop.jsx';
@@ -17,6 +17,7 @@ import AttentionCards from './views/home/AttentionCards.jsx';
 import Fleet from './views/fleet/Fleet.jsx';
 import Insights from './views/insights/Insights.jsx';
 import Library from './views/library/Library.jsx';
+import Mia from './views/mia/Mia.jsx';
 import DocView from './views/library/DocView.jsx';
 import AgentView from './views/agent/AgentView.jsx';
 import TerminalConsole from './views/agent/TerminalConsole.jsx';
@@ -44,9 +45,10 @@ export default function App() {
   const lastCreatedDocId = useMC((s) => s.lastCreatedDocId);
   const docs = useMC((s) => s.docs);
   const agentCount = useMC((s) => s.agents.length);
+  const miaCount = useMC((s) => miaBadge(s.mia, s.miaLocal));
   const desktop = useMedia('(min-width: 1024px)');
 
-  const [win, setWin] = useState(null); // null | 'fleet' | 'insights' | 'library'
+  const [win, setWin] = useState(null); // null | 'mia' | 'fleet' | 'insights' | 'library'
   const [sel, setSel] = useState(null); // agent id → Agent window
   const [openDoc, setOpenDoc] = useState(null); // { id, edit }
   const [sheet, setSheet] = useState(null); // 'launch' | 'settings' | null
@@ -120,7 +122,7 @@ export default function App() {
 
   // ---- hash routes -------------------------------------------------------
   // Deep links are load-bearing: #agent/<id>, #doc/<id>, #console/<id>,
-  // #fleet, #insights, #library, #launch, #settings, #tv, #car.
+  // #mia, #fleet, #insights, #library, #launch, #settings, #tv, #car.
   const applyHash = useCallback(() => {
     const h = decodeURIComponent(location.hash.replace(/^#/, ''));
     setTvOn(h === 'tv');
@@ -143,7 +145,7 @@ export default function App() {
       setSheet('launch');
     } else if (head === 'settings') {
       setSheet('settings');
-    } else if (head === 'fleet' || head === 'insights' || head === 'library') {
+    } else if (head === 'mia' || head === 'fleet' || head === 'insights' || head === 'library') {
       setSheet(null);
       setConsole(null);
       setOpenDoc(null);
@@ -207,7 +209,7 @@ export default function App() {
         return;
       }
       if (typing() || e.metaKey || e.ctrlKey || e.altKey) return;
-      const jump = { 1: 'home', 2: 'fleet', 3: 'insights', 4: 'library' }[e.key];
+      const jump = { 1: 'home', 2: 'fleet', 3: 'insights', 4: 'library', 5: 'mia' }[e.key];
       if (jump) {
         e.preventDefault();
         nav(jump);
@@ -218,11 +220,17 @@ export default function App() {
   }, [tvOn, carOn, palette, console_, composer, sheet, openDoc, sel, win, nav, closeLaunch]);
 
   // ---- window composition ------------------------------------------------
-  const mainKind = openDoc ? 'doc' : sel ? 'agent' : win === 'insights' ? 'insights' : win === 'library' ? 'library' : null;
+  const mainKind = openDoc
+    ? 'doc'
+    : sel
+      ? 'agent'
+      : win === 'insights' || win === 'library' || win === 'mia'
+        ? win
+        : null;
   // Desktop keeps at most two large windows: a 360px column plus one main.
   const leftKind = desktop && !openDoc && (win === 'fleet' || sel) ? 'fleet' : desktop && openDoc && win === 'library' ? 'library' : null;
   const phoneKind = mainKind || (win === 'fleet' ? 'fleet' : null);
-  const dockActive = sel || win === 'fleet' ? 'fleet' : win === 'insights' ? 'insights' : win === 'library' ? 'library' : 'home';
+  const dockActive = sel || win === 'fleet' ? 'fleet' : win === 'insights' || win === 'library' || win === 'mia' ? win : 'home';
 
   const fleetWindow = (size) => (
     <Window
@@ -266,6 +274,12 @@ export default function App() {
           <Library onOpen={(id) => setOpenDoc({ id, edit: false })} onClose={() => nav('home')} />
         </Window>
       );
+    if (kind === 'mia')
+      return (
+        <Window key="mia" size={size} onClose={() => nav('home')}>
+          <Mia onOpenAgent={openAgent} onClose={() => nav('home')} />
+        </Window>
+      );
     if (kind === 'fleet') return fleetWindow(size);
     return null;
   };
@@ -276,9 +290,10 @@ export default function App() {
         onOpenAgent={openAgent}
         onFleet={() => nav('fleet')}
         onLaunch={() => setSheet('launch')}
+        onMia={() => nav('mia')}
       />
       <div className="flex-none pb-4">
-        <AttentionCards onOpen={openAgent} />
+        <AttentionCards onOpen={openAgent} onOpenMia={() => nav('mia')} />
       </div>
     </div>
   );
@@ -338,6 +353,7 @@ export default function App() {
 
       <Dock
         active={dockActive}
+        badges={{ mia: miaCount }}
         onSelect={nav}
         onMic={() => setComposer({ target: 'all' })}
         onLaunch={() => setSheet('launch')}

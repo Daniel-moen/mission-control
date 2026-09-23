@@ -328,6 +328,13 @@ final class AgentManager: ObservableObject {
         /// plan`) instead of the usual unattended auto mode — the agent explores
         /// and drafts a plan but can't modify code until approved.
         var planMode: Bool = false
+        /// Extra CLI flags placed before the prompt (e.g. Mia's
+        /// `--mcp-config <file> --strict-mcp-config`).
+        var extraArgs: [String] = []
+        /// A Mia or Mia-executor session: put ~/.mission-control/bin on PATH so
+        /// the `mia` CLI resolves, and pass the prompt verbatim (no library
+        /// postscript — these prompts are a fixed contract).
+        var miaTooling: Bool = false
     }
 
     /// Terminals installed on this machine, for the launcher's "open in" picker.
@@ -344,7 +351,8 @@ final class AgentManager: ObservableObject {
         let terminal = settings.launchTerminal
         let newTab = settings.launchInNewTab
         for (i, spec) in specs.enumerated() {
-            let cmd = launchCommand(dir: folder, model: spec.model, prompt: spec.prompt, planMode: spec.planMode)
+            let cmd = launchCommand(dir: folder, model: spec.model, prompt: spec.prompt, planMode: spec.planMode,
+                                    extraArgs: spec.extraArgs, miaTooling: spec.miaTooling)
             DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.5) { [weak self] in
                 self?.term.launch(command: cmd, in: terminal, newTab: newTab)
             }
@@ -355,7 +363,8 @@ final class AgentManager: ObservableObject {
     /// launcher's "New tab" toggle, which is meaningless for the ones that can't.
     var launchTerminalSupportsTabs: Bool { term.supportsNewTab(settings.launchTerminal) }
 
-    private func launchCommand(dir: String, model: String, prompt: String, planMode: Bool = false) -> String {
+    private func launchCommand(dir: String, model: String, prompt: String, planMode: Bool = false,
+                               extraArgs: [String] = [], miaTooling: Bool = false) -> String {
         let q = TerminalBridge.shellQuote
         // A launched agent MUST run as an independent, top-level session. When the
         // app (or the terminal it spawns) was itself started from inside a Claude
@@ -366,6 +375,7 @@ final class AgentManager: ObservableObject {
         // CLAUDE_CODE* marker first; this is the actual fix for "agents launched
         // from the menu aren't tracked".
         var c = #"unset $(env | sed -n 's/^\(CLAUDE_CODE[A-Za-z_]*\)=.*/\1/p') CLAUDECODE AI_AGENT 2>/dev/null"#
+        if miaTooling { c += #"; export PATH="$HOME/.mission-control/bin:$PATH""# }
         c += "; cd \(q(dir))"
         c += " && claude"
         if !model.isEmpty { c += " --model \(model)" }
@@ -380,7 +390,8 @@ final class AgentManager: ObservableObject {
             // agent — and coordinated workers' polling loops — start working at once.
             c += " --dangerously-skip-permissions"
         }
-        c += " \(q(planMode ? prompt : prompt + Self.planFilePostscript))"
+        for arg in extraArgs { c += " \(q(arg))" }
+        c += " \(q(planMode || miaTooling ? prompt : prompt + Self.planFilePostscript))"
         return c
     }
 
@@ -471,6 +482,11 @@ final class AgentManager: ObservableObject {
 
     /// Look up the group a member belongs to.
     func fleet(for id: UUID) -> FleetGroup? { fleets.first { $0.id == id } }
+
+    /// True once the first process scan has landed — before that, "no live
+    /// session" only means "not looked yet" (MiaManager waits on it before
+    /// deciding Mia needs launching).
+    var livenessReady: Bool { liveScanReady }
 
     /// Look up a tracked session by its id — used by RemoteBridge to target
     /// commands arriving from the remote panel.
@@ -685,7 +701,10 @@ final class AgentManager: ObservableObject {
             // Only notify on a genuine edge between two observed states — never
             // for whatever status a session happens to be in when first seen
             // (avoids a launch-time burst for sessions that already finished).
-            if let prev = prev, prev != run.status {
+            // Mia ends a turn every time she hands control back, which is
+            // constantly — no confetti or "finished"/"needs you" banners for
+            // her; she pings through `mia notify` when something matters.
+            if let prev = prev, prev != run.status, !run.isMia {
                 if run.status == .done { fireCelebration() }   // 🎉
                 switch run.status {
                 case .done where settings.notifyOnFinish:

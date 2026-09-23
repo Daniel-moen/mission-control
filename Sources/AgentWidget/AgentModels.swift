@@ -220,6 +220,19 @@ final class AgentRun: ObservableObject, Identifiable {
     /// the seeded prompt so the grouped view can crown it and list it first.
     var isManager: Bool { prompt.hasPrefix("You are the MANAGER") }
 
+    /// Whether this session is Mia, the persistent Mission Control assistant —
+    /// detected from her seeded prompt, the same way `isManager` is.
+    var isMia: Bool { prompt.hasPrefix(MiaManager.miaPromptPrefix) }
+
+    /// The Mia task this session is executing ("0007"), read off the executor
+    /// prompt's fixed opening; nil for every other session.
+    var miaTaskId: String? {
+        let prefix = MiaManager.executorPromptPrefix
+        guard prompt.hasPrefix(prefix) else { return nil }
+        let id = prompt.dropFirst(prefix.count).prefix { $0.isASCII && $0.isNumber }
+        return id.isEmpty ? nil : String(id)
+    }
+
     /// Human label for the folder the agent is working in.
     var folderName: String {
         workingDir.isEmpty ? "—" : (workingDir as NSString).lastPathComponent

@@ -4,7 +4,8 @@
 // per-session streamed terminal screens, and every command the panel can
 // issue. Wire protocol (JSON text frames over /ws?role=viewer&token=…):
 //   in : { type:'snapshot', at, summary, agents, fleets, knownDirs, lastDir,
-//          models, docs, system? }                ~1 Hz, resent ≥ every 10s
+//          models, docs, system?, mia? }          ~1 Hz, resent ≥ every 10s
+//                                                 (mia: see the Mia section at the foot)
 //   in : { type:'hostState', online }             relay → Mac link changes
 //   in : { type:'ack', ok, cmd, detail, id? }     command results (id on
 //                                                 docCreate + research acks)
@@ -20,7 +21,9 @@
 //   out: { type:'key', sessionId, text }          literal typing from the console
 //   out: { type:'watch', sessionId, hot }         lease heartbeat (~3s); hot ⇒ being typed into
 //   out: document library — docGet/docSave/docCreate/docDelete/docMeta/
-//        docSearch, and the one-shot `research` launch. See the command
+//        docSearch, and the one-shot `research` launch. Mia: miaSend/miaAnswer/
+//        miaRead/miaTaskAdd/miaTaskCancel/miaTaskSet/miaStart/miaStop/
+//        miaSetModel/miaSchedule/miaPushTest (docs/mia.md §8). See the command
 //        section at the foot of this file for each frame's shape.
 //
 // The document library lives in ~/.mission-control/library on the Mac as plain
@@ -74,6 +77,14 @@ export const useMC = create(() => ({
   search: { q: '', hits: [], at: 0 }, // last full-text search: { id, snippets } hits from docSearch
 
   screens: {}, // sessionId → { seq, text, at } — streamed watch-lease frames
+
+  // Mia, the persistent assistant (docs/mia.md). `mia` is the snapshot's block,
+  // normalised; null when the host sends none (older Mac app, or not set up).
+  mia: null,
+  // Optimistic local echo so the thread and badge react before the next
+  // snapshot: messages sent but not yet seen, answers given, read marker.
+  miaLocal: { sent: [], answered: {}, readUpTo: '' },
+  push: 'idle', // Web Push state for this device — see lib/push.js
 
   filter: 'all', // dashboard status filter — lives here so the strip chips drive it
   toast: '',
@@ -332,6 +343,14 @@ export function parsePrompt(screen) {
 // Which agents need a human right now, and why. Drives the amber attention
 // queue on the home screen and the fleet auto-expand. Uses the snapshot's
 // screen tail (refreshed ~3s) since queue rows hold no watch lease.
+// Mia's own session. Between events she sits idle at her prompt — that is not
+// "needs you" (her real questions arrive as kind 'mia' items instead).
+export function isMiaAgent(a) {
+  if (!a) return false;
+  if (a.isMia === true) return true;
+  const sid = getMC().mia?.sessionId;
+  return !!sid && a.id === sid;
+}
 export function attentionInfo(a) {
   const st = agentStatus(a);
   if (st === 'exited') return { kind: 'exited', prompt: null };
@@ -339,11 +358,18 @@ export function attentionInfo(a) {
   const prompt = parsePrompt(rawScreenFor(a));
   return { kind: prompt ? 'menu' : 'idle', prompt };
 }
-export function attentionList(agents) {
+// Pending Mia questions ride the same queue as kind 'mia' (no agent — the card
+// answers with miaAnswer). They lead: Mia only asks when she is truly blocked.
+// Opt-in: only callers that pass `mia` get them — TV and car mode index every
+// item by `.agent`, so their lists stay agent-only.
+export function attentionList(agents, mia = null) {
   const items = [];
+  for (const q of miaOpenQuestions(mia)) items.push({ kind: 'mia', key: `mia:${q.questionId}`, question: q });
   for (const a of agents || []) {
+    if (isMiaAgent(a)) continue; // idle is her resting state, not a question
+
     const info = attentionInfo(a);
-    if (info) items.push({ agent: a, ...info });
+    if (info) items.push({ agent: a, key: a.id, ...info });
   }
   return items;
 }
@@ -736,6 +762,8 @@ function ingest(s) {
     patch.knownDirs = s.knownDirs || [];
   }
   if (!mc.lastDir && s.lastDir) patch.lastDir = s.lastDir;
+  ingestMia(s, mc, patch);
+
   const mk = (s.models || []).map((m) => m.flag).join('|');
   if (s.models && s.models.length && mk !== modelsKey) {
     modelsKey = mk;
@@ -778,6 +806,10 @@ function handleAck(msg) {
   }
   if (msg.cmd === 'docGet') {
     if (!msg.ok) toast(msg.detail || "Couldn't load that document");
+    return;
+  }
+  if (typeof msg.cmd === 'string' && msg.cmd.startsWith('mia')) {
+    handleMiaAck(msg);
     return;
   }
   // The Launch sheet shows its own optimistic overlay on click, so a successful
@@ -935,4 +967,206 @@ export function stopAll() {
   }
   send({ type: 'broadcast', text: 'Stop' });
   toast(`Sent “Stop” to ${n} agent${n === 1 ? '' : 's'}`);
+}
+
+// ---- Mia --------------------------------------------------------------------
+// The persistent assistant (docs/mia.md §8). The host puts a `mia` block on the
+// snapshot: { enabled, online, sessionId, model, restarts, readUpTo, messages,
+// tasks, pendingQuestions, schedule, pushKey }. Every field is optional here —
+// an absent block means "Mia is off / host predates her", never a crash.
+
+export const MIA_DEFAULT_MODEL = 'claude-opus-5-5';
+export const MIA_MODELS = [
+  { value: 'claude-opus-5-5', label: 'Opus 5.5' },
+  { value: 'claude-sonnet-5', label: 'Sonnet 5' },
+];
+
+const arr = (v) => (Array.isArray(v) ? v.filter((x) => x && typeof x === 'object') : []);
+const str = (v) => (v == null ? '' : String(v));
+
+function normMia(m) {
+  if (!m || typeof m !== 'object') return null;
+  return {
+    enabled: !!m.enabled,
+    online: !!m.online,
+    sessionId: str(m.sessionId),
+    model: str(m.model) || MIA_DEFAULT_MODEL,
+    restarts: Number(m.restarts) || 0,
+    readUpTo: str(m.readUpTo),
+    messages: arr(m.messages),
+    tasks: arr(m.tasks),
+    pendingQuestions: arr(m.pendingQuestions),
+    schedule: m.schedule && typeof m.schedule === 'object' ? m.schedule : null,
+    pushKey: str(m.pushKey),
+  };
+}
+
+let miaKey = '';
+function ingestMia(s, mc, patch) {
+  // The block is small (≤200 messages + open tasks); a string compare keeps
+  // the reference stable so the Mia view doesn't re-render at 1 Hz for nothing.
+  const k = s.mia ? JSON.stringify(s.mia) : '';
+  if (k === miaKey) return;
+  miaKey = k;
+  const mia = normMia(s.mia);
+  patch.mia = mia;
+
+  // Retire optimistic echoes the host has now caught up with.
+  const loc = mc.miaLocal;
+  const msgs = mia?.messages || [];
+  const sent = loc.sent.filter((p) => {
+    if (Date.now() - p.at > 30000) return false; // give up — the ack already spoke
+    const seen = msgs.filter((m) => m.from === 'daniel' && m.kind === 'chat' && m.text === p.text).length;
+    return seen <= p.baseline;
+  });
+  const pending = new Set((mia?.pendingQuestions || []).map((q) => q.questionId));
+  let answered = loc.answered;
+  for (const id of Object.keys(answered)) {
+    if (!pending.has(id)) {
+      if (answered === loc.answered) answered = { ...answered };
+      delete answered[id];
+    }
+  }
+  if (sent.length !== loc.sent.length || answered !== loc.answered) patch.miaLocal = { ...loc, sent, answered };
+}
+
+// Where "after <id>" starts in the message list. Ids are `m_<epoch ms>`, so an
+// id that has scrolled out of the 200-line window still orders numerically.
+function cutAfter(msgs, id) {
+  if (!id) return 0;
+  const i = msgs.findIndex((m) => m.id === id);
+  if (i >= 0) return i + 1;
+  const n = Number(String(id).replace(/^\D+/, ''));
+  if (!Number.isFinite(n) || !n) return 0;
+  const j = msgs.findIndex((m) => Number(String(m.id || '').replace(/^\D+/, '')) > n);
+  return j < 0 ? msgs.length : j;
+}
+
+// Questions still waiting on Daniel, minus the ones he just answered here.
+export function miaOpenQuestions(mia, local = getMC().miaLocal) {
+  if (!mia) return [];
+  const answered = local?.answered || {};
+  return mia.pendingQuestions.filter((q) => q.questionId && !(q.questionId in answered));
+}
+
+// Dock badge: unread Mia messages + open questions. A question that is both
+// unread and open counts once — it is one thing asking for you, not two.
+export function miaBadge(mia, local = getMC().miaLocal) {
+  if (!mia) return 0;
+  const open = miaOpenQuestions(mia, local);
+  const openIds = new Set(open.map((q) => q.questionId));
+  const msgs = mia.messages;
+  const cut = Math.max(cutAfter(msgs, mia.readUpTo), cutAfter(msgs, local?.readUpTo));
+  let unread = 0;
+  for (let i = cut; i < msgs.length; i++) {
+    const m = msgs[i];
+    if (m.from !== 'mia') continue;
+    if (m.kind === 'question' && openIds.has(m.questionId)) continue;
+    unread++;
+  }
+  return unread + open.length;
+}
+
+// Daniel's answer to a question, from wherever it is recorded: a local echo,
+// an `answer` line in the thread, or the task's question record.
+export function miaAnswerFor(mia, questionId, local = getMC().miaLocal) {
+  if (!questionId) return null;
+  if (local?.answered?.[questionId] != null) return local.answered[questionId];
+  for (const m of mia?.messages || []) {
+    if (m.kind === 'answer' && m.questionId === questionId) return m.text || '';
+  }
+  for (const t of mia?.tasks || []) {
+    for (const q of arr(t.questions)) if (q.id === questionId && q.answer != null) return String(q.answer);
+  }
+  return null;
+}
+
+function setMiaLocal(fn) {
+  useMC.setState((s) => ({ miaLocal: { ...s.miaLocal, ...fn(s.miaLocal) } }));
+}
+
+const MIA_ACK_OK = {
+  miaTaskAdd: 'Task added',
+  miaTaskCancel: 'Task cancelled',
+  miaTaskSet: 'Task updated',
+  miaStart: 'Starting Mia',
+  miaStop: 'Mia stopped',
+  miaSetModel: 'Model saved — applies on her next start',
+  miaSchedule: 'Schedule updated',
+  miaPushTest: 'Test notification sent',
+};
+
+function handleMiaAck(msg) {
+  if (!msg.ok) {
+    if (msg.cmd === 'miaRead') return; // housekeeping — never worth a toast
+    if (msg.cmd === 'miaSend') setMiaLocal((l) => ({ sent: l.sent.slice(1) }));
+    toast(`Mia: ${msg.detail || 'that didn’t go through'}`);
+    return;
+  }
+  // The thread itself shows a sent message or an answer — no toast for those.
+  const t = MIA_ACK_OK[msg.cmd];
+  if (t) toast(msg.cmd === 'miaPushTest' && msg.detail ? msg.detail : t);
+}
+
+export function miaSend(text) {
+  text = (text || '').trim();
+  if (!text) return false;
+  const msgs = getMC().mia?.messages || [];
+  const baseline = msgs.filter((m) => m.from === 'daniel' && m.kind === 'chat' && m.text === text).length;
+  if (!send({ type: 'miaSend', text })) return false;
+  setMiaLocal((l) => ({ sent: [...l.sent, { id: `local_${Date.now()}`, text, at: Date.now(), baseline }] }));
+  return true;
+}
+export function miaAnswer(questionId, text) {
+  text = (text || '').trim();
+  if (!questionId || !text) return false;
+  if (!send({ type: 'miaAnswer', questionId, text })) return false;
+  setMiaLocal((l) => ({ answered: { ...l.answered, [questionId]: text } }));
+  return true;
+}
+// Mark the thread read up to a message id. Silent: no toast either way, and it
+// only goes out when it moves the marker.
+export function miaRead(upTo) {
+  if (!upTo) return false;
+  const mc = getMC();
+  if (mc.miaLocal.readUpTo === upTo || mc.mia?.readUpTo === upTo) return false;
+  if (!ws || ws.readyState !== 1 || !hostOnline) return false;
+  ws.send(JSON.stringify({ type: 'miaRead', upTo }));
+  setMiaLocal(() => ({ readUpTo: upTo }));
+  return true;
+}
+export function miaTaskAdd({ title = '', detail = '', dir = '', priority } = {}) {
+  title = String(title).trim();
+  if (!title) return false;
+  const msg = { type: 'miaTaskAdd', title };
+  if (String(detail).trim()) msg.detail = String(detail).trim();
+  if (String(dir).trim()) {
+    msg.dir = String(dir).trim();
+    rememberDir(msg.dir);
+  }
+  if (priority != null && priority !== '') msg.priority = Number(priority);
+  return send(msg);
+}
+export function miaTaskCancel(id) {
+  return !!id && send({ type: 'miaTaskCancel', id });
+}
+export function miaTaskSet(id, field, value) {
+  return !!id && send({ type: 'miaTaskSet', id, field, value });
+}
+export function miaStart() {
+  return send({ type: 'miaStart' });
+}
+export function miaStop() {
+  return send({ type: 'miaStop' });
+}
+export function miaSetModel(model) {
+  return !!model && send({ type: 'miaSetModel', model });
+}
+// op: addReminder | removeReminder | setHeartbeat | removeHeartbeat; `item` is
+// the reminder / heartbeat object (just `{ id }` for the remove ops).
+export function miaSchedule(op, item = {}) {
+  return send({ type: 'miaSchedule', op, item });
+}
+export function miaPushTest() {
+  return send({ type: 'miaPushTest' });
 }
