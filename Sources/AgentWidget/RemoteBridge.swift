@@ -661,7 +661,9 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
             lines.removeLast()
         }
         let tail = lines.suffix(50).joined(separator: "\n")
-        return tail.count > 8000 ? String(tail.suffix(8000)) : tail
+        // The cap allows for ANSI escape codes (WezTerm captures keep them so
+        // the panel can render colors) — they add bulk but no visible lines.
+        return tail.count > 12000 ? String(tail.suffix(12000)) : tail
     }
 
     /// Same idea for the streamed full buffer — generous (scrollback is the
@@ -809,6 +811,19 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
                     return ["kind": kind, "text": line.text]
                 },
             ]
+            if !run.subagents.isEmpty {
+                // A subagent runs inside the parent's process, so a dead parent
+                // means no subagent is still working, whatever its transcript says.
+                a["subagents"] = run.subagents.map { sub -> [String: Any] in
+                    ["id": sub.id,
+                     "desc": sub.taskDescription,
+                     "agentType": sub.agentType,
+                     "status": (sub.isDone || !run.processAlive) ? "done" : "active",
+                     "activity": sub.activity,
+                     "tokens": sub.totalTokens,
+                     "outputTokens": sub.outputTokens]
+                }
+            }
             if let fleetId = run.fleetId { a["fleetId"] = fleetId.uuidString }
             if let plan = run.latestPlan { a["plan"] = plan.text }
             if let screen = screens[run.sessionId], !screen.isEmpty { a["screen"] = screen }

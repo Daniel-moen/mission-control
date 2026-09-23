@@ -276,7 +276,11 @@ final class TerminalBridge {
         case "Terminal": return osascript(scrollback ? terminalHistoryScript : terminalScreenScript, [info.tty])
         case "WezTerm":
             guard let id = weztermPaneId(forTty: info.tty) else { return nil }
-            var args = ["get-text", "--pane-id", "\(id)"]
+            // --escapes keeps the SGR color codes in the capture, so the remote
+            // panel can render the screen in real colors (diffs, syntax, status
+            // chrome). The AppleScript terminals below have no equivalent — they
+            // can only hand us plain text.
+            var args = ["get-text", "--escapes", "--pane-id", "\(id)"]
             if scrollback { args += ["--start-line", "-400"] }
             return weztermCLI(args)
         default:
@@ -867,7 +871,12 @@ final class TerminalBridge {
     }
 
     private func weztermSocket() -> String? {
-        if let s = ProcessInfo.processInfo.environment["WEZTERM_UNIX_SOCKET"] { return s }
+        // The inherited env var goes stale: launch the app from a WezTerm shell,
+        // later restart WezTerm, and it names a socket that no longer exists —
+        // every CLI call then burns ~5s failing to connect (and tries to spawn a
+        // stray mux server). Only trust it while the socket file is still there.
+        if let s = ProcessInfo.processInfo.environment["WEZTERM_UNIX_SOCKET"],
+           FileManager.default.fileExists(atPath: s) { return s }
         let dir = "\(home)/.local/share/wezterm"
         guard let items = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return nil }
         return items.filter { $0.hasPrefix("gui-sock-") }.map { "\(dir)/\($0)" }.sorted {

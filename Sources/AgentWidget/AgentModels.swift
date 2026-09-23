@@ -27,6 +27,52 @@ struct LogLine: Identifiable, Equatable {
     enum Kind { case text, command, tool, result, status }
 }
 
+/// A subagent the session spawned through the Agent (né Task) tool. Claude Code
+/// writes each one's transcript next to the parent's:
+///   <projects>/<proj>/<sessionId>/subagents/agent-<id>.jsonl   (transcript)
+///   <projects>/<proj>/<sessionId>/subagents/agent-<id>.meta.json (identity)
+/// Discovered and tailed by AgentManager.scanSubagents. A subagent has no
+/// process of its own (it runs inside the parent's), so "done" comes from its
+/// transcript ending its final turn, or the parent's matching tool_result.
+final class SubagentRun: Identifiable {
+    let id: String              // "agent-<hex>" — the files' shared basename
+    let toolUseId: String       // parent's Agent tool_use id, matched to its tool_result
+    let agentType: String       // "general-purpose", "Explore", …
+    let taskDescription: String // the short description the parent gave it
+    let startedAt: Date
+
+    var activity: String = "Starting…"
+    var outputTokens = 0
+    var totalTokens = 0
+    var lastModified = Date.distantPast
+
+    // Tailing bookkeeping (managed by AgentManager, same scheme as the parent).
+    let transcriptPath: String
+    var readOffset: UInt64 = 0
+    var partial = Data()
+    /// Its last assistant turn ended with something other than `tool_use` —
+    /// the subagent delivered its report and stopped.
+    var sawEndTurn = false
+    /// The parent recorded a tool_result for this subagent's tool_use id. On
+    /// its own this is NOT completion — a background subagent's Agent call
+    /// returns immediately — hence the quiet-period check in `isDone`.
+    var resultSeen = false
+
+    var isDone: Bool {
+        sawEndTurn || (resultSeen && Date().timeIntervalSince(lastModified) > 10)
+    }
+
+    init(id: String, toolUseId: String, agentType: String, taskDescription: String,
+         transcriptPath: String, startedAt: Date) {
+        self.id = id
+        self.toolUseId = toolUseId
+        self.agentType = agentType
+        self.taskDescription = taskDescription
+        self.transcriptPath = transcriptPath
+        self.startedAt = startedAt
+    }
+}
+
 enum AgentStatus: Equatable {
     case active   // transcript updated within the last few seconds
     case idle     // alive but waiting (e.g. for user input) — no recent writes
@@ -103,6 +149,9 @@ final class AgentRun: ObservableObject, Identifiable {
     @Published var lastModified = Date()
     /// The terminal this agent's process runs in (nil until resolved / if gone).
     @Published var terminal: TerminalInfo? = nil
+    /// Subagents this session has spawned (Agent tool), newest last. Running
+    /// ones first in display order — sorted by AgentManager on each scan.
+    @Published var subagents: [SubagentRun] = []
 
     // Process binding — set by AgentManager.assignProcesses() from the scan +
     // Claude Code's session registry. `pid` is THIS session's process; 0 while
@@ -135,6 +184,11 @@ final class AgentRun: ObservableObject, Identifiable {
     /// True once we've seen this agent actively working. Lets us tell "went
     /// quiet, probably waiting on you" apart from "was idle the whole time".
     var wasActive = false
+    /// tool_use ids the transcript has recorded a tool_result for — how a
+    /// subagent's completion is recognized (see SubagentRun.resultSeen).
+    var completedToolUseIds: Set<String> = []
+    /// Throttle for the subagents-directory scan (it stats files).
+    var lastSubagentScan = Date.distantPast
     /// Consecutive liveness scans where no claude process matched this cwd.
     /// Used to auto-remove a session shortly after the user leaves it.
     var livenessMisses = 0

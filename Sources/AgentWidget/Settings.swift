@@ -24,7 +24,15 @@ final class Settings: ObservableObject {
     }
     /// Last folder the user launched a fleet into, prefilled next time.
     @Published var lastLaunchDir: String {
-        didSet { defaults.set(lastLaunchDir, forKey: Keys.lastLaunchDir) }
+        didSet {
+            defaults.set(lastLaunchDir, forKey: Keys.lastLaunchDir)
+            remember(lastLaunchDir)
+        }
+    }
+    /// Every folder ever launched into, newest first — the pick-list behind the
+    /// directory chips/drop-downs so a path never has to be typed twice.
+    @Published var recentDirs: [String] {
+        didSet { defaults.set(recentDirs, forKey: Keys.recentDirs) }
     }
     /// Which terminal app the user wants new agents launched in. Stored as the
     /// `LaunchTerminal` raw value; see `launchTerminal` for the typed accessor.
@@ -67,11 +75,21 @@ final class Settings: ObservableObject {
         static let playSound = "playSound"
         static let expandFeeds = "expandFeeds"
         static let lastLaunchDir = "lastLaunchDir"
+        static let recentDirs = "recentDirs"
         static let launchTerminalID = "launchTerminalID"
         static let launchInNewTab = "launchInNewTab"
         static let remoteEnabled = "remoteEnabled"
         static let remoteURL = "remoteURL"
         static let remoteToken = "remoteToken"
+    }
+
+    /// Move a just-used folder to the front of the pick-list, deduped and capped.
+    private func remember(_ dir: String) {
+        let trimmed = dir.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        var dirs = recentDirs.filter { $0 != trimmed }
+        dirs.insert(trimmed, at: 0)
+        recentDirs = Array(dirs.prefix(12))
     }
 
     private init() {
@@ -86,6 +104,7 @@ final class Settings: ObservableObject {
         playSound = bool(Keys.playSound, default: true)
         expandFeeds = bool(Keys.expandFeeds, default: false)
         lastLaunchDir = store.string(forKey: Keys.lastLaunchDir) ?? ""
+        recentDirs = store.stringArray(forKey: Keys.recentDirs) ?? []
         launchTerminalID = store.string(forKey: Keys.launchTerminalID) ?? TerminalBridge.LaunchTerminal.terminal.rawValue
         launchInNewTab = bool(Keys.launchInNewTab, default: true)
         remoteEnabled = bool(Keys.remoteEnabled, default: false)

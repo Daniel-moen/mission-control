@@ -508,7 +508,8 @@ final class AgentManager: ObservableObject {
     private func modelLabel(_ flag: String) -> String {
         switch flag {
         case "claude-fable-5":  return "Fable 5"
-        case "opus":            return "Opus"
+        case "claude-opus-5", "opus": return "Opus 5"
+        case "claude-opus-4-8": return "Opus 4.8"
         case "claude-sonnet-5", "sonnet": return "Sonnet 5"
         case "haiku":           return "Haiku"
         default:                return "Default"
@@ -570,12 +571,13 @@ final class AgentManager: ObservableObject {
         return mission + "\n\n(You are worker \(number) of \(total) working on this in parallel with sibling agents in the same project. Pursue your own approach and don't assume the others' progress.)"
     }
 
-    /// Distinct working directories of agents we're currently watching — handy
-    /// one-tap targets for launching a new fleet where you're already working.
+    /// Distinct working directories worth offering as one-tap launch targets:
+    /// folders of agents we're currently watching first, then every folder the
+    /// user has ever launched into (persisted in Settings, newest first).
     var knownDirs: [String] {
         var seen = Set<String>(); var out: [String] = []
-        for run in agents where !run.workingDir.isEmpty {
-            if seen.insert(run.workingDir).inserted { out.append(run.workingDir) }
+        for dir in agents.map(\.workingDir) + settings.recentDirs where !dir.isEmpty {
+            if seen.insert(dir).inserted { out.append(dir) }
         }
         return out
     }
@@ -608,6 +610,7 @@ final class AgentManager: ObservableObject {
             if !run.didInitialParse || mtime > previousMtime {
                 tail(run)
             }
+            scanSubagents(run, now: now)
             updateStatus(run, now: now)
         }
 
@@ -806,9 +809,17 @@ final class AgentManager: ObservableObject {
         // process is alive, whatever a flaky liveness scan claims.)
         let exited = liveScanReady && !run.workingDir.isEmpty && !run.processAlive
             && now.timeIntervalSince(run.lastModified) > 15
-        if exited || run.turnEnded {
+        // A background subagent outlives the turn that launched it: the parent's
+        // Agent call returns immediately and the turn ends, but work is very much
+        // still happening — the session stays Working until the subagents finish.
+        // The staleness cutoff keeps a subagent that died without a final message
+        // (crash, kill) from pinning its parent to Working forever.
+        let subagentsWorking = run.processAlive && run.subagents.contains {
+            !$0.isDone && now.timeIntervalSince($0.lastModified) < 15 * 60
+        }
+        if exited || (run.turnEnded && !subagentsWorking) {
             run.status = .done
-        } else if run.interrupted {
+        } else if run.interrupted && !subagentsWorking {
             run.status = .idle          // Esc'd mid-turn — waiting for input
         } else {
             run.status = .active
@@ -843,6 +854,113 @@ final class AgentManager: ObservableObject {
             }
         }
         run.didInitialParse = true
+    }
+
+    // MARK: Subagents
+
+    /// Discover and tail the subagents a session has spawned via the Agent
+    /// tool. They live beside the parent transcript, in
+    /// `<transcript-dir>/<sessionId>/subagents/` — one `agent-<id>.jsonl`
+    /// (transcript) plus `agent-<id>.meta.json` (identity) per subagent. They
+    /// run inside the parent's process, so they never show up in the process
+    /// scan and would otherwise be invisible to the fleet.
+    private func scanSubagents(_ run: AgentRun, now: Date) {
+        guard now.timeIntervalSince(run.lastSubagentScan) > 2 else {
+            // Between directory scans, keep tailing the ones already found —
+            // their transcripts move much faster than new ones appear.
+            for sub in run.subagents { tailSubagent(sub, parent: run) }
+            return
+        }
+        run.lastSubagentScan = now
+        let dir = (run.transcriptPath as NSString).deletingPathExtension + "/subagents"
+        let fm = FileManager.default
+        // Most sessions never spawn a subagent; a missing dir is one cheap stat.
+        guard let files = try? fm.contentsOfDirectory(atPath: dir) else { return }
+
+        var known = Set(run.subagents.map { $0.id })
+        var added = false
+        for f in files where f.hasSuffix(".meta.json") {
+            let base = String(f.dropLast(".meta.json".count))
+            guard !known.contains(base),
+                  let data = fm.contents(atPath: "\(dir)/\(f)"),
+                  let meta = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+            let started = (try? fm.attributesOfItem(atPath: "\(dir)/\(f)")[.creationDate] as? Date) ?? now
+            run.subagents.append(SubagentRun(
+                id: base,
+                toolUseId: meta["toolUseId"] as? String ?? "",
+                agentType: meta["agentType"] as? String ?? "",
+                taskDescription: meta["description"] as? String ?? "subagent",
+                transcriptPath: "\(dir)/\(base).jsonl",
+                startedAt: started))
+            known.insert(base)
+            added = true
+        }
+        for sub in run.subagents {
+            if !sub.resultSeen, !sub.toolUseId.isEmpty,
+               run.completedToolUseIds.contains(sub.toolUseId) {
+                sub.resultSeen = true
+            }
+            tailSubagent(sub, parent: run)
+        }
+        if added || run.subagents.count > 24 {
+            // Running first, then newest first; drop the oldest finished ones
+            // so a subagent-happy session doesn't grow without bound.
+            run.subagents.sort {
+                if $0.isDone != $1.isDone { return !$0.isDone }
+                return $0.startedAt > $1.startedAt
+            }
+            if run.subagents.count > 24 {
+                run.subagents.removeLast(run.subagents.count - 24)
+            }
+        }
+    }
+
+    /// Incremental tail of one subagent transcript — same offset scheme as the
+    /// parent's, but it only extracts what the fleet displays: latest activity,
+    /// token usage, and whether the final turn has ended.
+    private func tailSubagent(_ sub: SubagentRun, parent run: AgentRun) {
+        let fm = FileManager.default
+        guard let attrs = try? fm.attributesOfItem(atPath: sub.transcriptPath),
+              let mtime = attrs[.modificationDate] as? Date else { return }
+        guard mtime > sub.lastModified else { return }
+        sub.lastModified = mtime
+        guard let fh = try? FileHandle(forReadingFrom: URL(fileURLWithPath: sub.transcriptPath)) else { return }
+        defer { try? fh.close() }
+        try? fh.seek(toOffset: sub.readOffset)
+        sub.partial.append(fh.readDataToEndOfFile())
+        sub.readOffset = (try? fh.offset()) ?? sub.readOffset
+
+        while let nl = sub.partial.firstIndex(of: 0x0A) {
+            let lineData = sub.partial.subdata(in: sub.partial.startIndex..<nl)
+            sub.partial.removeSubrange(sub.partial.startIndex...nl)
+            guard let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                  (obj["type"] as? String) == "assistant",
+                  let message = obj["message"] as? [String: Any] else { continue }
+            if let content = message["content"] as? [[String: Any]] {
+                for item in content {
+                    switch item["type"] as? String {
+                    case "text":
+                        let t = (item["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !t.isEmpty { sub.activity = firstLine(t) }
+                    case "tool_use":
+                        if let name = item["name"] as? String {
+                            sub.activity = toolSummary(name: name, input: item["input"] as? [String: Any] ?? [:])
+                        }
+                    default:
+                        break
+                    }
+                }
+            }
+            if let usage = message["usage"] as? [String: Any] {
+                func int(_ key: String) -> Int { usage[key] as? Int ?? 0 }
+                sub.outputTokens += int("output_tokens")
+                sub.totalTokens += int("input_tokens") + int("output_tokens")
+                    + int("cache_read_input_tokens") + int("cache_creation_input_tokens")
+            }
+            if let reason = message["stop_reason"] as? String {
+                sub.sawEndTurn = (reason != "tool_use")
+            }
+        }
     }
 
     // MARK: Terminal control (delegated to TerminalBridge)
@@ -926,6 +1044,9 @@ final class AgentManager: ObservableObject {
             capturePromptIfNeeded(obj, run: run)
             if let content = message?["content"] as? [[String: Any]] {
                 for item in content where (item["type"] as? String) == "tool_result" {
+                    // Remember which tool calls have resolved — how a spawned
+                    // subagent's completion is recognized (scanSubagents).
+                    if let tid = item["tool_use_id"] as? String { run.completedToolUseIds.insert(tid) }
                     let text = toolResultText(item)
                     if !text.isEmpty { run.append(LogLine(kind: .result, text: text)) }
                 }
@@ -1056,7 +1177,8 @@ final class AgentManager: ObservableObject {
         case "Glob":  return "Glob \(input["pattern"] as? String ?? "")"
         case "WebFetch":  return "Fetch \(input["url"] as? String ?? "")"
         case "WebSearch": return "Search web: \(input["query"] as? String ?? "")"
-        case "Task":  return "Subagent: \(input["description"] as? String ?? "task")"
+        // "Task" is the tool's old name; current Claude Code calls it "Agent".
+        case "Task", "Agent": return "Subagent: \(input["description"] as? String ?? "task")"
         default:      return name
         }
     }
