@@ -579,7 +579,10 @@ DEFAULT_SCHEDULE = {
          "prompt": "Check the Gmail inbox and calendar. Tell Daniel only if something needs him. Stay silent otherwise.",
          "enabled": True},
         {"id": "hb_brief", "label": "Morning brief", "at": "07:30",
-         "prompt": "Morning brief: unread mail that matters, today's calendar, and the state of the task list — one `mia notify`.",
+         "prompt": "Morning brief: today's calendar (with a line of prep for anything that needs it), mail that needs Daniel, what executors finished overnight, open questions, reminders due today, and anything you suggest he do today — one short, scannable `mia notify`.",
+         "enabled": True},
+        {"id": "hb_wrap", "label": "Evening wrap-up", "at": "18:30",
+         "prompt": "Evening wrap-up: what got done today (tasks, mail handled), what is still open or waiting on Daniel, and tomorrow's first commitments. Set `mia remind` for loose ends — one short `mia notify`.",
          "enabled": True},
     ],
     "reminders": [],
@@ -993,6 +996,28 @@ def parse_when(s):
 
 
 def cmd_remind(args):
+    if args and args[0] == "list":
+        s = load_schedule()
+        rs = [r for r in s["reminders"] if not r.get("fired") or "--all" in args[1:]]
+        if not rs:
+            print("(no reminders)")
+        for r in sorted(rs, key=lambda r: r.get("at", "")):
+            tag = " (task %s)" % r["taskId"] if r.get("taskId") else ""
+            done = "  [fired]" if r.get("fired") else ""
+            print("%s\t%s\t%s%s%s" % (r.get("id"), r.get("at"), r.get("text", ""), tag, done))
+        return
+    if args and args[0] == "cancel":
+        if len(args) != 2:
+            die("usage: mia remind cancel <reminder-id>")
+        with Lock():
+            s = load_schedule()
+            keep = [r for r in s["reminders"] if r.get("id") != args[1]]
+            if len(keep) == len(s["reminders"]):
+                die("no reminder %s" % args[1])
+            s["reminders"] = keep
+            write_json(SCHED, s)
+        print("cancelled %s" % args[1])
+        return
     pos, o = parse(args, {"--at": True, "--task": True})
     if "--at" not in o:
         die("usage: mia remind --at <ISO-8601|HH:MM|+2h|+30m> \"<text>\" [--task <id>]")
@@ -1010,6 +1035,69 @@ def cmd_remind(args):
                                "taskId": task, "fired": False})
         write_json(SCHED, s)
     print("%s %s" % (rid, to_iso(when)))
+
+
+def cmd_heartbeat(args):
+    usage = ("usage: mia heartbeat list | set <id> (--every <min>|--at HH:MM) [--label <l>] [--prompt <p>]"
+             " | enable <id> | disable <id> | remove <id>")
+    sub = args[0] if args else "list"
+    if sub == "list":
+        s = load_schedule()
+        if not s["heartbeats"]:
+            print("(no heartbeats)")
+        for h in s["heartbeats"]:
+            when = ("every %sm" % h["everyMinutes"]) if h.get("everyMinutes") else ("at %s" % h.get("at", "?"))
+            on = "on" if h.get("enabled", True) else "off"
+            print("%s\t%s\t%s\t%s\t%s" % (h.get("id"), on, when, h.get("label", ""), h.get("prompt", "")))
+        return
+    if sub not in ("set", "enable", "disable", "remove") or len(args) < 2:
+        die(usage)
+    hid = args[1]
+    pos, o = parse(args[2:], {"--every": True, "--at": True, "--label": True, "--prompt": True})
+    if pos:
+        die(usage)
+    with Lock():
+        s = load_schedule()
+        hbs = s["heartbeats"]
+        cur = next((h for h in hbs if h.get("id") == hid), None)
+        if sub == "remove":
+            if cur is None:
+                die("no heartbeat %s" % hid)
+            hbs.remove(cur)
+        elif sub in ("enable", "disable"):
+            if cur is None:
+                die("no heartbeat %s" % hid)
+            cur["enabled"] = sub == "enable"
+        else:
+            if "--every" in o and "--at" in o:
+                die("give --every or --at, not both")
+            h = cur if cur is not None else {"id": hid, "label": hid, "prompt": "", "enabled": True}
+            if "--every" in o:
+                try:
+                    every = int(o["--every"])
+                except ValueError:
+                    every = 0
+                if every <= 0:
+                    die("--every must be a positive number of minutes")
+                h["everyMinutes"] = every
+                h.pop("at", None)
+            if "--at" in o:
+                if not re.match(r"^([01]?\d|2[0-3]):[0-5]\d$", o["--at"]):
+                    die("--at must be HH:MM (local time)")
+                h["at"] = o["--at"]
+                h.pop("everyMinutes", None)
+            if "--label" in o:
+                h["label"] = o["--label"]
+            if "--prompt" in o:
+                h["prompt"] = o["--prompt"]
+            if not h.get("everyMinutes") and not h.get("at"):
+                die("a new heartbeat needs --every or --at")
+            if not h.get("prompt"):
+                die("a new heartbeat needs --prompt")
+            if cur is None:
+                hbs.append(h)
+        write_json(SCHED, s)
+    print("%s %s" % (sub if sub != "set" else "saved", hid))
 
 
 def cmd_inbox(args):
@@ -1089,6 +1177,12 @@ HELP = """mia — Mia's line to Daniel and the Mission Control task list.
                                                     launch an executor for the task
   mia tell <id> "<text>"                            type text into the task's executor
   mia remind --at <ISO-8601|HH:MM|+2h|+30m> "<text>" [--task <id>]
+  mia remind list [--all]                           pending reminders (--all: fired too)
+  mia remind cancel <reminder-id>
+  mia heartbeat list                                id, on/off, when, label, prompt
+  mia heartbeat set <id> (--every <min>|--at HH:MM) [--label <l>] [--prompt <p>]
+                                                    add or change a recurring prompt
+  mia heartbeat enable|disable|remove <id>
   mia inbox [-n 50]                                 recent system events
   mia status                                        tasks, open questions, reminders
   mia help
@@ -1104,7 +1198,7 @@ def main(argv):
     cmd, rest = argv[0], argv[1:]
     table = {"say": cmd_say, "notify": cmd_notify, "ask": cmd_ask, "task": cmd_task,
              "dispatch": cmd_dispatch, "tell": cmd_tell, "remind": cmd_remind,
-             "inbox": cmd_inbox, "status": cmd_status}
+             "heartbeat": cmd_heartbeat, "inbox": cmd_inbox, "status": cmd_status}
     if cmd not in table:
         die("unknown command: %s (try: mia help)" % cmd)
     table[cmd](rest)
@@ -1142,6 +1236,10 @@ mia task note <id> "<text>"
 mia dispatch <id> [--dir <d>] [--model <m>] --brief-file <f> | --stdin
 mia tell <id> "<text>"                            type into that task's executor
 mia remind --at <ISO-8601|HH:MM|+2h|+30m> "<text>" [--task <id>]
+mia remind list [--all] | cancel <reminder-id>
+mia heartbeat list                                recurring prompts Mia gets
+mia heartbeat set <id> (--every <min>|--at HH:MM) [--label <l>] [--prompt <p>]
+mia heartbeat enable|disable|remove <id>
 mia inbox [-n 50]                                 recent events delivered to Mia
 mia status                                        tasks, open questions, reminders
 ```
