@@ -83,7 +83,7 @@ Never reveal how you work inside. Never say you will "pass it on", "ask Mia", "h
 
 How you work: you do not answer from memory. For every job, task, reminder, message, email, calendar or file request, and every question about facts, the news, the web or Daniel's own data, call send_to_mia with the complete request in Daniel's own words, first person (for example "Remind me to call Sam at 3 tomorrow"). Do that even if you think you know the answer, and never guess. Then say one short first-person line as the one doing it, for example "On it.", "Opening it.", "Checking now." Never state a result before it arrives.
 
-On your own you only do brief greetings, a short clarifying question when a request is genuinely ambiguous, and those short confirmations.
+On your own you only do greetings and small talk, a short clarifying question when a request is genuinely ambiguous, and those short confirmations. Plain greetings or small talk ("Hi Mia", "Can you hear me?", "How are you?", "Thanks") are answered directly in a few words; never call send_to_mia for them.
 
 Status: when Daniel asks what you are working on, what is running, or about his tasks, call get_status and summarise what it returns in a sentence or two, in first person ("I'm still working on…", "I finished…").
 
@@ -93,11 +93,21 @@ Ending: when Daniel says he is done ("Okay Mia, I'm done", "I'm done now", "that
 
 If Daniel interrupts you, stop and listen. If you did not catch something, say so in a few words.`;
 
+// The mini model talks more and runs into max_output_tokens mid-sentence, so
+// it gets a firmer length rule on top of the shared persona.
+const MINI_INSTRUCTIONS = `${INSTRUCTIONS}
+
+Length: every reply is one or two short sentences, at most about 30 words, even when delivering a result. Finish each sentence; stop right after a full stop rather than starting another thought. If there is more, end with a short offer ("Want the rest?").`;
+
+function instructionsFor(m) {
+  return /mini/.test(m) ? MINI_INSTRUCTIONS : INSTRUCTIONS;
+}
+
 const TOOLS = [
   {
     type: 'function',
     name: 'send_to_mia',
-    description: 'Start work on a request: every job, and every question about facts, the web or Daniel\'s data. The outcome arrives later as a "Result:" message.',
+    description: 'Start work on a request: every job, and every question about facts, the web or Daniel\'s data. Not for greetings or small talk. The outcome arrives later as a "Result:" message.',
     parameters: {
       type: 'object',
       properties: { text: { type: 'string', description: 'The complete request, in Daniel\'s words, first person.' } },
@@ -392,15 +402,16 @@ function createRealtime({ tokenOk, env = process.env, log = console, fetchImpl =
     const cfg = {
       type: 'realtime',
       model: m,
-      instructions: INSTRUCTIONS,
+      instructions: instructionsFor(m),
       output_modalities: ['audio'],
       audio: { input, output: { voice } },
       tools: TOOLS,
       tool_choice: 'auto',
       truncation: TRUNCATION,
       // Hard stop on a rambling reply. Covers the spoken audio as well as
-      // text and tool calls, so it stays roomy enough for two sentences.
-      max_output_tokens: 200,
+      // text and tool calls (~20 audio tokens/s): 300 leaves room for two
+      // sentences on mini without cutting them off; the persona keeps it short.
+      max_output_tokens: 300,
     };
     if (/realtime-2/.test(m)) cfg.reasoning = { effort: reasoning };
     return cfg;
@@ -560,4 +571,4 @@ function createRealtime({ tokenOk, env = process.env, log = console, fetchImpl =
   };
 }
 
-module.exports = { createRealtime, INSTRUCTIONS, TOOLS, LIMITS, MODELS, PRICES, PRICE, addUsage };
+module.exports = { createRealtime, INSTRUCTIONS, MINI_INSTRUCTIONS, TOOLS, LIMITS, MODELS, PRICES, PRICE, addUsage };

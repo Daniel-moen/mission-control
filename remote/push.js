@@ -10,9 +10,9 @@
 // then invalidates existing subscriptions until the pair is pinned in env.
 //
 // Subscriptions: in memory, mirrored to PUSH_STORE (default
-// ./push-subscriptions.json). Railway's disk is ephemeral, which is fine: the
-// panel re-subscribes on every load. Endpoints the push service reports gone
-// (404/410) are dropped.
+// push-subscriptions.json on the Railway volume, see datafile.js), so they
+// survive a redeploy. The panel also re-subscribes on every load. Endpoints the
+// push service reports gone (404/410) are dropped.
 //
 // HTTP (token auth, same as /api): GET /push/key, POST /push/subscribe,
 // POST /push/unsubscribe.
@@ -21,6 +21,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { dataFile } = require('./datafile');
 const webpush = require('web-push'); // always called as webpush.x so tests can patch it
 
 const MAX_SUBSCRIPTIONS = 100;
@@ -57,7 +58,7 @@ function createPush({ tokenOk, env = process.env, log = console } = {}) {
   // ---------------------------------------------------------------------------
   // Subscription store.
 
-  const storePath = path.resolve(env.PUSH_STORE || './push-subscriptions.json');
+  const storePath = dataFile('push-subscriptions.json', { override: env.PUSH_STORE, env, log, tag: 'push' });
   const subs = new Map(); // endpoint -> { endpoint, keys, label, addedAt }
 
   try {
@@ -74,6 +75,7 @@ function createPush({ tokenOk, env = process.env, log = console } = {}) {
   function persist() {
     const tmp = `${storePath}.${process.pid}.tmp`;
     try {
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
       fs.writeFileSync(tmp, JSON.stringify([...subs.values()], null, 2));
       fs.renameSync(tmp, storePath);
     } catch (err) {

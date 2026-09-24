@@ -27,6 +27,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { dataFile } = require('./datafile');
 
 // gpt-4o-mini-tts: $0.60 / 1M text tokens in, $12 / 1M audio tokens out —
 // OpenAI's own estimate is ≈ $0.015 per spoken minute. Speech runs at about
@@ -70,10 +71,10 @@ function createTts({ tokenOk, env = process.env, log = console, fetchImpl = glob
   const maxChars = Number(env.TTS_MAX_CHARS) || 400;
   const dailyChars = Number(env.TTS_DAILY_CHARS) || 20000;
   const cacheMs = (Number(env.TTS_CACHE_SECONDS) || 600) * 1000;
-  const storePath = path.resolve(env.TTS_STORE || './tts-usage.json');
+  const storePath = dataFile('tts-usage.json', { override: env.TTS_STORE, env, log, tag: 'tts' });
   const limits = { maxChars, dailyChars };
 
-  if (key) log.log(`tts: ${model} / ${voice}, ${dailyChars} chars/day`);
+  if (key) log.log(`tts: ${model} / ${voice}, ${dailyChars} chars/day · tally ${storePath}`);
 
   // ---- usage tally: { days: { 'YYYY-MM-DD': { requests, chars, cached, usd } } }
   let store = { days: {} };
@@ -82,19 +83,22 @@ function createTts({ tokenOk, env = process.env, log = console, fetchImpl = glob
     if (!store || typeof store.days !== 'object') store = { days: {} };
   } catch {}
   let saveTimer = null;
+  function flushStore() {
+    saveTimer = null;
+    const keys = Object.keys(store.days).sort();
+    for (const k of keys.slice(0, Math.max(0, keys.length - 60))) delete store.days[k];
+    try {
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      const tmp = `${storePath}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(store, null, 2));
+      fs.renameSync(tmp, storePath);
+    } catch (e) {
+      log.error('tts: could not save usage:', e.message);
+    }
+  }
   function save() {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-      const keys = Object.keys(store.days).sort();
-      for (const k of keys.slice(0, Math.max(0, keys.length - 60))) delete store.days[k];
-      try {
-        const tmp = `${storePath}.tmp`;
-        fs.writeFileSync(tmp, JSON.stringify(store, null, 2));
-        fs.renameSync(tmp, storePath);
-      } catch (e) {
-        log.error('tts: could not save usage:', e.message);
-      }
-    }, 500);
+    saveTimer = setTimeout(flushStore, 500);
     saveTimer.unref?.();
   }
   function dayRec(d) {
@@ -234,6 +238,8 @@ function createTts({ tokenOk, env = process.env, log = console, fetchImpl = glob
   return {
     handle,
     info: () => ({ available: !!key, model, voice, limits, today: summary() }),
+    // Write a pending save now (SIGTERM on redeploy).
+    close() { if (saveTimer) { clearTimeout(saveTimer); flushStore(); } },
   };
 }
 

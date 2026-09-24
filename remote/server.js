@@ -81,9 +81,10 @@ const stt = createStt({ tokenOk });
 const realtime = createRealtime({ tokenOk });
 const tts = createTts({ tokenOk });
 // A redeploy sends SIGTERM: write the realtime tally (open calls included)
-// before going, so the next process can settle them.
+// and any pending TTS tally before going, so the next process can settle them.
 process.on('SIGTERM', () => {
   realtime.close();
+  tts.close();
   process.exit(0);
 });
 
