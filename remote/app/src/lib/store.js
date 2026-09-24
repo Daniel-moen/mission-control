@@ -530,12 +530,21 @@ let ws = null;
 let retry = 0;
 let relayUp = false;
 let hostOnline = false;
+// When the relay last said anything on this socket (any frame, or the open
+// itself). Silence past STALE_MS on an "open" socket means a zombie: iOS
+// resumes a suspended web app with a socket that still reports open but will
+// never deliver again, and never fires onclose. hostOnline can't catch that
+// case — a socket that opened but never got its first frame stays offline.
+let lastFrameAt = 0;
 let reconnectTimer = null;
 let modelsKey = '';
 let docsKey = '';
 let dirsKey = '';
 
 const STALE_MS = 12000;
+// A live relay sends a snapshot ~1/s while the Mac is up and hostState frames
+// otherwise, so a socket silent this long is not a healthy one.
+const ZOMBIE_MS = 20000;
 
 function snapshotFresh() {
   const at = getMC().lastSnapshotAt;
@@ -576,11 +585,13 @@ export function connect() {
   ws.onopen = () => {
     retry = 0;
     relayUp = true;
+    lastFrameAt = Date.now();
     setLink();
     sendAllWatches(); // re-assert leases on every (re)connect
   };
   ws.onmessage = (e) => {
     let msg;
+    lastFrameAt = Date.now();
     try {
       msg = JSON.parse(e.data);
     } catch {
@@ -636,9 +647,11 @@ export function reconnectNow() {
   if (!mc.token || mc.needsToken) return;
   retry = 0;
   if (ws && ws.readyState === 1) {
-    // Socket claims to be open; if data is fresh, trust it. If stale, it's a
-    // zombie — redial through the same path.
-    if (hostOnline && !snapshotFresh()) connect();
+    // Socket claims to be open; if the relay has spoken recently, trust it.
+    // If it's been silent past the heartbeat window, it's a zombie — redial
+    // through the same path. (Judged on relay silence, not on hostOnline: a
+    // socket that never received its first frame is the common zombie.)
+    if (!snapshotFresh() && Date.now() - lastFrameAt > STALE_MS) connect();
     return;
   }
   connect();
@@ -656,7 +669,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 // past the heartbeat window, assume a zombie socket and redial.
 setInterval(() => {
   set({ now: Date.now() });
-  if (ws && ws.readyState === 1 && hostOnline && getMC().lastSnapshotAt && !snapshotFresh()) {
+  if (ws && ws.readyState === 1 && Date.now() - lastFrameAt > ZOMBIE_MS) {
+    // No frame at all for a while on a socket that says it's open — zombie
+    // (or a relay that has gone quiet, which a redial also sorts out).
     connect(); // tears down the zombie and redials immediately
   }
   setLink(); // freshness feeds link state — keep it honest even with no events

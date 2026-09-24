@@ -194,6 +194,16 @@ function tellViewersHostState() {
   fanOutToViewers(msg);
 }
 
+// Viewer heartbeat. While the Mac is up, snapshots reach viewers ~1/s and
+// double as a liveness signal; while it is down nothing would, and a viewer
+// can't tell "Mac offline" from "my socket died in my pocket" (iOS resumes a
+// suspended web app with a socket that reports open but never delivers, and
+// never fires close). Restating hostState every 10s keeps a healthy socket
+// audibly alive, so the panel's silence watchdog only ever redials dead ones.
+setInterval(() => {
+  if (host === null && viewers.size) tellViewersHostState();
+}, 10000);
+
 wss.on('connection', (ws) => {
   ws.on('pong', () => {
     ws.isAlive = true;
