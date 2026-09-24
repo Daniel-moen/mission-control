@@ -1,13 +1,15 @@
 import { useState } from 'react';
 import { motion } from 'motion/react';
-import { saveToken } from '../lib/store.js';
+import { saveToken, useMC } from '../lib/store.js';
 import { spring } from '../lib/motion.js';
 import Button from '../ui/Button.jsx';
 
 // Sign-in: one quiet pane of glass in the dark.
 export default function Gate() {
   const [value, setValue] = useState('');
-  const go = () => value.trim() && saveToken(value);
+  const verifying = useMC((s) => s.verifying);
+  const reason = useMC((s) => s.gateReason);
+  const go = () => value.trim() && !verifying && saveToken(value);
 
   return (
     <div
@@ -34,12 +36,20 @@ export default function Gate() {
           type="password"
           placeholder="••••••••••••"
           autoComplete="off"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && go()}
         />
-        <Button variant="primary" size="lg" block className="mt-4" disabled={!value.trim()} onClick={go}>
-          Connect
+        {reason && (
+          <p role="alert" className="mt-3 text-[13px] leading-relaxed text-crit">
+            {reason}
+          </p>
+        )}
+        <Button variant="primary" size="lg" block className="mt-4" disabled={!value.trim() || verifying} onClick={go}>
+          {verifying ? 'Checking…' : 'Connect'}
         </Button>
       </motion.div>
     </div>

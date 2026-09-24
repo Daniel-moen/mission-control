@@ -63,6 +63,8 @@ export const useMC = create(() => ({
   link: 'offline', // 'offline' | 'relay' | 'linked'
   transport: 'ws', // 'ws' | 'poll' — poll = HTTP fallback when WebSockets can't get through
   needsToken: false,
+  gateReason: '', // why the Gate is showing (a rejected token), shown on it
+  verifying: false, // the Gate is checking a freshly entered token with the relay
   // Socket diagnostics for the #diag screen — what the panel can't otherwise
   // say out loud when a device won't connect.
   diag: {
@@ -111,7 +113,7 @@ export const useMC = create(() => ({
 export const getMC = () => useMC.getState();
 const set = (patch) => useMC.setState(patch);
 
-export const PANEL_BUILD = 'v23 · 2026-09-22 · studio motion';
+export const PANEL_BUILD = 'v23.1 · 2026-09-24 · token check';
 
 // ---- status helpers ---------------------------------------------------------
 // Status semantics: working = green, needs-you = amber, done = quiet neutral,
@@ -510,25 +512,71 @@ export function setFilter(f) {
 }
 
 // ---- token ------------------------------------------------------------------
+// A token as typed or pasted: iPad keyboards and AutoFill can add spaces or
+// zero-width characters, and a pasted panel link carries it as ?token=.
+function cleanToken(t) {
+  t = String(t || '');
+  const m = t.match(/[?&#]token=([^&#\s]+)/);
+  if (m) {
+    try { t = decodeURIComponent(m[1]); } catch { t = m[1]; }
+  }
+  return t.replace(/[\s\u200B-\u200D\u2060\uFEFF]/g, '');
+}
+
+// Back to the Gate, with the reason on it. `usedToken` is the token the
+// rejected request carried: a late 401 for a token that has since been
+// replaced says nothing about the current one and must not bounce the panel.
+function gate(reason, usedToken) {
+  const mc = getMC();
+  if (usedToken !== undefined && usedToken !== mc.token) return;
+  if (mc.verifying) return;
+  relayUp = false;
+  hostOnline = false;
+  setLink();
+  set({ needsToken: true, gateReason: reason });
+}
+const REJECTED = 'The relay rejected this token. Check it and enter it again.';
+
+// Ask the relay whether a token is good. 'ok' | 'bad' | 'unknown' (relay
+// unreachable — can't tell, so the caller gives the token the benefit).
+async function checkToken(t) {
+  try {
+    const { status } = await httpJSON('/api/v1', { headers: { Authorization: `Bearer ${t}` } }, 8000);
+    return status === 401 ? 'bad' : status === 200 ? 'ok' : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
 export function initToken() {
   const params = new URLSearchParams(location.search);
   if (params.get('token')) {
-    localStorage.setItem(LS_TOKEN, params.get('token'));
+    localStorage.setItem(LS_TOKEN, cleanToken(params.get('token')));
     history.replaceState(null, '', location.pathname + location.hash);
   }
   const token = localStorage.getItem(LS_TOKEN) || '';
   set({ token, needsToken: !token });
-  if (token) connect();
+  if (!token) return;
+  connect();
+  // A rejected socket upgrade reaches the browser as a bare close 1006, so a
+  // stored bad token would otherwise only surface after the poll fallback.
+  checkToken(token).then((r) => r === 'bad' && gate(REJECTED, token));
 }
-export function saveToken(t) {
-  t = (t || '').trim();
-  if (!t) return;
+export async function saveToken(t) {
+  t = cleanToken(t);
+  if (!t || getMC().verifying) return;
+  set({ verifying: true, gateReason: '' });
+  const r = await checkToken(t);
+  if (r === 'bad') {
+    set({ verifying: false, gateReason: 'That token was rejected by the relay. Check it and try again.' });
+    return;
+  }
   localStorage.setItem(LS_TOKEN, t);
-  set({ token: t, needsToken: false });
+  set({ token: t, needsToken: false, verifying: false, gateReason: '' });
   connect();
 }
 export function changeToken() {
-  set({ needsToken: true });
+  set({ needsToken: true, gateReason: '' });
 }
 export function forgetToken() {
   localStorage.removeItem(LS_TOKEN);
@@ -642,10 +690,7 @@ export function connect() {
     ws = null;
     clearTimeout(connectTimer);
     if (e.code === 4001 || e.code === 1008) {
-      relayUp = false;
-      hostOnline = false;
-      setLink();
-      set({ needsToken: true });
+      gate(REJECTED);
       return;
     }
     if (!opened) wsFailed(`socket closed before open (code ${e.code})`);
@@ -740,11 +785,12 @@ function isPoll() {
 async function httpJSON(path, opts = {}, timeoutMs = 10000) {
   const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timer = ctl ? setTimeout(() => ctl.abort(), timeoutMs) : null;
+  const token = getMC().token;
   try {
     const r = await fetch(path, {
       cache: 'no-store',
       ...opts,
-      headers: { Authorization: `Bearer ${getMC().token}`, 'X-MC-Client': CLIENT_ID, ...(opts.headers || {}) },
+      headers: { Authorization: `Bearer ${token}`, 'X-MC-Client': CLIENT_ID, ...(opts.headers || {}) },
       signal: ctl ? ctl.signal : undefined,
     });
     let data = null;
@@ -753,7 +799,7 @@ async function httpJSON(path, opts = {}, timeoutMs = 10000) {
     } catch {
       /* non-JSON (a proxy's error page) — status alone speaks */
     }
-    return { status: r.status, data };
+    return { status: r.status, data, token };
   } finally {
     clearTimeout(timer);
   }
@@ -799,13 +845,11 @@ async function pollOnce() {
   pollBusy = true;
   let status = '';
   try {
-    const { status: st, data } = await httpJSON('/api/v1/snapshot');
+    const { status: st, data, token } = await httpJSON('/api/v1/snapshot');
     if (!isPoll()) return; // the socket took over mid-flight
     status = String(st);
     if (st === 401) {
-      relayUp = false;
-      hostOnline = false;
-      set({ needsToken: true });
+      gate(REJECTED, token);
     } else if (st === 200 && data && data.snapshot) {
       relayUp = true;
       hostOnline = !!data.hostOnline;
@@ -906,7 +950,7 @@ async function drainKeys() {
 async function runCmd(obj, silent) {
   let label = '';
   try {
-    const { status, data } = await httpJSON(
+    const { status, data, token } = await httpJSON(
       '/api/v1/cmd',
       { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(obj) },
       CMD_TIMEOUT_MS,
@@ -917,7 +961,7 @@ async function runCmd(obj, silent) {
       return;
     }
     if (status === 401) {
-      set({ needsToken: true });
+      gate(REJECTED, token);
       return;
     }
     if (status === 502) {

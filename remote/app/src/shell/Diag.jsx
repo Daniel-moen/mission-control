@@ -60,6 +60,7 @@ export default function Diag() {
         <Row k="Online (OS)" v={navigator.onLine} />
         <Row k="Token stored" v={s.token ? `yes (${s.token.length} chars)` : 'NO — enter it at the gate first'} />
         <Row k="Needs token" v={s.needsToken} />
+        <Row k="Gate reason" v={s.gateReason || '—'} />
         <Row k="Link state" v={s.link} />
         <Row k="Transport" v={s.transport === 'poll' ? 'HTTP polling (fallback)' : 'WebSocket'} />
         <Row k="Transport switch" v={d.switchedAt ? `${ago(d.switchedAt)} — ${d.switchReason}` : 'never'} />
