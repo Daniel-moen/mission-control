@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { getMC } from './store.js';
 import { getTalk } from './talkSession.js';
-import { speak, stopSpeaking, unlockSpeech, newAudioContext, ttsSupported } from './voice.js';
+import { speak, stopSpeaking, unlockSpeech, newAudioContext, ttsSupported, blessedAudio } from './voice.js';
 import { spokenFor, isMiaMsg } from '../views/mia/TalkParts.jsx';
 
 // ANNOUNCEMENTS — Mia speaks up on an open panel even when talk mode is off
@@ -17,9 +17,15 @@ import { spokenFor, isMiaMsg } from '../views/mia/TalkParts.jsx';
 // quiet hours (default 22:00–07:00), and only on the panel the relay marks as
 // the one Daniel is using (store.panelPrimary).
 //
+// The words are spoken in Mia's realtime voice: the relay's POST /tts (tts.js,
+// OpenAI TTS with the realtime session's voice) returns mp3 that plays through
+// an <audio> element blessed on the first tap. If /tts fails (no key, daily
+// cap, offline) the device's speechSynthesis reads it instead.
+//
 // iOS only lets a page make sound after a tap in this page session. The first
-// tap anywhere unlocks speech and the chime; until then an announcement shows
-// as "Mia wants to talk — tap to hear" in the top-bar pill (TalkPill).
+// tap anywhere unlocks speech, the chime and the audio element; until then an
+// announcement shows as "Mia wants to talk — tap to hear" in the top-bar pill
+// (TalkPill).
 
 export const ANNOUNCE_MODE_KEY = 'mc.announce.mode';
 export const QUIET_KEY = 'mc.announce.quiet';
@@ -72,12 +78,16 @@ export function announceText(m) {
 // ---- audio unlock + chime --------------------------------------------------------
 let unlocked = false;
 let ctx = null;
+let player = null; // the <audio> element /tts plays through, blessed in a tap
 export const audioUnlocked = () => unlocked;
 
 function unlockNow() {
   if (!unlocked) {
     unlocked = true;
     unlockSpeech();
+    try {
+      player = blessedAudio();
+    } catch {}
   }
   try {
     if (!ctx) ctx = newAudioContext();
@@ -134,16 +144,87 @@ export function dismissAnnounce() {
   clearTimeout(hideTimer);
   queue = [];
   const cur = useAnnounce.getState().current;
-  if (cur?.state === 'speaking') stopSpeaking();
+  if (cur?.state === 'speaking') stopAll();
   setA({ current: null });
+}
+
+// ---- the voice: /tts through the blessed <audio>, else speechSynthesis --------------
+let stopPlayer = null;
+function stopAll() {
+  stopPlayer?.();
+  stopSpeaking();
+}
+
+// Fetch the mp3 for `text` → a blob URL, or null (no key, cap, offline, slow).
+async function fetchTts(text, { timeoutMs = 8000 } = {}) {
+  const token = getMC().token;
+  if (!token) return null;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const r = await fetch('/tts', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+      signal: ctl.signal,
+    });
+    if (!r.ok || !/^audio\//.test(r.headers.get('content-type') || '')) return null;
+    const blob = await r.blob();
+    return blob.size ? URL.createObjectURL(blob) : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Play a blob URL on the blessed element. → true when it played to the end
+// (or was stopped), false when it couldn't start (then the device voice speaks).
+function playUrl(url) {
+  return new Promise((resolve) => {
+    const a = player;
+    if (!a) return resolve(false);
+    let started = false;
+    const done = (ok) => {
+      a.onended = a.onerror = a.onpause = null;
+      stopPlayer = null;
+      URL.revokeObjectURL(url);
+      resolve(ok);
+    };
+    stopPlayer = () => {
+      try {
+        a.pause();
+      } catch {}
+      done(true);
+    };
+    a.onended = () => done(true);
+    a.onerror = () => done(started);
+    a.onpause = () => started && !a.ended && done(true);
+    try {
+      a.srcObject = null;
+      a.src = url;
+      a.play().then(
+        () => (started = true),
+        () => done(false),
+      );
+    } catch {
+      done(false);
+    }
+  });
 }
 
 async function play(msg, text) {
   show({ msg, text, state: 'speaking', at: Date.now() });
+  const audio = player ? fetchTts(text) : Promise.resolve(null); // fetched while the chime plays
   await chime();
-  if (useAnnounce.getState().current?.msg !== msg) return;
-  const voiceURI = readLS('mc.talk.voice', '');
-  await speak(text, { voiceURI });
+  if (useAnnounce.getState().current?.msg !== msg) return audio.then((u) => u && URL.revokeObjectURL(u));
+  const url = await audio;
+  if (useAnnounce.getState().current?.msg !== msg) return url && URL.revokeObjectURL(url);
+  const played = url ? await playUrl(url) : false;
+  if (!played && ttsSupported) {
+    const voiceURI = readLS('mc.talk.voice', '');
+    await speak(text, { voiceURI });
+  }
   if (useAnnounce.getState().current?.msg !== msg) return;
   const next = queue.shift();
   if (next) play(next.msg, next.text);
@@ -174,7 +255,7 @@ export function announce(msg) {
   const text = announceText(msg);
   if (!text) return;
   const cur = useAnnounce.getState().current;
-  if (!unlocked || !ttsSupported) {
+  if (!unlocked || !(ttsSupported || player)) {
     // Can't make a sound yet: show it and wait for a tap.
     show({ msg, text, state: 'locked', at: Date.now() });
     return;
@@ -215,7 +296,7 @@ export function considerMessages(msgs) {
 if (typeof document !== 'undefined') {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden' && useAnnounce.getState().current?.state === 'speaking') {
-      stopSpeaking();
+      stopAll();
       show({ ...useAnnounce.getState().current, state: 'said' });
     }
   });

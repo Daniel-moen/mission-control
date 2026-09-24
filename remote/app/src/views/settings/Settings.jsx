@@ -67,14 +67,26 @@ function Row({ label, hint, children, last = false }) {
 }
 
 // Talk mode's engine (views/mia/Talk.jsx reads the same key) and the relay's
-// running tally of realtime minutes.
+// running tallies of realtime minutes and announcement speech (/tts).
+async function ttsInfo(token) {
+  try {
+    const r = await fetch('/tts', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
+    const data = await r.json();
+    return data.ok ? data : null;
+  } catch {
+    return null;
+  }
+}
+
 function VoiceSection() {
   const token = useMC((s) => s.token);
   const [engine, setEngine] = useLocalStorage('mc.talk.engine', 'realtime');
   const [info, setInfo] = useState(undefined);
+  const [tts, setTts] = useState(null);
   useEffect(() => {
     let dead = false;
     realtimeInfo(token).then((i) => !dead && setInfo(i));
+    ttsInfo(token).then((i) => !dead && setTts(i));
     return () => {
       dead = true;
     };
@@ -110,10 +122,21 @@ function VoiceSection() {
         <Row
           label="Realtime usage"
           hint={`Ends after ${info.limits.idleSeconds}s of quiet, when the app is closed, or at ${Math.round(info.limits.maxSeconds / 60)} min. Daily cap ${info.limits.dailyMinutes} min.`}
-          last
+          last={!tts?.available}
         >
           <span className="tnum font-mono text-[12.5px] text-ink" data-rt-usage>
             {usage}
+          </span>
+        </Row>
+      )}
+      {tts?.available && (
+        <Row
+          label="Announcement voice"
+          hint={`Announcements use the same voice (${tts.voice}). Up to ${tts.limits.maxChars} characters each, ${tts.limits.dailyChars.toLocaleString()} a day — past that, the device voice.`}
+          last
+        >
+          <span className="tnum font-mono text-[12.5px] text-ink" data-tts-usage>
+            {`${tts.today.requests} said · ${tts.today.chars.toLocaleString()} chars · ≈ $${tts.today.usd.toFixed(3)}`}
           </span>
         </Row>
       )}

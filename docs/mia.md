@@ -407,7 +407,7 @@ the CLI, MiaManager, the relay and the panel.
 ### 8.3 Spoken announcements
 
 With talk mode off, the panel the relay marks primary reads Mia out loud: a
-short chime, then one sentence (device speech synthesis). Settings ›
+short chime, then one sentence in Mia's realtime voice. Settings ›
 Announcements: **Questions & alerts** (default: `--speak`, every ask and
 notify), **All**, **Off**; quiet hours (default on, 22:00–07:00). Never while
 the app is in the background (push covers that) or talk mode is on (the talk
@@ -416,6 +416,15 @@ session: the first tap anywhere unlocks it; before that the top-bar pill
 shows "Mia wants to talk — tap to hear". After speaking, the pill offers a
 mic: it opens a talk session (Realtime or Basic) with that message as
 context, so "yes" or "option two" answers it.
+
+The voice: the panel POSTs the sentence to the relay's `/tts` (remote/tts.js:
+OpenAI `gpt-4o-mini-tts`, the realtime session's voice `marin`, calm/brief
+delivery instructions) and plays the mp3 on an `<audio>` element blessed by
+the first tap, fetched while the chime plays. Cost guard: each announcement is
+trimmed to `TTS_MAX_CHARS` (400, whole sentences), `TTS_DAILY_CHARS` (20 000)
+caps a day, the same text within 10 min is served from memory for free. Any
+failure (no key → 503, cap → 429, offline, won't play) falls back to device
+speech synthesis. Usage per day on `/health` (`tts`) and Settings › Voice.
 
 ### Push (host → relay → phones)
 

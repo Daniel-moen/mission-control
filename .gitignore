@@ -46,3 +46,4 @@ remote/dist/
 .claude/settings.local.json
 remote/push-subscriptions.json
 remote/realtime-usage.json
+remote/tts-usage.json

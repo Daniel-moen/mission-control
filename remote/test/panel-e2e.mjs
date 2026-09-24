@@ -16,7 +16,8 @@
 // landscape (one mic for the whole session, never over the dock or a control,
 // expand back, stop); announcements (chime + speech after a tap, the locked
 // "tap to hear" banner, answer via the pill's mic, quiet hours, background,
-// Off).
+// Off); announcements in Mia's realtime voice via a mocked /tts (played on the
+// blessed <audio>, device voice on failure, never while a talk call is live).
 
 import { spawn, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -102,6 +103,17 @@ const INIT = () => {
     removeEventListener() {},
   };
   Object.defineProperty(window, 'speechSynthesis', { value: synth, configurable: true });
+  // Which blob: audio the page played (the /tts mp3), and whether it finished.
+  window.__played = [];
+  const play = HTMLMediaElement.prototype.play;
+  HTMLMediaElement.prototype.play = function () {
+    if (String(this.src).startsWith('blob:')) {
+      const rec = { src: this.src, ended: false };
+      window.__played.push(rec);
+      this.addEventListener('ended', () => (rec.ended = true), { once: true });
+    }
+    return play.call(this);
+  };
   window.__opened = [];
   window.open = (url) => {
     window.__opened.push(url);
@@ -113,6 +125,16 @@ const INIT = () => {
     document.dispatchEvent(new Event('visibilitychange'));
   };
 };
+
+// 0.3 s of silence, served as the mocked /tts audio.
+const WAV = (() => {
+  const n = 4800;
+  const b = Buffer.alloc(44 + n * 2);
+  b.write('RIFF', 0); b.writeUInt32LE(36 + n * 2, 4); b.write('WAVE', 8); b.write('fmt ', 12);
+  b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22); b.writeUInt32LE(16000, 24);
+  b.writeUInt32LE(32000, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34); b.write('data', 36); b.writeUInt32LE(n * 2, 40);
+  return b;
+})();
 
 const rect = (page, sel) => page.locator(sel).first().boundingBox();
 const overlap = (a, b) => a && b && a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
@@ -352,6 +374,75 @@ async function main() {
     // speak() reads sentence by sentence, so join what was said.
     await until(async () => /Shall I deploy now\?.*Yes, or No/.test((await page.evaluate(() => window.__said)).join(' ')), 5000, 'heard');
     ok(true, 'the tap plays it, options included');
+    ok(!page.errors.length, `no page errors (${page.errors.join(' | ')})`);
+    await page.context().close();
+  }
+
+  // ---- 4. announcements in Mia's voice (/tts mocked) -------------------------------------
+  console.log('announcements — Mia\'s voice');
+  {
+    const page = await newPage(browser, { viewport: { width: 1180, height: 820 } });
+    await page.evaluate(() => localStorage.setItem('mc.talk.engine', JSON.stringify('basic')));
+    const asked = [];
+    let mode = 'ok';
+    await page.route('**/tts', async (route) => {
+      const req = route.request();
+      if (req.method() !== 'POST') return route.continue();
+      asked.push({ text: JSON.parse(req.postData() || '{}').text, auth: req.headers().authorization });
+      if (mode === 'fail') return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ ok: false, error: 'no key' }) });
+      return route.fulfill({ status: 200, contentType: 'audio/wav', body: WAV });
+    });
+    await page.mouse.click(600, 400); // unlock (blesses the <audio>)
+    await sleep(300);
+    const said = () => page.evaluate(() => window.__said.slice());
+    const played = () => page.evaluate(() => window.__played.slice());
+
+    mia('say', '--speak', 'Task 17 is done. Want the report?');
+    await until(() => asked.some((a) => a.text.includes('Task 17 is done')), 6000, '/tts asked');
+    ok(asked[0].auth === `Bearer ${TOKEN}`, 'the announcement is fetched from /tts with the token');
+    await until(async () => (await played()).some((p) => p.ended), 6000, 'played');
+    ok(true, 'the /tts audio plays to the end on the page\'s <audio>');
+    ok(!(await said()).some((t) => t.includes('Task 17')), '…and the device voice stays quiet');
+    await page.locator('[data-announce-mic]').waitFor({ timeout: 4000 });
+    ok(true, 'the pill still offers the mic afterwards');
+
+    mode = 'fail';
+    mia('notify', '--speak', 'Fallback probe. The relay has no key.');
+    await until(async () => (await said()).some((t) => t.includes('Fallback probe')), 6000, 'fallback spoken');
+    ok(asked.some((a) => a.text.includes('Fallback probe')), '/tts failing (503) → the device voice reads it instead');
+    mode = 'ok';
+
+    // Off / quiet hours: /tts is never even asked.
+    const nAsked = asked.length;
+    await page.evaluate(() => localStorage.setItem('mc.announce.mode', JSON.stringify('off')));
+    mia('notify', '--speak', 'Off probe two');
+    await sleep(1500);
+    await page.evaluate(() => {
+      localStorage.removeItem('mc.announce.mode');
+      const d = new Date();
+      const hh = (x) => String(x).padStart(2, '0');
+      localStorage.setItem('mc.announce.quiet', JSON.stringify({ on: true, from: `${hh(d.getHours())}:00`, to: `${hh((d.getHours() + 1) % 24)}:59` }));
+    });
+    mia('notify', '--speak', 'Quiet probe two');
+    await sleep(1500);
+    await page.evaluate(() => localStorage.setItem('mc.announce.quiet', JSON.stringify({ on: false, from: '22:00', to: '07:00' })));
+    await page.evaluate(() => window.__setHidden(true));
+    mia('notify', '--speak', 'Hidden probe two');
+    await sleep(1500);
+    await page.evaluate(() => window.__setHidden(false));
+    ok(asked.length === nAsked, 'Off, quiet hours and background: no /tts request at all');
+
+    // A live talk call: the message goes into the call, not through /tts.
+    await page.locator('[data-announce-mic]').click().catch(async () => {
+      mia('say', '--speak', 'Open the mic probe.');
+      await page.locator('[data-announce-mic]').click({ timeout: 6000 });
+    });
+    await until(async () => (await page.getAttribute('[data-talk]', 'data-talk').catch(() => null)) === 'listening', 8000, 'talk on');
+    const nCall = asked.length;
+    mia('say', '--speak', 'In-call probe, done.');
+    await until(async () => (await said()).some((t) => t.includes('In-call probe')), 8000, 'said in call');
+    ok(asked.length === nCall, 'with a talk call live, the message is read in the call — no /tts');
+    await page.locator('[data-pill-stop]').click().catch(() => {});
     ok(!page.errors.length, `no page errors (${page.errors.join(' | ')})`);
     await page.context().close();
   }

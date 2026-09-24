@@ -49,6 +49,17 @@ const mockOpenAI = http.createServer((req, res) => {
       res.end(JSON.stringify({ value: 'ek_mock_123', expires_at: Math.floor(Date.now() / 1000) + 120, session: {} }));
       return;
     }
+    if (req.url === '/v1/audio/speech' && req.method === 'POST') {
+      if (/"input":"FAIL/.test(body)) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'mock refusal' } }));
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'audio/mpeg' });
+      res.write(Buffer.from('ID3fake-'));
+      res.end(Buffer.from('mp3-bytes'));
+      return;
+    }
     res.writeHead(404);
     res.end();
   });
@@ -63,6 +74,8 @@ function boot(cmd, args, name, extraEnv = {}) {
       PORT: String(PORT),
       PUSH_STORE: path.join(TMP, 'push-subscriptions.json'),
       REALTIME_STORE: path.join(TMP, 'realtime-usage.json'),
+      TTS_STORE: path.join(TMP, 'tts-usage.json'),
+      TTS_DAILY_CHARS: '1000',
       OPENAI_API_KEY: '',
       ...extraEnv,
     },
@@ -342,6 +355,74 @@ async function main() {
     const res503 = fakeRes();
     await noKey.handle({ method: 'POST', headers: { authorization: `Bearer ${TOKEN}` } }, res503, new URL('http://x/realtime/session'));
     ok(res503.status === 503 && noKey.info().available === false, 'without OPENAI_API_KEY minting is a 503 (the panel falls back to basic)');
+  }
+
+  console.log('announcement voice (/tts)');
+  {
+    const TTS = `http://localhost:${PORT}/tts`;
+    const bearer = { authorization: `Bearer ${TOKEN}` };
+    const say = (text, headers = bearer) => fetch(TTS, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ text }) });
+    ok((await say('Hello', {})).status === 401, 'POST /tts needs the token (401 without)');
+    ok((await say('Hello', { authorization: 'Bearer nope' })).status === 401, 'a wrong token is a 401 too');
+    ok((await fetch(TTS)).status === 401, 'GET /tts needs the token');
+    const info = await (await fetch(TTS, { headers: bearer })).json();
+    ok(info.ok && info.available && info.model === 'gpt-4o-mini-tts' && info.voice === 'marin', 'GET /tts: gpt-4o-mini-tts in the realtime voice (marin)');
+    ok(info.limits.maxChars === 400 && info.limits.dailyChars === 1000, 'GET /tts: length cap 400, daily cap from TTS_DAILY_CHARS');
+
+    const before = openaiSeen.length;
+    const r = await say('Task 17 is done.   Anything else?');
+    const bytes = Buffer.from(await r.arrayBuffer()).toString();
+    ok(r.status === 200 && r.headers.get('content-type') === 'audio/mpeg' && bytes === 'ID3fake-mp3-bytes', 'POST /tts streams the mp3 back');
+    ok(r.headers.get('x-tts-cache') === 'miss' && r.headers.get('x-tts-chars') === '31', 'first time: a cache miss, whitespace normalised');
+    const call = openaiSeen.slice(before).find((x) => x.url === '/v1/audio/speech');
+    const cfg = call ? JSON.parse(call.body) : {};
+    ok(call && call.auth === 'Bearer sk-test-relay-only', 'the relay calls OpenAI with its own key');
+    ok(cfg.model === 'gpt-4o-mini-tts' && cfg.voice === 'marin' && cfg.response_format === 'mp3' && cfg.input === 'Task 17 is done. Anything else?', 'speech request: model, voice, mp3, the text');
+    ok(/Jarvis/.test(cfg.instructions || '') && /calm/i.test(cfg.instructions || ''), 'speech request: calm, brief, Jarvis-like delivery instructions');
+    const r2 = await say('Task 17 is done. Anything else?');
+    ok(r2.headers.get('x-tts-cache') === 'hit' && Buffer.from(await r2.arrayBuffer()).toString() === 'ID3fake-mp3-bytes', 'the same text again comes from the cache');
+    ok(openaiSeen.filter((x) => x.url === '/v1/audio/speech').length === 1, '…without a second OpenAI call');
+
+    const long = Array.from({ length: 30 }, (_, i) => `Sentence number ${i + 1} is here.`).join(' ');
+    const r3 = await say(long);
+    await r3.arrayBuffer();
+    const sent = JSON.parse(openaiSeen.filter((x) => x.url === '/v1/audio/speech').at(-1).body).input;
+    ok(sent.length <= 400 && sent.startsWith('Sentence number 1 is here.') && /here\.$/.test(sent), `a long announcement is trimmed to its first whole sentences (${sent.length} chars)`);
+
+    ok((await say('   ')).status === 400, 'empty text is a 400');
+    ok((await say('FAIL please')).status === 502, 'an OpenAI refusal is a 502 (the panel falls back to the device voice)');
+    const mid = await (await fetch(TTS, { headers: bearer })).json();
+    ok(mid.today.requests === 2 && mid.today.chars === 31 + sent.length && mid.today.cached === 1, 'usage: requests + characters per day; cache hits and refusals are free');
+    ok(Math.abs(mid.today.usd - (31 + sent.length) * (0.015 / 900)) < 0.0002, 'usage: cost estimate ≈ $0.015 per spoken minute');
+
+    // Daily cap (1000 in this test): fill it up, then the next one is refused.
+    let status = 200;
+    for (let i = 0; i < 10 && status === 200; i++) {
+      const rr = await say(`Cap filler ${i}. ${'x'.repeat(300)}`);
+      status = rr.status;
+      await rr.arrayBuffer();
+    }
+    ok(status === 429, 'past TTS_DAILY_CHARS the relay refuses (429 → device voice)');
+    const after = await (await fetch(TTS, { headers: bearer })).json();
+    ok(after.today.chars <= 1000, `the daily cap is never exceeded (${after.today.chars} chars)`);
+    const r4 = await say('Task 17 is done. Anything else?');
+    ok(r4.status === 200 && r4.headers.get('x-tts-cache') === 'hit', 'cached text still plays past the cap (costs nothing)');
+    await r4.arrayBuffer();
+    const health = await (await fetch(`http://localhost:${PORT}/health`)).json();
+    ok(health.tts && health.tts.available === true && health.tts.today.chars === after.today.chars, '/health shows today\'s announcement characters');
+    await sleep(700);
+    const saved = JSON.parse(fs.readFileSync(path.join(TMP, 'tts-usage.json'), 'utf8'));
+    ok(Object.values(saved.days)[0]?.chars === after.today.chars, 'tts usage is persisted per day');
+
+    const { createTts, trimText } = require('../tts.js');
+    const noKey = createTts({ tokenOk: (t) => t === TOKEN, env: { TTS_STORE: path.join(TMP, 'tts2.json') }, log: { log() {}, warn() {}, error() {} } });
+    const fakeRes = () => { const x = { status: 0, body: '' }; x.writeHead = (st) => { x.status = st; }; x.end = (b) => { x.body = b; }; return x; };
+    const fakeReq = (body) => { const { Readable } = require('node:stream'); const q = Readable.from([Buffer.from(JSON.stringify(body))]); q.method = 'POST'; q.headers = { authorization: `Bearer ${TOKEN}` }; return q; };
+    const res503 = fakeRes();
+    await noKey.handle(fakeReq({ text: 'Hello' }), res503, new URL('http://x/tts'));
+    ok(res503.status === 503 && noKey.info().available === false, 'without OPENAI_API_KEY /tts is a 503 (the panel uses the device voice)');
+    const one = trimText(`${'word '.repeat(120)}end.`, 400);
+    ok(one.length <= 400 && one.endsWith('…'), 'one over-long sentence is cut at a word with "…"');
   }
 
   console.log('wake word model');

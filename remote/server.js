@@ -37,6 +37,10 @@
 // directly; OPENAI_API_KEY never leaves this process. /realtime/usage keeps a
 // per-day minutes tally, shown on /health and in the panel's Settings.
 //
+// Announcement voice (tts.js): POST /tts turns a spoken announcement into mp3
+// in the same OpenAI voice as the realtime call, with a per-text cache, a
+// length cap and a daily character cap; tallied on /health and in Settings.
+//
 // Wake word: GET /wake/model.tar.gz serves the small Vosk model the panel
 // runs in the browser to hear "Hey Mia". Detection is entirely on-device.
 //
@@ -53,6 +57,7 @@ const { createApi } = require('./api');
 const { createPush } = require('./push');
 const { createStt } = require('./stt');
 const { createRealtime } = require('./realtime');
+const { createTts } = require('./tts');
 
 const PORT = process.env.PORT || 8080;
 const TOKEN = process.env.MC_TOKEN || '';
@@ -72,6 +77,7 @@ function tokenOk(candidate) {
 const push = createPush({ tokenOk });
 const stt = createStt({ tokenOk });
 const realtime = createRealtime({ tokenOk });
+const tts = createTts({ tokenOk });
 
 // ---------------------------------------------------------------------------
 // HTTP: serve the built SPA + a health check.
@@ -116,7 +122,7 @@ const server = http.createServer((req, res) => {
 
   if (pathname === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, host: host !== null, viewers: viewers.size, pollers: pollers.size, pushSubscriptions: push.count(), stt: stt.info().provider, realtime: realtime.info() }));
+    res.end(JSON.stringify({ ok: true, host: host !== null, viewers: viewers.size, pollers: pollers.size, pushSubscriptions: push.count(), stt: stt.info().provider, realtime: realtime.info(), tts: tts.info() }));
     return;
   }
 
@@ -154,6 +160,16 @@ const server = http.createServer((req, res) => {
   if (pathname === '/realtime' || pathname.startsWith('/realtime/')) {
     realtime.handle(req, res, url).catch((err) => {
       console.error('realtime error:', err);
+      if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'internal error' }));
+    });
+    return;
+  }
+
+  // Announcements in Mia's realtime voice (token-auth) — see tts.js.
+  if (pathname === '/tts') {
+    tts.handle(req, res, url).catch((err) => {
+      console.error('tts error:', err);
       if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: 'internal error' }));
     });

@@ -116,7 +116,7 @@ export const useMC = create(() => ({
 export const getMC = () => useMC.getState();
 const set = (patch) => useMC.setState(patch);
 
-export const PANEL_BUILD = 'v23.6 · 2026-09-24 · Mia drives the panel';
+export const PANEL_BUILD = 'v23.7 · 2026-09-24 · one voice for Mia';
 
 // ---- status helpers ---------------------------------------------------------
 // Status semantics: working = green, needs-you = amber, done = quiet neutral,
