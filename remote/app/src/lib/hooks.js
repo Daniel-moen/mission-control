@@ -127,3 +127,16 @@ export function useLocalStorage(key, initial) {
   );
   return [value, set];
 }
+
+// A collapsible side pane's state, remembered per pane on this device. Until
+// the pane has been toggled here, `collapsedByDefault` decides — callers pass
+// true on screens where the pane would crowd out the thing you came to see.
+export function usePane(key, collapsedByDefault = false) {
+  const [stored, setStored] = useLocalStorage(`mc.pane.${key}`, null);
+  const collapsed = typeof stored === 'boolean' ? stored : collapsedByDefault;
+  const toggle = useCallback(
+    () => setStored((v) => !(typeof v === 'boolean' ? v : collapsedByDefault)),
+    [setStored, collapsedByDefault],
+  );
+  return [collapsed, toggle];
+}

@@ -5,7 +5,7 @@ import {
   parsePrompt, rawScreenFor, sparkOf, reply, kill, sendKey,
 } from '../../lib/store.js';
 import { fmtDuration, fmtMoney } from '../../lib/format.js';
-import { useAgent, useMedia, useNow, useWatch } from '../../lib/hooks.js';
+import { useAgent, useMedia, useNow, usePane, useWatch } from '../../lib/hooks.js';
 import { fadeUp, press, reduced, spring } from '../../lib/motion.js';
 import StatusDot from '../../ui/StatusDot.jsx';
 import IconButton from '../../ui/IconButton.jsx';
@@ -67,6 +67,9 @@ export default function AgentView({ agentId, inline = false, onClose, onConsole 
   const now = useNow();
   const desktop = useMedia('(min-width: 1024px)');
   const reduce = useReducedMotion();
+  // Desktop only: the stats column beside the terminal can fold away.
+  const [railHidden, toggleRail] = usePane('agent.details', false);
+  const hideRail = desktop && railHidden;
 
   useWatch(agentId);
 
@@ -337,6 +340,15 @@ export default function AgentView({ agentId, inline = false, onClose, onConsole 
           />
         )}
         {killBtn}
+        {desktop && (
+          <IconButton
+            icon={railHidden ? 'paneRightOpen' : 'paneRightClose'}
+            label={railHidden ? 'Show details' : 'Hide details'}
+            size="md"
+            variant="glass"
+            onClick={toggleRail}
+          />
+        )}
         {inline && <IconButton icon="close" label="Close workspace" size="md" variant="ghost" onClick={onClose} />}
       </header>
 
@@ -344,7 +356,11 @@ export default function AgentView({ agentId, inline = false, onClose, onConsole 
       {/* Phone: one flex column that scrolls. Desktop: terminal + rail side by
           side, each scrolling on its own. (A 1-col grid collapses the left
           column's auto row to 0 once the terminal takes a viewport height.) */}
-      <main className="noscroll flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto p-3 sm:p-4 lg:grid lg:grid-cols-[minmax(0,1.75fr)_minmax(0,1fr)] lg:overflow-hidden">
+      <main
+        className={`noscroll flex min-h-0 flex-1 flex-col gap-3.5 overflow-y-auto p-3 sm:p-4 lg:grid lg:overflow-hidden ${
+          hideRail ? 'lg:grid-cols-[minmax(0,1fr)]' : 'lg:grid-cols-[minmax(0,1.75fr)_minmax(0,1fr)]'
+        }`}
+      >
         {/* left: menu banner + terminal. With a menu open the column scrolls as
             one and the mirror keeps a fixed slot below the question — two
             cramped panes side by side read worse than one honest scroll. */}
@@ -386,9 +402,17 @@ export default function AgentView({ agentId, inline = false, onClose, onConsole 
         </div>
 
         {/* right rail (desktop) / stacked sections (phone) */}
-        <div className="noscroll flex min-w-0 flex-none flex-col gap-3 lg:min-h-0 lg:overflow-y-auto lg:pb-2 lg:[mask-image:linear-gradient(to_bottom,#000_calc(100%-28px),transparent)]">
-          {rail}
-        </div>
+        {!hideRail && (
+          <motion.div
+            key="rail"
+            initial={desktop && !reduce ? { opacity: 0, x: 16 } : false}
+            animate={{ opacity: 1, x: 0 }}
+            transition={spring.smooth}
+            className="noscroll flex min-w-0 flex-none flex-col gap-3 lg:min-h-0 lg:overflow-y-auto lg:pb-2 lg:[mask-image:linear-gradient(to_bottom,#000_calc(100%-28px),transparent)]"
+          >
+            {rail}
+          </motion.div>
+        )}
       </main>
 
       {/* sticky footer: quick keys + reply composer */}

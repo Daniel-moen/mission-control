@@ -9,6 +9,7 @@ import Select from '../../ui/Select.jsx';
 import Button from '../../ui/Button.jsx';
 import IconButton from '../../ui/IconButton.jsx';
 import Icon from '../../ui/Icon.jsx';
+import DownloadButton from './Download.jsx';
 
 // The document workspace: rendered markdown by default, a raw editor on demand,
 // and a calm metadata bar for the frontmatter (kind / status / subject / tags /
@@ -168,6 +169,7 @@ export default function DocView({ docId, startEditing = false, onClose, onLaunch
     </Button>
   ) : (
     <>
+      <DownloadButton docId={docId} meta={meta} title={title} compact={!wide} disabled={!meta} />
       <Button icon="edit" onClick={startEdit} disabled={!doc} className="flex-none">
         Edit
       </Button>

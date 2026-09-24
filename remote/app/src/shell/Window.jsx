@@ -1,7 +1,9 @@
+import { createContext, useContext } from 'react';
 import { motion, useDragControls } from 'motion/react';
 import { spring } from '../lib/motion.js';
-import { useMedia } from '../lib/hooks.js';
+import { useMedia, usePane } from '../lib/hooks.js';
 import IconButton from '../ui/IconButton.jsx';
+import Icon from '../ui/Icon.jsx';
 
 // A pane of frosted glass floating over the scene. On desktop it takes its
 // place in App's window row (`column` beside `main`, or a centred `center`);
@@ -13,6 +15,62 @@ import IconButton from '../ui/IconButton.jsx';
 //
 // Esc is NOT bound here on purpose — App owns a single keydown handler so the
 // topmost overlay closes exactly once when several are stacked.
+//
+// Collapsible column: a `column` window given a `pane` ({ key, label, icon,
+// count, collapsedByDefault, rail }) folds down to a thin glass rail and back.
+// The state is remembered per pane (usePane). The content stays mounted at
+// full width while it folds — clipped, not reflowed — so search boxes and
+// scroll positions survive. A chromeless view puts <PaneToggle /> in its own
+// header; a titled window gets the toggle in its header automatically.
+const COLUMN_W = 360;
+const RAIL_W = 56;
+
+const PaneCtx = createContext(null);
+
+export function PaneToggle() {
+  const pane = useContext(PaneCtx);
+  if (!pane) return null;
+  return (
+    <IconButton icon="paneLeftClose" label={`Collapse ${pane.label}`} size="sm" variant="glass" onClick={pane.toggle} />
+  );
+}
+
+function Rail({ pane, onExpand }) {
+  return (
+    // The whole strip reopens the pane; the rail's own buttons (agent dots)
+    // stop the click so they do their own thing.
+    <div
+      onClick={onExpand}
+      className="flex h-full cursor-pointer flex-col items-center gap-3 pb-3 pt-3"
+    >
+      <IconButton
+        icon="paneLeftOpen"
+        label={`Show ${pane.label}`}
+        size="sm"
+        variant="glass"
+        onClick={(e) => {
+          e.stopPropagation();
+          onExpand();
+        }}
+      />
+      <span className="relative text-ink2">
+        <Icon name={pane.icon} size={17} />
+        {pane.count ? (
+          <span className="tnum absolute -right-2.5 -top-2 min-w-4 rounded-full bg-white/[0.14] px-1 text-center text-[10px] font-semibold leading-4 text-ink">
+            {pane.count}
+          </span>
+        ) : null}
+      </span>
+      <span className="text-[12px] font-medium tracking-wide text-ink2 [writing-mode:vertical-rl]">{pane.label}</span>
+      {pane.rail && (
+        <div className="noscroll flex min-h-0 flex-1 flex-col items-center gap-1.5 overflow-y-auto pt-1" onClick={(e) => e.stopPropagation()}>
+          {pane.rail}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const DESK = {
   column: 'w-[360px] flex-none',
   main: 'min-w-0 flex-1',
@@ -20,9 +78,13 @@ const DESK = {
   full: 'min-w-0 flex-1',
 };
 
-export default function Window({ title, subtitle, actions, onClose, size = 'center', className = '', children }) {
+export default function Window({ title, subtitle, actions, onClose, size = 'center', pane, className = '', children }) {
   const desktop = useMedia('(min-width: 1024px)');
   const drag = useDragControls();
+  const foldable = desktop && size === 'column' && !!pane;
+  const [collapsed, toggle] = usePane(pane?.key || 'none', !!pane?.collapsedByDefault);
+  const folded = foldable && collapsed;
+  const paneCtx = foldable ? { ...pane, toggle } : null;
 
   const header = title ? (
     <header className="flex flex-none items-center gap-3 border-b border-glass-line px-4 py-3 sm:px-5">
@@ -31,9 +93,51 @@ export default function Window({ title, subtitle, actions, onClose, size = 'cent
         {subtitle && <div className="truncate text-[12px] text-ink3">{subtitle}</div>}
       </div>
       {actions}
+      {foldable && <PaneToggle />}
       {onClose && <IconButton icon="close" label="Close" size="sm" variant="glass" onClick={onClose} />}
     </header>
   ) : null;
+
+  if (foldable) {
+    const w = folded ? RAIL_W : COLUMN_W;
+    return (
+      <PaneCtx.Provider value={paneCtx}>
+        <motion.section
+          initial={{ opacity: 0, scale: 0.97, y: 8, width: w }}
+          animate={{ opacity: 1, scale: 1, y: 0, width: w }}
+          exit={{ opacity: 0, scale: 0.98, y: 4 }}
+          transition={spring.smooth}
+          data-pane={pane.key}
+          data-collapsed={folded ? 'true' : 'false'}
+          className={`glass relative flex min-h-0 flex-none flex-col overflow-hidden ${className}`}
+        >
+          <motion.div
+            animate={{ opacity: folded ? 0 : 1 }}
+            transition={{ duration: 0.18 }}
+            inert={folded ? true : undefined}
+            aria-hidden={folded || undefined}
+            className={`flex min-h-0 flex-1 flex-col ${folded ? 'pointer-events-none' : ''}`}
+            style={{ width: COLUMN_W }}
+          >
+            {header}
+            <div className={`noscroll min-h-0 flex-1 ${title ? 'overflow-y-auto' : 'flex flex-col overflow-hidden'}`}>
+              {children}
+            </div>
+          </motion.div>
+          <motion.div
+            initial={false}
+            animate={{ opacity: folded ? 1 : 0 }}
+            transition={{ duration: 0.18, delay: folded ? 0.08 : 0 }}
+            className={`absolute inset-y-0 left-0 ${folded ? '' : 'pointer-events-none'}`}
+            style={{ width: RAIL_W }}
+            inert={folded ? undefined : true}
+          >
+            <Rail pane={pane} onExpand={toggle} />
+          </motion.div>
+        </motion.section>
+      </PaneCtx.Provider>
+    );
+  }
 
   if (desktop) {
     return (

@@ -28,6 +28,7 @@
     "lucide-react": "^1.47.0",
     "marked": "^18.0.5",
     "motion": "^13.4.0",
+    "pdfmake": "^0.2.23",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "svelte": "^5.19.0",

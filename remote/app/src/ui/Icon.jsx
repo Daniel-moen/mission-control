@@ -6,6 +6,7 @@ import {
   RefreshCw, Rocket, Search, Send, Settings, Skull, Sparkles, Square, StickyNote, Car,
   Terminal, Trash2, TriangleAlert, Tv, User, Users, X, Zap, Microscope, FileText,
   Sparkle, Bell, BellRing, BellOff, Ban, RotateCcw, ListTodo, MessageSquare,
+  Download, Share, FileCode2, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen,
 } from 'lucide-react';
 
 // Semantic name → lucide glyph. Views ask for meaning ("launch", "needs you"),
@@ -74,6 +75,14 @@ const MAP = {
   retry: RotateCcw,
   tasks: ListTodo,
   chat: MessageSquare,
+  // downloads + collapsible panes
+  download: Download,
+  share: Share,
+  markdown: FileCode2,
+  paneLeftClose: PanelLeftClose,
+  paneLeftOpen: PanelLeftOpen,
+  paneRightClose: PanelRightClose,
+  paneRightOpen: PanelRightOpen,
 };
 
 export default function Icon({ name, size = 18, strokeWidth = 1.75, ...rest }) {

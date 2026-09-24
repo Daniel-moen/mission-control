@@ -1,10 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { motion } from 'motion/react';
 import {
   useMC, miaStart, miaStop, miaSetModel, miaPushTest, miaOpenQuestions,
   MIA_MODELS, MIA_DEFAULT_MODEL,
 } from '../../lib/store.js';
 import { enablePush } from '../../lib/push.js';
 import { modelLabel } from '../../lib/models.js';
+import { useMedia, usePane } from '../../lib/hooks.js';
+import { spring } from '../../lib/motion.js';
 import Icon from '../../ui/Icon.jsx';
 import Button from '../../ui/Button.jsx';
 import IconButton from '../../ui/IconButton.jsx';
@@ -22,6 +25,8 @@ import Tasks from './Tasks.jsx';
 // share 400px of height and both stay usable.
 
 const WIDE = 720; // px of window width before the regions sit side by side
+const TASKS_W = 400;
+const TASKS_RAIL = 52;
 
 function useWidth(ref) {
   const [w, setW] = useState(0);
@@ -161,9 +166,15 @@ export default function Mia({ onOpenAgent, onClose }) {
   const openQ = miaOpenQuestions(mia, local).length;
   const liveTasks = (mia?.tasks || []).filter((t) => ['queued', 'asking', 'running', 'checking'].includes(t.status)).length;
 
+  // Side by side, the task board folds to a rail at the window's edge. An
+  // iPad in portrait gives the thread the room by default.
+  const portrait = useMedia('(max-width: 1023px)');
+  const [tasksFolded, toggleTasks] = usePane('mia.tasks', portrait);
+
   const showTask = (id) => {
     setHighlight((h) => ({ id, n: (h?.n || 0) + 1 }));
     if (!wide) setTab('tasks');
+    else if (tasksFolded) toggleTasks();
   };
 
   const controls = (
@@ -185,6 +196,15 @@ export default function Mia({ onOpenAgent, onClose }) {
           <Presence mia={mia} link={link} />
           <span className="flex-1" />
           {wide && <div className="flex flex-wrap items-center justify-end gap-2">{controls}</div>}
+          {wide && mia && (
+            <IconButton
+              icon={tasksFolded ? 'paneRightOpen' : 'paneRightClose'}
+              label={tasksFolded ? 'Show tasks' : 'Hide tasks'}
+              size="sm"
+              variant="glass"
+              onClick={toggleTasks}
+            />
+          )}
           {onClose && <IconButton icon="close" label="Close" size="sm" variant="glass" onClick={onClose} />}
         </div>
         {!wide && <div className="noscroll -mx-4 flex items-center gap-2 overflow-x-auto px-4 sm:-mx-5 sm:px-5">{controls}</div>}
@@ -208,9 +228,49 @@ export default function Mia({ onOpenAgent, onClose }) {
           <div className="flex min-h-0 min-w-0 flex-1 flex-col pt-3">
             <Thread mia={mia} active onTask={showTask} />
           </div>
-          <div className="flex min-h-0 w-[min(400px,42%)] flex-none flex-col border-l border-glass-line pt-3">
-            <Tasks mia={mia} onOpenAgent={onOpenAgent} highlight={highlight} />
-          </div>
+          {/* Folds like the desktop columns: the board keeps its width and is
+              clipped (so drafts and scroll survive), a rail fades in over it. */}
+          <motion.div
+            initial={false}
+            animate={{ width: tasksFolded ? TASKS_RAIL : Math.min(TASKS_W, Math.round(width * 0.42)) }}
+            transition={spring.smooth}
+            data-pane="mia.tasks"
+            data-collapsed={tasksFolded ? 'true' : 'false'}
+            className="relative flex min-h-0 flex-none flex-col overflow-hidden border-l border-glass-line"
+          >
+            <motion.div
+              animate={{ opacity: tasksFolded ? 0 : 1 }}
+              transition={{ duration: 0.18 }}
+              inert={tasksFolded ? true : undefined}
+              className={`flex min-h-0 flex-1 flex-col pt-3 ${tasksFolded ? 'pointer-events-none' : ''}`}
+              style={{ width: Math.min(TASKS_W, Math.round(width * 0.42)) }}
+            >
+              <Tasks mia={mia} onOpenAgent={onOpenAgent} highlight={highlight} />
+            </motion.div>
+            {tasksFolded && (
+              <motion.button
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.18, delay: 0.08 }}
+                onClick={toggleTasks}
+                aria-label="Show tasks"
+                className="absolute inset-0 flex flex-col items-center gap-3 pt-3 text-ink2 transition-colors hover:bg-white/[0.04]"
+              >
+                <span className="glass-soft pill grid h-8 w-8 place-items-center text-ink">
+                  <Icon name="paneRightOpen" size={15} />
+                </span>
+                <span className="relative">
+                  <Icon name="tasks" size={17} />
+                  {liveTasks > 0 && (
+                    <span className="tnum absolute -right-2.5 -top-2 min-w-4 rounded-full bg-white/[0.14] px-1 text-center text-[10px] font-semibold leading-4 text-ink">
+                      {liveTasks}
+                    </span>
+                  )}
+                </span>
+                <span className="text-[12px] font-medium tracking-wide [writing-mode:vertical-rl]">Tasks</span>
+              </motion.button>
+            )}
+          </motion.div>
         </div>
       ) : (
         <>

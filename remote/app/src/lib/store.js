@@ -113,7 +113,7 @@ export const useMC = create(() => ({
 export const getMC = () => useMC.getState();
 const set = (patch) => useMC.setState(patch);
 
-export const PANEL_BUILD = 'v23.1 · 2026-09-24 · token check';
+export const PANEL_BUILD = 'v23.2 · 2026-09-24 · slim bar, folding panes, downloads';
 
 // ---- status helpers ---------------------------------------------------------
 // Status semantics: working = green, needs-you = amber, done = quiet neutral,

@@ -196,3 +196,41 @@ export default function Fleet({ selectedId = null, onSelect }) {
     </div>
   );
 }
+
+// "acme--1" → "a1", "webapp-sk" → "we": short enough for the rail, and
+// numbered workers of one project stay tell-apart-able.
+function railTag(name) {
+  const n = String(name || '?');
+  const num = n.match(/(\d+)$/);
+  return (n[0] + (num ? num[1] : n[1] || '')).toLowerCase();
+}
+
+// The collapsed Fleet column: one dot per agent, most urgent first, so the
+// rail still says who needs you and still switches agents in one tap.
+export function FleetRail({ selectedId, onSelect }) {
+  const agents = useMC((s) => s.agents);
+  const sorted = useMemo(
+    () => [...agents].sort((x, y) => (ORDER[agentStatus(x)] ?? 9) - (ORDER[agentStatus(y)] ?? 9)),
+    [agents],
+  );
+  return sorted.map((a) => {
+    const st = agentStatus(a);
+    const name = agentName(a);
+    return (
+      <motion.button
+        key={a.id}
+        {...press}
+        onClick={() => onSelect?.(a.id)}
+        title={name}
+        aria-label={name}
+        aria-current={a.id === selectedId || undefined}
+        className={`pill relative grid h-9 w-9 flex-none place-items-center text-[11px] font-semibold transition-colors ${
+          a.id === selectedId ? 'bg-white/[0.16] text-ink' : 'text-ink3 hover:bg-white/[0.08] hover:text-ink2'
+        }`}
+      >
+        {railTag(name)}
+        <StatusDot status={st} size={6} className="absolute bottom-1 right-1" />
+      </motion.button>
+    );
+  });
+}

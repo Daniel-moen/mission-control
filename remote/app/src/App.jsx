@@ -15,7 +15,7 @@ import Toast from './ui/Toast.jsx';
 
 import Home from './views/home/Home.jsx';
 import AttentionCards from './views/home/AttentionCards.jsx';
-import Fleet from './views/fleet/Fleet.jsx';
+import Fleet, { FleetRail } from './views/fleet/Fleet.jsx';
 import Insights from './views/insights/Insights.jsx';
 import Library from './views/library/Library.jsx';
 import Mia from './views/mia/Mia.jsx';
@@ -54,6 +54,10 @@ export default function App() {
   const agentCount = useMC((s) => s.agents.length);
   const miaCount = useMC((s) => miaBadge(s.mia, s.miaLocal));
   const desktop = useMedia('(min-width: 1024px)');
+  // Side columns start folded on cramped landscape screens (an 11" iPad is
+  // 1180 wide); once toggled, the choice is remembered per column.
+  const narrowDesk = useMedia('(max-width: 1099px)');
+  const midDesk = useMedia('(max-width: 1279px)');
 
   const [win, setWin] = useState(null); // null | 'mia' | 'fleet' | 'insights' | 'library'
   const [sel, setSel] = useState(null); // agent id → Agent window
@@ -246,6 +250,14 @@ export default function App() {
       title="Fleet"
       subtitle={`${agentCount} agent${agentCount === 1 ? '' : 's'}`}
       onClose={() => nav('home')}
+      pane={{
+        key: 'fleet',
+        label: 'Fleet',
+        icon: 'agents',
+        count: agentCount,
+        collapsedByDefault: narrowDesk,
+        rail: <FleetRail selectedId={sel} onSelect={openAgent} />,
+      }}
     >
       <Fleet selectedId={sel} onSelect={openAgent} />
     </Window>
@@ -277,7 +289,12 @@ export default function App() {
       );
     if (kind === 'library')
       return (
-        <Window key="library" size={size} onClose={() => nav('home')}>
+        <Window
+          key="library"
+          size={size}
+          onClose={() => nav('home')}
+          pane={{ key: 'library', label: 'Library', icon: 'library', count: (docs || []).length, collapsedByDefault: midDesk }}
+        >
           <Library onOpen={(id) => setOpenDoc({ id, edit: false })} onClose={() => nav('home')} />
         </Window>
       );
@@ -346,7 +363,9 @@ export default function App() {
             <AnimatePresence initial={false}>
               {leftKind === 'library' ? mainWindow('library', 'column') : null}
             </AnimatePresence>
-            <div className="relative flex min-h-0 flex-1 flex-col">
+            {/* min-w-0: a wide table or code block in the doc must not stop
+                this column from shrinking beside an open side column. */}
+            <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
               <AnimatePresence mode="wait" initial={false}>
                 {mainKind ? mainWindow(mainKind, 'main') : null}
               </AnimatePresence>

@@ -16,6 +16,8 @@ import Button from '../../ui/Button.jsx';
 import IconButton from '../../ui/IconButton.jsx';
 import Icon from '../../ui/Icon.jsx';
 import EmptyState from '../../ui/EmptyState.jsx';
+import DownloadButton from './Download.jsx';
+import { PaneToggle } from '../../shell/Window.jsx';
 
 // The document library — one central directory of markdown files living in
 // ~/.mission-control/library on the Mac, written by you OR by agents (a
@@ -176,75 +178,82 @@ function MicArea({ value, onChange, placeholder, rows = 3 }) {
 function Card({ d, now, onOpen, snippets, q }) {
   const k = kindOf(d.kind);
   return (
-    <motion.button
+    // The download button sits beside the card's button, not inside it — a
+    // button inside a button is invalid and would open the doc as well.
+    <motion.div
       layout="position"
-      {...press}
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.98 }}
       transition={spring.smooth}
-      onClick={() => onOpen?.(d.id)}
-      className="glass-soft glass-soft-hover flex flex-col gap-2 rounded-xl3 p-4 text-left transition-colors"
+      className="relative flex flex-col"
     >
-      <div className="flex items-start gap-3">
-        <span className={`relative grid h-9 w-9 flex-none place-items-center rounded-xl2 border ${k.ring}`}>
-          <Icon name={k.icon} size={17} />
-          {d.kind === 'research' && d.status === 'active' && (
-            <span className="absolute -right-1 -top-1 flex h-2.5 w-2.5">
-              <span className="anim-ping absolute inline-flex h-full w-full rounded-full bg-accent/70" />
-              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-accent" />
-            </span>
-          )}
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[14.5px] font-semibold leading-tight tracking-tight text-ink">
-            {d.title}
+      <motion.button
+        {...press}
+        onClick={() => onOpen?.(d.id)}
+        className="glass-soft glass-soft-hover flex flex-1 flex-col gap-2 rounded-xl3 p-4 text-left transition-colors"
+      >
+        <div className="flex items-start gap-3">
+          <span className={`relative grid h-9 w-9 flex-none place-items-center rounded-xl2 border ${k.ring}`}>
+            <Icon name={k.icon} size={17} />
+            {d.kind === 'research' && d.status === 'active' && (
+              <span className="absolute -right-1 -top-1 flex h-2.5 w-2.5">
+                <span className="anim-ping absolute inline-flex h-full w-full rounded-full bg-accent/70" />
+                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-accent" />
+              </span>
+            )}
           </span>
-          {d.subject && <span className={`mt-0.5 block truncate text-[12px] ${k.text}`}>{d.subject}</span>}
-        </span>
-        <span className={`flex-none rounded-full border px-2 py-px text-[10px] font-medium ${statusChip(d.status)}`}>
-          {docStatusLabel(d.status)}
-        </span>
-      </div>
-
-      {snippets ? (
-        <span className="flex flex-col gap-1.5">
-          {snippets.slice(0, 3).map((s, i) => (
-            <span
-              key={i}
-              className={`glass-soft line-clamp-2 rounded-lg px-2.5 py-1.5 font-mono text-[11px] leading-relaxed text-ink3 ${MARK}`}
-              dangerouslySetInnerHTML={{ __html: highlight(s, q) }}
-            />
-          ))}
-        </span>
-      ) : (
-        d.preview && <span className="line-clamp-2 text-[12.5px] leading-relaxed text-ink3">{cleanPreview(d.preview)}</span>
-      )}
-
-      {(d.tags || []).length > 0 && (
-        <span className="flex flex-wrap gap-1.5">
-          {d.tags.slice(0, 4).map((t) => (
-            <span key={t} className={`rounded-full border px-2 py-px text-[11px] ${k.chip}`}>
-              #{t}
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[14.5px] font-semibold leading-tight tracking-tight text-ink">
+              {d.title}
             </span>
-          ))}
-        </span>
-      )}
+            {d.subject && <span className={`mt-0.5 block truncate text-[12px] ${k.text}`}>{d.subject}</span>}
+          </span>
+          <span className={`flex-none rounded-full border px-2 py-px text-[10px] font-medium ${statusChip(d.status)}`}>
+            {docStatusLabel(d.status)}
+          </span>
+        </div>
 
-      <span className="tnum mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-ink3">
-        {d.folder && (
-          <span className="flex items-center gap-1">
-            <Icon name="folder" size={12} />
-            {d.folder}
+        {snippets ? (
+          <span className="flex flex-col gap-1.5">
+            {snippets.slice(0, 3).map((s, i) => (
+              <span
+                key={i}
+                className={`glass-soft line-clamp-2 rounded-lg px-2.5 py-1.5 font-mono text-[11px] leading-relaxed text-ink3 ${MARK}`}
+                dangerouslySetInnerHTML={{ __html: highlight(s, q) }}
+              />
+            ))}
+          </span>
+        ) : (
+          d.preview && <span className="line-clamp-2 text-[12.5px] leading-relaxed text-ink3">{cleanPreview(d.preview)}</span>
+        )}
+
+        {(d.tags || []).length > 0 && (
+          <span className="flex flex-wrap gap-1.5">
+            {d.tags.slice(0, 4).map((t) => (
+              <span key={t} className={`rounded-full border px-2 py-px text-[11px] ${k.chip}`}>
+                #{t}
+              </span>
+            ))}
           </span>
         )}
-        <span>{ago(d.updatedAt, now)}</span>
-        {d.words ? <span>{d.words.toLocaleString()} words</span> : null}
-        <span className={`rounded-full border px-2 py-px ${d.session ? 'border-mgr/30 text-mgr' : 'border-glass-line text-ink3'}`}>
-          {d.session ? 'agent' : 'you'}
+
+        <span className="tnum mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 pr-9 text-[11.5px] text-ink3">
+          {d.folder && (
+            <span className="flex items-center gap-1">
+              <Icon name="folder" size={12} />
+              {d.folder}
+            </span>
+          )}
+          <span>{ago(d.updatedAt, now)}</span>
+          {d.words ? <span>{d.words.toLocaleString()} words</span> : null}
+          <span className={`rounded-full border px-2 py-px ${d.session ? 'border-mgr/30 text-mgr' : 'border-glass-line text-ink3'}`}>
+            {d.session ? 'agent' : 'you'}
+          </span>
         </span>
-      </span>
-    </motion.button>
+      </motion.button>
+      <DownloadButton docId={d.id} meta={d} title={d.title} compact className="absolute bottom-3 right-3" />
+    </motion.div>
   );
 }
 
@@ -408,9 +417,13 @@ export default function Library({ onOpen, onClose }) {
           Library
           {total > 0 && <span className="tnum text-[13px] font-normal text-ink3">{total}</span>}
         </h2>
-        <Button size="sm" icon="research" onClick={openResearch}>
-          Research
-        </Button>
+        {/* In the 360px side column the header must fit on one line. */}
+        <span className="hidden @sm:inline-flex">
+          <Button size="sm" icon="research" onClick={openResearch}>
+            Research
+          </Button>
+        </span>
+        <IconButton icon="research" label="Research" size="sm" variant="glass" onClick={openResearch} className="@sm:hidden" />
         {/* A display utility on the Button itself would lose to its own
             `inline-flex` base class, so the breakpoint lives on a wrapper. */}
         <span className="hidden @lg:inline-flex">
@@ -421,6 +434,7 @@ export default function Library({ onOpen, onClose }) {
         <Button size="sm" variant="primary" icon="plus" onClick={openCreate}>
           New
         </Button>
+        <PaneToggle />
         {onClose && <IconButton icon="close" label="Close" size="sm" variant="glass" onClick={onClose} />}
       </header>
 
