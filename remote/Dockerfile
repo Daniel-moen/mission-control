@@ -20,6 +20,9 @@ RUN cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
 RUN mkdir /models \
  && curl -fsSL -o /models/ggml-base.en.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin \
  && curl -fsSL -o /models/ggml-small.en-q5_1.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en-q5_1.bin
+# The "Hey Mia" wake word runs in the browser (vosk-browser, Kaldi in WASM);
+# the relay only serves this model file to the panel, once, cached forever.
+RUN curl -fsSL -o /models/vosk-small-en-us-0.15.tar.gz https://ccoreilly.github.io/vosk-browser/models/vosk-model-small-en-us-0.15.tar.gz
 
 # ---- the relay + panel -------------------------------------------------------
 FROM node:20-slim
@@ -28,6 +31,7 @@ WORKDIR /app
 COPY --from=whisper /w/build/bin/whisper-cli /usr/local/bin/whisper-cli
 COPY --from=whisper /models /models
 ENV WHISPER_MODEL=/models/ggml-base.en.bin
+ENV WAKE_MODEL=/models/vosk-small-en-us-0.15.tar.gz
 
 # Install dependencies, including the dev tooling needed to build the panel.
 # `npm install` (not `npm ci`) so the Linux-native optional deps for Tailwind's

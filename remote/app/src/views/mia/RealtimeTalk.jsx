@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useMC, getMC, miaSend, miaAnswer, miaRead, miaOpenQuestions, VOICE_TAG } from '../../lib/store.js';
-import { takePrimed, getMic, newAudioContext, blessedAudio, playAndRecord, unlockSpeech, speak, stopSpeaking, speakable } from '../../lib/voice.js';
+import { takePrimed, releaseMedia, getMic, newAudioContext, blessedAudio, playAndRecord, unlockSpeech, speak, stopSpeaking, speakable } from '../../lib/voice.js';
+import { onWake, consumeWake } from '../../lib/wake.js';
 import { connectRealtime, reportUsage, addUsage, emptyUsage, realtimeSupported } from '../../lib/realtime.js';
 import Icon from '../../ui/Icon.jsx';
 import Button from '../../ui/Button.jsx';
@@ -169,8 +170,15 @@ export default function RealtimeTalk({ mia, onExit, onFallback, switcher }) {
   }
   function stopMic() {
     stopMeter();
-    media.current?.stream?.getTracks().forEach((t) => t.stop());
-    if (media.current) media.current.stream = null;
+    const m = media.current;
+    if (m?.borrowed) {
+      // The wake word's mic: hand it back so "Hey Mia" listens again.
+      releaseMedia(m);
+      media.current = null;
+      return;
+    }
+    m?.stream?.getTracks().forEach((t) => t.stop());
+    if (m) m.stream = null;
   }
 
   // ---- the call ---------------------------------------------------------------
@@ -310,9 +318,10 @@ export default function RealtimeTalk({ mia, onExit, onFallback, switcher }) {
     setPhase('starting');
     let m = media.current;
     if (!m?.stream) {
-      const primed = !fromTap && takePrimed();
+      // The Talk tap's media, or the wake word's mic on loan.
+      const primed = takePrimed();
       if (primed) {
-        m = { ctx: primed.ctx, stream: primed.stream, audio: primed.audio };
+        m = primed;
       } else {
         unlockSpeech();
         playAndRecord();
@@ -367,6 +376,11 @@ export default function RealtimeTalk({ mia, onExit, onFallback, switcher }) {
       setClock(0);
       setLive(true);
       setPhase('listening');
+      // Opened by "Hey Mia": answer the call instead of waiting in silence.
+      if (consumeWake()) {
+        c.responding = true;
+        session.send({ type: 'response.create', response: { instructions: 'Daniel just called you by name. Answer with a very short, warm acknowledgement of one to three words, like "Yes?" or "I\'m here." and then listen.' } });
+      }
       try {
         wake.current = await navigator.wakeLock?.request('screen');
       } catch {}
@@ -383,7 +397,7 @@ export default function RealtimeTalk({ mia, onExit, onFallback, switcher }) {
     stopMeter();
     const m = media.current;
     media.current = null; // now Basic's to close
-    onFallback?.(reason, m?.stream ? { ctx: m.ctx, stream: m.stream } : null);
+    onFallback?.(reason, m?.stream ? { ctx: m.ctx, stream: m.stream, borrowed: m.borrowed, release: m.release } : null);
   }
 
   // End the live call. `why`: idle | cap | background | done | lost | exit.
@@ -470,14 +484,30 @@ export default function RealtimeTalk({ mia, onExit, onFallback, switcher }) {
       alive.current = false;
       end('exit');
       stopSpeaking();
+      const own = media.current && !media.current.borrowed;
       stopMic();
-      media.current?.ctx?.close?.().catch(() => {});
-      if (media.current?.audio) media.current.audio.srcObject = null;
+      if (own) {
+        media.current?.ctx?.close?.().catch(() => {});
+        if (media.current?.audio) media.current.audio.srcObject = null;
+        playAndRecord(false);
+      }
       media.current = null;
-      playAndRecord(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // "Hey Mia" while this view is in standby (or failed): talk again.
+  useEffect(
+    () =>
+      onWake(() => {
+        if (['standby', 'error'].includes(phaseRef.current)) {
+          stopSpeaking();
+          begin(true);
+        }
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
 
   // New Mia messages → into the call (or, in standby, the device's voice).
   // Anything already in the thread when talk mode opened is history.

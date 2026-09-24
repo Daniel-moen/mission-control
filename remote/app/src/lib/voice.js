@@ -82,6 +82,7 @@ export async function openMic(handlers = {}, media = {}) {
   const onState = (st) => h.onState && h.onState(st);
   const pauseMs = handlers.pauseMs || PAUSES.normal;
   playAndRecord();
+  const borrowed = !!media.borrowed && !!media.stream;
   const ctx = media.ctx && media.ctx.state !== 'closed' ? media.ctx : newAudioContext();
   // Kick the context while we're still inside the gesture, before any await.
   const resumed = ctx.resume().catch(() => {});
@@ -90,7 +91,8 @@ export async function openMic(handlers = {}, media = {}) {
   try {
     stream = await (media.stream || getMic());
   } catch (e) {
-    ctx.close().catch(() => {});
+    if (borrowed) media.release?.();
+    else ctx.close().catch(() => {});
     throw e;
   }
   await resumed;
@@ -241,6 +243,7 @@ export async function openMic(handlers = {}, media = {}) {
         node.disconnect();
         sink.disconnect();
       } catch {}
+      if (borrowed) return media.release?.();
       stream.getTracks().forEach((t) => t.stop());
       ctx.close().catch(() => {});
       playAndRecord(false);
@@ -256,10 +259,22 @@ export async function openMic(handlers = {}, media = {}) {
 // play() inside the tap, which the realtime view later points at OpenAI's
 // WebRTC audio. Either engine (realtime or basic) can take the same media.
 let primed = null;
+// The wake word (wake.js), while on, owns the mic and lends it instead.
+let lender = null;
+export function setMediaLender(fn) {
+  lender = fn;
+}
 export function primeTalk() {
   unlockSpeech();
   if (!talkSupported) return;
   playAndRecord();
+  const borrowed = lender?.();
+  if (borrowed) {
+    if (primed) releaseMedia(primed);
+    borrowed.audio = blessedAudio(borrowed.audio);
+    primed = borrowed;
+    return;
+  }
   if (primed) releaseMedia(primed);
   const ctx = newAudioContext();
   ctx.resume().catch(() => {});
@@ -268,12 +283,15 @@ export function primeTalk() {
   primed = { ctx, stream, audio: blessedAudio() };
 }
 export function takePrimed() {
-  const p = primed;
+  const p = primed || lender?.() || null;
   primed = null;
   return p;
 }
+// Done with media from primeTalk/takePrimed: stop it, or hand a borrowed mic
+// back to the wake word.
 export function releaseMedia(m) {
   if (!m) return;
+  if (m.borrowed) return m.release?.();
   Promise.resolve(m.stream)
     .then((s) => s?.getTracks().forEach((t) => t.stop()))
     .catch(() => {});

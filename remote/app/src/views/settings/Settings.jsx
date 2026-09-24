@@ -9,6 +9,8 @@ import { spring } from '../../lib/motion.js';
 import { useLocalStorage } from '../../lib/hooks.js';
 import { realtimeInfo } from '../../lib/realtime.js';
 import Segmented from '../../ui/Segmented.jsx';
+import { WakeToggle, WAKE_HINT } from '../mia/Wake.jsx';
+import { wakeSupported } from '../../lib/wake.js';
 
 // Settings — the device's own page: what it is connected to, the two ambient
 // modes, the backdrop photograph, and how a bot gets the same access.
@@ -98,6 +100,11 @@ function VoiceSection() {
           ]}
         />
       </Row>
+      {wakeSupported && (
+        <Row label="Wake word" hint={WAKE_HINT}>
+          <WakeToggle />
+        </Row>
+      )}
       {info?.available && (
         <Row
           label="Realtime usage"

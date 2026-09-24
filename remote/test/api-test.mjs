@@ -342,6 +342,12 @@ async function main() {
     ok(res503.status === 503 && noKey.info().available === false, 'without OPENAI_API_KEY minting is a 503 (the panel falls back to basic)');
   }
 
+  console.log('wake word model');
+  {
+    const r = await fetch(`http://localhost:${PORT}/wake/model.tar.gz`);
+    ok(r.status === 404 && /WAKE_MODEL/.test(await r.text()), 'without WAKE_MODEL the model route is a clear 404 (the panel says the wake word is unavailable)');
+  }
+
   console.log('errors');
   ok((await api('GET', '/nope')).status === 404, 'unknown route is a 404');
   ok((await api('POST', '/launch', {})).status === 422 || (await api('POST', '/launch', {})).data.ok === false, 'empty launch is rejected by the host');

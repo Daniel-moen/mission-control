@@ -14,9 +14,12 @@
 // get_status; answer_question; end_session → standby + usage on the relay;
 // the idle auto-end; ending on app background; fallback to Basic when the
 // relay can't mint; the Settings voice section. Plus the iPad Home Screen
-// bottom-gap fix in portrait and landscape.
+// bottom-gap fix in portrait and landscape. With WAKE_MODEL=<vosk model
+// .tar.gz>, also the on-device "Hey Mia" wake word: real speech (macOS `say`)
+// through the fake mic → Vosk in the page → Mia opens and the voice greets →
+// "I'm done" → the wake word listens again.
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -34,6 +37,7 @@ const OPENAI_PORT = 8896;
 const TOKEN = 'test';
 const BASE = `http://localhost:${PORT}`;
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'mc-rt-'));
+const COOLDOWN_WAIT = 4200; // wake.js COOLDOWN_MS
 
 let passed = 0;
 let failed = 0;
@@ -77,13 +81,27 @@ const mock = http.createServer((req, res) => {
 
 // ---- in-page fakes ---------------------------------------------------------------
 const INIT = () => {
+  // The fake mic: a faint noise floor, plus whatever __say(url) plays into it.
   navigator.mediaDevices.getUserMedia = async () => {
     const ctx = new AudioContext();
-    const o = ctx.createOscillator();
     const d = ctx.createMediaStreamDestination();
-    o.connect(d);
-    o.start();
+    const nb = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+    const ch = nb.getChannelData(0);
+    for (let i = 0; i < ch.length; i++) ch[i] = (Math.random() * 2 - 1) * 0.0008;
+    const n = ctx.createBufferSource();
+    n.buffer = nb;
+    n.loop = true;
+    n.connect(d);
+    n.start();
     window.__mics = (window.__mics || 0) + 1;
+    window.__say = async (url) => {
+      const buf = await ctx.decodeAudioData(await (await fetch(url)).arrayBuffer());
+      const s = ctx.createBufferSource();
+      s.buffer = buf;
+      s.connect(d);
+      s.start();
+      return buf.duration;
+    };
     return d.stream;
   };
   const rt = (window.__rt = { sent: [], dcs: 0, emit(ev) { this.dc.onmessage({ data: JSON.stringify(ev) }); } });
@@ -126,7 +144,7 @@ async function until(fn, ms = 6000, label = '') {
 
 async function main() {
   await new Promise((r) => mock.listen(OPENAI_PORT, r));
-  boot(['server.js'], 'relay', { OPENAI_API_KEY: 'sk-e2e-fake', OPENAI_BASE_URL: `http://localhost:${OPENAI_PORT}` });
+  boot(['server.js'], 'relay', { OPENAI_API_KEY: 'sk-e2e-fake', OPENAI_BASE_URL: `http://localhost:${OPENAI_PORT}`, WAKE_MODEL: process.env.WAKE_MODEL || '' });
   await until(async () => (await fetch(`${BASE}/health`).catch(() => null))?.ok, 5000, 'relay');
   boot(['test/fake-host.mjs'], 'host');
   await until(async () => (await (await fetch(`${BASE}/health`)).json()).host, 8000, 'host');
@@ -258,6 +276,46 @@ async function main() {
   const usage = await page.locator('[data-rt-usage]').innerText();
   ok(/min today/.test(usage), `Settings shows realtime usage ("${usage}")`);
   await page.screenshot({ path: path.join(process.env.E2E_SHOTS || TMP, 'settings-voice.png') });
+
+  if (process.env.WAKE_MODEL) {
+    console.log('wake word (on-device Vosk, real speech)');
+    const wav = (name, text) => {
+      const f = path.join(TMP, `${name}.wav`);
+      spawnSync('say', ['-o', f, '--data-format=LEI16@16000', text]);
+      return fs.readFileSync(f);
+    };
+    const clips = { hey: wav('hey', 'Hey Mia.'), other: wav('other', 'The meeting moved to Thursday afternoon.') };
+    await page.route('**/__clip/*', (r) => r.fulfill({ body: clips[r.request().url().split('/').pop()], contentType: 'audio/wav' }));
+    await page.keyboard.press('Escape');
+    await sleep(400);
+    await page.getByRole('button', { name: /^Mia/ }).first().click();
+    const sdpBefore = calls.filter((c) => c.url === '/v1/realtime/calls').length;
+    await page.locator('[data-wake="off"]').first().click();
+    await until(async () => (await page.locator('[data-wake-pill="listening"]').count()) > 0, 30000, 'wake listening');
+    ok(true, 'tap → the model loads in the page and the "Listening for Hey Mia" pill shows');
+    await page.evaluate(() => window.__say('/__clip/other'));
+    await sleep(4500);
+    ok((await page.locator('[data-talk]').count()) === 0, 'ordinary speech does not wake it');
+    await page.getByRole('button', { name: 'Home', exact: true }).first().click();
+    await sleep(400);
+    const micsNow = await page.evaluate(() => window.__mics);
+    await page.evaluate(() => window.__say('/__clip/hey'));
+    await until(async () => (await phase()) === 'listening', 12000, 'woke');
+    ok(true, '"Hey Mia" from the Home screen opens Mia and starts the realtime voice');
+    ok((await page.evaluate(() => window.__mics)) === micsNow, 'talk borrows the wake word\'s mic (no second getUserMedia)');
+    ok(calls.filter((c) => c.url === '/v1/realtime/calls').length > sdpBefore, 'a realtime call was opened by the wake word');
+    const greet = (await rt()).sent.find((e) => e.type === 'response.create' && /called you by name/.test(e.response?.instructions || ''));
+    ok(!!greet, 'the voice is asked to answer the call ("Yes?")');
+    ok((await page.locator('[data-wake-pill]').count()) === 0, 'the wake pill steps aside while talking');
+    await emit({ type: 'response.done', response: { output: [{ type: 'function_call', name: 'end_session', call_id: 'w1', arguments: '{}' }] } });
+    await until(async () => (await phase()) === 'standby', 4000, 'standby after done');
+    await until(async () => (await page.locator('[data-wake-pill="listening"]').count()) > 0, 4000, 'listening again');
+    ok(true, '"I\'m done" → the call ends and the wake word listens again');
+    await sleep(COOLDOWN_WAIT);
+    await page.evaluate(() => window.__say('/__clip/hey'));
+    await until(async () => (await phase()) === 'listening', 12000, 'woke again');
+    ok(true, 'a second "Hey Mia" in standby starts a new call');
+  } else console.log('(set WAKE_MODEL=<vosk-model-small-en-us-0.15.tar.gz> to test the wake word)');
 
   ok(errors.length === 0, `no page errors${errors.length ? `: ${errors.join(' | ')}` : ''}`);
   await ctx.close();

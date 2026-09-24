@@ -27,6 +27,8 @@ import Settings from './views/settings/Settings.jsx';
 import VoiceComposer from './views/composer/VoiceComposer.jsx';
 import TvMode from './views/modes/TvMode.jsx';
 import CarMode from './views/modes/CarMode.jsx';
+import { WakePill } from './views/mia/Wake.jsx';
+import { onWake } from './lib/wake.js';
 
 // ---------------------------------------------------------------------------
 // The shell. A photograph fills the window; everything else is glass floating
@@ -79,6 +81,9 @@ export default function App() {
     setSel(null);
     setWin(key === 'home' ? null : key);
   }, []);
+
+  // "Hey Mia" from any screen opens Mia, which starts talking (Mia.jsx).
+  useEffect(() => onWake(() => nav('mia')), [nav]);
 
   const openAgent = useCallback(
     (id) => {
@@ -352,6 +357,7 @@ export default function App() {
         />
       )}
       <ConnBanner />
+      <WakePill />
 
       <main
         className="relative z-10 flex min-h-0 flex-1 flex-col"

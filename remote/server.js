@@ -37,6 +37,9 @@
 // directly; OPENAI_API_KEY never leaves this process. /realtime/usage keeps a
 // per-day minutes tally, shown on /health and in the panel's Settings.
 //
+// Wake word: GET /wake/model.tar.gz serves the small Vosk model the panel
+// runs in the browser to hear "Hey Mia". Detection is entirely on-device.
+//
 // Auth: every WebSocket connection must present the shared MC_TOKEN.
 
 'use strict';
@@ -154,6 +157,25 @@ const server = http.createServer((req, res) => {
       if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: 'internal error' }));
     });
+    return;
+  }
+
+  // The on-device wake word's speech model (lib/wake.js in the panel). Public
+  // like the rest of the static panel; audio never comes here, only the model
+  // goes out. Versioned by file name, so it caches forever.
+  if (pathname === '/wake/model.tar.gz') {
+    const file = process.env.WAKE_MODEL || '';
+    if (!file || !fs.existsSync(file)) {
+      res.writeHead(404, { 'content-type': 'text/plain' });
+      res.end('wake word model not installed (set WAKE_MODEL)');
+      return;
+    }
+    res.writeHead(200, {
+      'content-type': 'application/gzip',
+      'content-length': fs.statSync(file).size,
+      'cache-control': 'public, max-age=31536000, immutable',
+    });
+    fs.createReadStream(file).pipe(res);
     return;
   }
 

@@ -12,6 +12,7 @@ import Select from '../../ui/Select.jsx';
 import Segmented from '../../ui/Segmented.jsx';
 import { LABEL, HINT, isMiaMsg, micError, spokenFor, Orb, Line } from './TalkParts.jsx';
 import RealtimeTalk from './RealtimeTalk.jsx';
+import { consumeWake } from '../../lib/wake.js';
 
 // TALK — hands-free conversation with Mia, in one of two engines (Settings ›
 // Voice, or the switch in the talk controls): Realtime (RealtimeTalk.jsx —
@@ -168,6 +169,7 @@ function BasicTalk({ mia, onExit, media = null, fellBack = '' }) {
     // own tap, so opening fresh there is fine.
     const primed = handed.current || takePrimed();
     handed.current = null;
+    consumeWake(); // basic has no greeting; just clear the flag
     if (!primed) unlockSpeech();
     try {
       mic.current?.close();

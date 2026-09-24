@@ -18,6 +18,8 @@ import Thread from './Thread.jsx';
 import Tasks from './Tasks.jsx';
 import Talk from './Talk.jsx';
 import { primeTalk, talkSupported } from '../../lib/voice.js';
+import { onWake, wakePending } from '../../lib/wake.js';
+import { WakeToggle } from './Wake.jsx';
 
 // MIA — the assistant's window (docs/mia.md §9). Chromeless like Library: the
 // header row is ours (presence, model, start/stop, notifications, close). Two
@@ -163,7 +165,9 @@ export default function Mia({ onOpenAgent, onClose }) {
   const wide = width >= WIDE;
 
   const [tab, setTab] = useState('thread');
-  const [talking, setTalking] = useState(false);
+  // Opened by "Hey Mia" (App.jsx navigates here first): start talking.
+  const [talking, setTalking] = useState(wakePending);
+  useEffect(() => onWake(() => setTalking(true)), []);
   const [highlight, setHighlight] = useState(null); // { id, n } — n re-fires the same id
 
   const openQ = miaOpenQuestions(mia, local).length;
@@ -215,6 +219,7 @@ export default function Mia({ onOpenAgent, onClose }) {
           </h2>
           <Presence mia={mia} link={link} />
           <span className="flex-1" />
+          {talkSupported && mia && !talking && <WakeToggle />}
           {talkButton}
           {wide && !talking && <div className="flex flex-wrap items-center justify-end gap-2">{controls}</div>}
           {wide && mia && !talking && (
