@@ -9,6 +9,7 @@ import Dock from './shell/Dock.jsx';
 import Window from './shell/Window.jsx';
 import ConnBanner from './shell/ConnBanner.jsx';
 import Gate from './shell/Gate.jsx';
+import Diag from './shell/Diag.jsx';
 import CommandPalette from './shell/CommandPalette.jsx';
 import Toast from './ui/Toast.jsx';
 
@@ -42,6 +43,12 @@ const withHash = (h) => `${location.pathname}${location.search}${h ? '#' + h : '
 
 export default function App() {
   const needsToken = useMC((s) => s.needsToken);
+  const [diagOn, setDiagOn] = useState(location.hash === '#diag');
+  useEffect(() => {
+    const f = () => setDiagOn(location.hash === '#diag');
+    window.addEventListener('hashchange', f);
+    return () => window.removeEventListener('hashchange', f);
+  }, []);
   const lastCreatedDocId = useMC((s) => s.lastCreatedDocId);
   const docs = useMC((s) => s.docs);
   const agentCount = useMC((s) => s.agents.length);
@@ -297,6 +304,10 @@ export default function App() {
       </div>
     </div>
   );
+
+  // #diag: a plain read-out of the socket for a device that won't connect.
+  // Rendered ahead of the gate so it works with no token at all.
+  if (diagOn) return <Diag />;
 
   if (needsToken) {
     return (

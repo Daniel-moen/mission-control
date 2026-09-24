@@ -54,6 +54,9 @@ export const useMC = create(() => ({
   token: '',
   link: 'offline', // 'offline' | 'relay' | 'linked'
   needsToken: false,
+  // Socket diagnostics for the #diag screen — what the panel can't otherwise
+  // say out loud when a device won't connect.
+  diag: { opens: 0, closes: 0, errors: 0, frames: 0, lastClose: null, lastFrameType: '', lastAttemptAt: 0, lastUrl: '' },
 
   snapshot: null,
   agents: [], // sorted: working → needs-you → exited → done, then by name
@@ -574,10 +577,13 @@ export function connect() {
     ws = null;
   }
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const url = `${proto}://${location.host}/ws?role=viewer&token=${encodeURIComponent(token)}`;
+  diagPatch({ lastAttemptAt: Date.now(), lastUrl: url.replace(/token=[^&]*/, 'token=…') });
   let sock;
   try {
-    sock = new WebSocket(`${proto}://${location.host}/ws?role=viewer&token=${encodeURIComponent(token)}`);
-  } catch {
+    sock = new WebSocket(url);
+  } catch (err) {
+    diagPatch({ errors: getMC().diag.errors + 1, lastClose: { code: 0, reason: String(err && err.message || err), at: Date.now() } });
     scheduleReconnect();
     return;
   }
@@ -586,6 +592,7 @@ export function connect() {
     retry = 0;
     relayUp = true;
     lastFrameAt = Date.now();
+    diagPatch({ opens: getMC().diag.opens + 1 });
     setLink();
     sendAllWatches(); // re-assert leases on every (re)connect
   };
@@ -597,6 +604,7 @@ export function connect() {
     } catch {
       return;
     }
+    diagPatch({ frames: getMC().diag.frames + 1, lastFrameType: msg.type || '' });
     if (msg.type === 'snapshot') {
       hostOnline = true;
       set({ lastSnapshotAt: Date.now() });
@@ -616,6 +624,7 @@ export function connect() {
     }
   };
   ws.onclose = (e) => {
+    diagPatch({ closes: getMC().diag.closes + 1, lastClose: { code: e.code, reason: e.reason || '', at: Date.now() } });
     if (ws !== sock) return; // an old, replaced socket — ignore
     ws = null;
     relayUp = false;
@@ -627,7 +636,17 @@ export function connect() {
     }
     scheduleReconnect();
   };
-  ws.onerror = () => sock && sock.close();
+  ws.onerror = () => {
+    diagPatch({ errors: getMC().diag.errors + 1 });
+    if (sock) sock.close();
+  };
+}
+
+function diagPatch(p) {
+  set({ diag: { ...getMC().diag, ...p } });
+}
+export function socketState() {
+  return !ws ? 'none' : ['connecting', 'open', 'closing', 'closed'][ws.readyState] || String(ws.readyState);
 }
 
 function scheduleReconnect() {
