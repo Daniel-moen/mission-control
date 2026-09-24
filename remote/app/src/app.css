@@ -421,6 +421,13 @@
   animation: mc-spin 0.7s linear infinite;
 }
 
+/* A heading Mia scrolled to (`mia panel scroll-to`) — a brief wash. */
+.md .mia-flash {
+  background: rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  transition: background 1.2s ease;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

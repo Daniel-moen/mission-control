@@ -306,7 +306,8 @@ async function main() {
     ok(calls.filter((c) => c.url === '/v1/realtime/calls').length > sdpBefore, 'a realtime call was opened by the wake word');
     const greet = (await rt()).sent.find((e) => e.type === 'response.create' && /called you by name/.test(e.response?.instructions || ''));
     ok(!!greet, 'the voice is asked to answer the call ("Yes?")');
-    ok((await page.locator('[data-wake-pill]').count()) === 0, 'the wake pill steps aside while talking');
+    // (its exit fade may still be running the moment the call goes live)
+    ok(await until(async () => (await page.locator('[data-wake-pill]').count()) === 0, 2000, 'wake pill gone').catch(() => false), 'the wake pill steps aside while talking');
     await emit({ type: 'response.done', response: { output: [{ type: 'function_call', name: 'end_session', call_id: 'w1', arguments: '{}' }] } });
     await until(async () => (await phase()) === 'standby', 4000, 'standby after done');
     await until(async () => (await page.locator('[data-wake-pill="listening"]').count()) > 0, 4000, 'listening again');

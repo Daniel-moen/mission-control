@@ -174,7 +174,8 @@ export default function Window({ title, subtitle, actions, onClose, size = 'cent
       }}
       className={`to-screen-bottom glass-strong fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden rounded-b-none ${className}`}
       // Leave room for the floating dock, which stays above every window.
-      style={{ paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'calc(env(safe-area-inset-bottom) + 84px)' }}
+      // --talkbar makes room for the voice pill above the window (shell/TalkHost.jsx).
+      style={{ paddingTop: 'calc(env(safe-area-inset-top) + var(--talkbar, 0px))', paddingBottom: 'calc(env(safe-area-inset-bottom) + 84px)' }}
     >
       <div
         onPointerDown={(e) => drag.start(e)}

@@ -106,6 +106,9 @@ export const useMC = create(() => ({
 
   filter: 'all', // dashboard status filter — lives here so the strip chips drive it
   toast: '',
+  // Is this the panel Mia talks to? The relay picks the most recently active
+  // one for `mia panel` commands and spoken announcements (docs/mia.md §8.2).
+  panelPrimary: true,
   lastSnapshotAt: 0,
   now: Date.now(), // 1 Hz clock for staleness ages ("live" / "6s ago")
 }));
@@ -113,7 +116,7 @@ export const useMC = create(() => ({
 export const getMC = () => useMC.getState();
 const set = (patch) => useMC.setState(patch);
 
-export const PANEL_BUILD = 'v23.5 · 2026-09-24 · hey Mia';
+export const PANEL_BUILD = 'v23.6 · 2026-09-24 · Mia drives the panel';
 
 // ---- status helpers ---------------------------------------------------------
 // Status semantics: working = green, needs-you = amber, done = quiet neutral,
@@ -672,6 +675,8 @@ export function connect() {
     diagPatch({ opens: getMC().diag.opens + 1, wsFails: 0 });
     setLink();
     sendAllWatches(); // re-assert leases on every (re)connect
+    // A fresh socket starts with no presence at the relay; say where we stand.
+    if (document.visibilityState !== 'hidden' && Date.now() - lastInteraction < 10 * 60000) reportActive(true);
   };
   ws.onmessage = (e) => {
     let msg;
@@ -790,7 +795,13 @@ async function httpJSON(path, opts = {}, timeoutMs = 10000) {
     const r = await fetch(path, {
       cache: 'no-store',
       ...opts,
-      headers: { Authorization: `Bearer ${token}`, 'X-MC-Client': CLIENT_ID, ...(opts.headers || {}) },
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'X-MC-Client': CLIENT_ID,
+        'X-MC-Idle': String(Math.max(0, Date.now() - lastInteraction)),
+        'X-MC-Visible': document.visibilityState === 'hidden' ? '0' : '1',
+        ...(opts.headers || {}),
+      },
       signal: ctl ? ctl.signal : undefined,
     });
     let data = null;
@@ -860,6 +871,8 @@ async function pollOnce() {
         set({ lastSnapshotAt: Date.now() - age });
         ingest(data.snapshot);
       }
+      if (typeof data.primary === 'boolean' && data.primary !== getMC().panelPrimary) set({ panelPrimary: data.primary });
+      for (const f of Array.isArray(data.panel) ? data.panel : []) handleFrame(f);
     } else if (st === 502) {
       relayUp = true;
       hostOnline = false;
@@ -1137,7 +1150,65 @@ function handleFrame(msg) {
     setLink();
   } else if (msg.type === 'ack') {
     handleAck(msg);
+  } else if (msg.type === 'panel') {
+    runPanel(msg);
+  } else if (msg.type === 'panelFocus') {
+    set({ panelPrimary: msg.primary !== false });
   }
+}
+
+// ---- Mia → panel ------------------------------------------------------------
+// `mia panel …` arrives as {type:'panel', id, action, arg, heading?}. App owns
+// navigation, so it registers the runner; the result goes back to the relay
+// (and on to Mia) as {type:'panelDone'}. docs/mia.md §8.2.
+let panelRunner = null;
+export function onPanelCommand(fn) {
+  panelRunner = fn;
+  return () => {
+    if (panelRunner === fn) panelRunner = null;
+  };
+}
+function runPanel(msg) {
+  let r;
+  try {
+    r = panelRunner ? panelRunner(msg) : { ok: false, detail: 'the panel is still starting' };
+  } catch (e) {
+    r = { ok: false, detail: (e && e.message) || 'error' };
+  }
+  Promise.resolve(r).then((res) => {
+    const out = res || { ok: false, detail: 'no result' };
+    sendRelay({ type: 'panelDone', id: msg.id, action: msg.action, arg: msg.arg, ok: !!out.ok, detail: out.detail || '' });
+  });
+}
+
+// Frames for the relay itself (presence, panelDone): they don't need the Mac
+// online and never toast.
+function sendRelay(obj) {
+  if (isPoll()) {
+    httpJSON('/api/v1/cmd', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(obj) }).catch(() => {});
+    return;
+  }
+  if (ws && ws.readyState === 1) {
+    try {
+      ws.send(JSON.stringify(obj));
+    } catch {}
+  }
+}
+
+// Presence: a tap, a key or coming back to the app tells the relay this is the
+// panel Daniel is using. Throttled — a scroll storm is one report.
+let lastInteraction = Date.now();
+let lastReported = 0;
+function reportActive(force = false) {
+  const visible = document.visibilityState !== 'hidden';
+  if (visible) lastInteraction = Date.now();
+  if (!force && Date.now() - lastReported < 5000) return;
+  lastReported = Date.now();
+  sendRelay({ type: 'viewerActive', visible });
+}
+if (typeof window !== 'undefined') {
+  for (const ev of ['pointerdown', 'keydown']) window.addEventListener(ev, () => reportActive(), { capture: true, passive: true });
+  document.addEventListener('visibilitychange', () => reportActive(true));
 }
 
 function ingestDoc(msg) {

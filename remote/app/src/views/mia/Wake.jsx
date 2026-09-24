@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useWake, enableWake, disableWake, resumeWake, wakeSupported } from '../../lib/wake.js';
 import Icon from '../../ui/Icon.jsx';
 import Button from '../../ui/Button.jsx';
+import { useTalk } from '../../lib/talkSession.js';
 
 // "Hey Mia" controls. Every enable/resume is a tap, because iOS only opens the
 // mic from one — and after the app has been in the background, iOS may need
@@ -65,7 +66,9 @@ export function WakePill() {
     };
   }, [w.on, w.status]);
 
-  const show = w.on && (w.status === 'listening' || w.status === 'interrupted');
+  // The voice pill (shell/TalkHost.jsx) owns the same spot while it shows.
+  const talkPill = useTalk((s) => s.pill);
+  const show = !talkPill && w.on && (w.status === 'listening' || w.status === 'interrupted');
   return (
     <AnimatePresence>
       {show && (

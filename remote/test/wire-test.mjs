@@ -8,6 +8,11 @@
 // frame crosses the actual server.js fan-out, so a break anywhere in the
 // allowlist, the host handlers, or the wire shapes surfaces here.
 //
+// Steps 17+ cover `mia panel` (docs/mia.md §8.2): the real CLI writes
+// panel.jsonl, the fake host ships it like MiaManager, and the relay hands it
+// to exactly one viewer — the most recently active — never fanning it out;
+// off-list actions and "no panel open" come back to the host as panelResult.
+//
 // Steps 11+ cover Mia (docs/mia.md §8): every mia* command crosses the relay and
 // is acked, the host learns the VAPID key, /push/* is token-gated, and a host
 // `push` frame becomes a Web Push (web-push is mocked via test/mock-web-push.cjs,
@@ -25,12 +30,15 @@ import fs from 'fs';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import WebSocket from 'ws';
+import * as require_cp from 'child_process';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SERVER = path.join(HERE, '..', 'server.js');
 const HOST = path.join(HERE, 'fake-host.mjs');
 const MOCK_PUSH = path.join(HERE, 'mock-web-push.cjs');
 const PUSH_STORE = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'mc-wire-')), 'push-subscriptions.json');
+const MIA_DIR = path.join(path.dirname(PUSH_STORE), 'mia');
+const MIA_CLI = path.join(HERE, '..', '..', 'scripts', 'mia');
 const TOKEN = 'test';
 
 const children = [];
@@ -192,7 +200,7 @@ async function main() {
     VAPID_PRIVATE_KEY: '',
   });
   await waitHealthy(port, 8000);
-  spawnNode(HOST, port, 'fake-host');
+  spawnNode(HOST, port, 'fake-host', { MIA_DIR });
 
   const v = openViewer(port, TOKEN);
   await v.opened;
@@ -427,6 +435,90 @@ async function main() {
     assert((await http_(port, 'POST', '/push/unsubscribe', { body })).status === 401, 'no token was accepted');
     const r = await http_(port, 'POST', '/push/unsubscribe', { body, token: TOKEN });
     assert(r.status === 200 && r.data.removed === true && r.data.subscriptions === 0, `unsubscribe: ${JSON.stringify(r.data)}`);
+  });
+
+
+  // ---- 17+ — `mia panel` routing --------------------------------------------
+  const mia = (...args) => {
+    const { execFileSync } = require_cp;
+    return execFileSync(MIA_CLI, args, { env: { ...process.env, MIA_DIR }, encoding: 'utf8' }).trim();
+  };
+  const results = () => {
+    try {
+      return fs.readFileSync(path.join(MIA_DIR, 'panel-results.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    } catch {
+      return [];
+    }
+  };
+  const v2 = openViewer(port, TOKEN);
+  await v2.opened;
+
+  await step('17. panelFocus marks exactly one viewer primary; activity moves it', async () => {
+    await v2.waitFrom(0, (m) => m.type === 'panelFocus', 3000, 'v2 panelFocus');
+    const mk1 = v.mark();
+    const mk2 = v2.mark();
+    v.send({ type: 'viewerActive', visible: true });
+    await v.waitFrom(mk1, (m) => m.type === 'panelFocus' && m.primary === true, 3000, 'v primary');
+    await v2.waitFrom(mk2, (m) => m.type === 'panelFocus' && m.primary === false, 3000, 'v2 demoted');
+    const mk3 = v2.mark();
+    v2.send({ type: 'viewerActive', visible: true });
+    await v2.waitFrom(mk3, (m) => m.type === 'panelFocus' && m.primary === true, 3000, 'v2 primary again');
+  });
+
+  await step('18. `mia panel open-doc` reaches only the most recently active viewer', async () => {
+    const mk1 = v.mark();
+    const mk2 = v2.mark();
+    const id = mia('panel', 'open-doc', RESEARCH_SEED, '--at', 'Sources');
+    assert(/^p_\d+$/.test(id), `CLI printed ${id}`);
+    const f = await v2.waitFrom(mk2, (m) => m.type === 'panel', 4000, 'panel frame on v2');
+    assert(f.action === 'open-doc' && f.arg === RESEARCH_SEED && f.heading === 'Sources' && f.id === id, `frame ${JSON.stringify(f)}`);
+    await sleep(400);
+    assert(!v.msgs.slice(mk1).some((m) => m.type === 'panel'), 'panel frame was fanned out to the other viewer');
+  });
+
+  await step('19. a hidden panel loses to a visible one', async () => {
+    const mk1 = v.mark();
+    v2.send({ type: 'viewerActive', visible: false });
+    await v.waitFrom(mk1, (m) => m.type === 'panelFocus' && m.primary === true, 3000, 'v promoted');
+    const mk = v.mark();
+    mia('panel', 'view', 'library');
+    const f = await v.waitFrom(mk, (m) => m.type === 'panel', 4000, 'panel frame on v');
+    assert(f.action === 'view' && f.arg === 'library', `frame ${JSON.stringify(f)}`);
+  });
+
+  await step('20. panelDone from the panel reaches the host as panelResult', async () => {
+    v.send({ type: 'panelDone', id: 'p_test1', action: 'open-doc', arg: 'nope.md', ok: false, detail: 'no Library doc matches' });
+    const deadline = Date.now() + 3000;
+    while (!results().some((r) => r.id === 'p_test1') && Date.now() < deadline) await sleep(50);
+    const r = results().find((x) => x.id === 'p_test1');
+    assert(r && r.ok === false && r.detail.includes('no Library doc') && r.action === 'open-doc', `result ${JSON.stringify(r)}`);
+  });
+
+  await step('21. off-list actions and bad links are dropped at the relay', async () => {
+    const mk = v.mark();
+    fs.appendFileSync(path.join(MIA_DIR, 'panel.jsonl'), JSON.stringify({ id: 'p_bad1', action: 'kill', arg: 'everything' }) + '\n');
+    fs.appendFileSync(path.join(MIA_DIR, 'panel.jsonl'), JSON.stringify({ id: 'p_bad2', action: 'open-url', arg: 'javascript:alert(1)' }) + '\n');
+    const deadline = Date.now() + 3000;
+    while (!(results().some((r) => r.id === 'p_bad1') && results().some((r) => r.id === 'p_bad2')) && Date.now() < deadline) await sleep(50);
+    for (const id of ['p_bad1', 'p_bad2']) {
+      const r = results().find((x) => x.id === id);
+      assert(r && r.ok === false && /not an allowed/.test(r.detail), `${id}: ${JSON.stringify(r)}`);
+    }
+    await sleep(300);
+    assert(!v.msgs.slice(mk).some((m) => m.type === 'panel'), 'an off-list panel frame reached a viewer');
+    let threw = false;
+    try { mia('panel', 'open-url', 'http://insecure.example'); } catch { threw = true; }
+    assert(threw, 'CLI accepted a non-https link');
+  });
+
+  await step('22. with no panel open, the host hears "no panel is open"', async () => {
+    for (const w of sockets) w.close(); // every viewer this run opened
+    await sleep(400);
+    const id = mia('panel', 'open-task', '14');
+    const deadline = Date.now() + 3000;
+    while (!results().some((r) => r.id === id) && Date.now() < deadline) await sleep(50);
+    const r = results().find((x) => x.id === id);
+    assert(r && r.ok === false && r.detail === 'no panel is open', `result ${JSON.stringify(r)}`);
   });
 }
 

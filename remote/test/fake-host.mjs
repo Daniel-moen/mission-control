@@ -18,6 +18,8 @@
 // plan* commands stay handled as doc* aliases, exactly as RemoteBridge does.
 
 import WebSocket from 'ws';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const PORT = process.env.PORT || 8899;
 const TOKEN = process.env.MC_TOKEN || 'test';
@@ -727,6 +729,12 @@ function connect() {
         log('relay: push key received');
         return;
 
+      case 'panelResult':
+        // How a `mia panel` command landed — MiaManager.panelResult on the Mac.
+        log(`panel ${msg.action} ${msg.arg || ''}: ${msg.ok ? 'ok' : 'FAILED'} ${msg.detail || ''}`);
+        if (MIA_DIR) fs.appendFileSync(path.join(MIA_DIR, 'panel-results.jsonl'), JSON.stringify(msg) + '\n');
+        return;
+
       case 'watch': {
         const lease = leases.get(msg.sessionId) ?? newLease(msg.sessionId);
         const fresh = lease.lastSeen === 0;
@@ -993,6 +1001,50 @@ setInterval(() => {
     if (frame) send(frame);
   }
 }, 300);
+
+// With MIA_DIR set, behave like MiaManager for the files the real `mia` CLI
+// (scripts/mia) writes: panel.jsonl → {type:'panel'} frames, and Mia's own
+// messages.jsonl lines → the snapshot's thread (so `mia say --speak` works).
+// Lines already there at start are history, exactly as on the Mac.
+const MIA_DIR = process.env.MIA_DIR || '';
+const tails = new Map();
+function tailLines(file) {
+  let size = 0;
+  try { size = fs.statSync(file).size; } catch { return []; }
+  const off = tails.has(file) ? tails.get(file) : size;
+  if (size < off) { tails.set(file, size); return []; }
+  if (!tails.has(file)) { tails.set(file, size); return []; }
+  if (size === off) return [];
+  const fd = fs.openSync(file, 'r');
+  const buf = Buffer.alloc(size - off);
+  fs.readSync(fd, buf, 0, buf.length, off);
+  fs.closeSync(fd);
+  const text = buf.toString('utf8');
+  const cut = text.lastIndexOf('\n');
+  if (cut < 0) return [];
+  tails.set(file, off + Buffer.byteLength(text.slice(0, cut + 1)));
+  return text.slice(0, cut).split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+}
+if (MIA_DIR) {
+  fs.mkdirSync(MIA_DIR, { recursive: true });
+  for (const f of ['panel.jsonl', 'messages.jsonl']) tailLines(path.join(MIA_DIR, f));
+  tails.set(path.join(MIA_DIR, 'panel.jsonl'), tails.get(path.join(MIA_DIR, 'panel.jsonl')) ?? 0);
+  tails.set(path.join(MIA_DIR, 'messages.jsonl'), tails.get(path.join(MIA_DIR, 'messages.jsonl')) ?? 0);
+  setInterval(() => {
+    for (const c of tailLines(path.join(MIA_DIR, 'panel.jsonl'))) {
+      const frame = { type: 'panel', id: c.id, action: c.action };
+      if (c.arg != null) frame.arg = c.arg;
+      if (c.heading != null) frame.heading = c.heading;
+      log(`mia panel ${c.action} ${c.arg || ''}`);
+      send(frame);
+    }
+    for (const m of tailLines(path.join(MIA_DIR, 'messages.jsonl'))) {
+      if (m.from !== 'mia') continue;
+      mia.messages.push(m);
+      log(`mia ${m.kind}${m.speak ? ' (speak)' : ''}: ${m.text}`);
+    }
+  }, 300);
+}
 
 connect();
 log(`fake host starting (relay port ${PORT}, token ${TOKEN === 'test' ? "'test'" : 'set'})`);

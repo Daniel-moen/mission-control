@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence } from 'motion/react';
-import { useMC, miaBadge } from './lib/store.js';
+import { useMC, miaBadge, onPanelCommand } from './lib/store.js';
+import { runPanelCommand } from './lib/panelCommands.js';
 import { useMedia } from './lib/hooks.js';
 
 import Backdrop from './shell/Backdrop.jsx';
@@ -12,6 +13,8 @@ import Gate from './shell/Gate.jsx';
 import Diag from './shell/Diag.jsx';
 import CommandPalette from './shell/CommandPalette.jsx';
 import Toast from './ui/Toast.jsx';
+import TalkHost from './shell/TalkHost.jsx';
+import { startTalk } from './lib/talkSession.js';
 
 import Home from './views/home/Home.jsx';
 import AttentionCards from './views/home/AttentionCards.jsx';
@@ -69,6 +72,8 @@ export default function App() {
   const [lastConsoleId, setLastConsoleId] = useState(null);
   const [composer, setComposer] = useState(null); // { target } | null
   const [palette, setPalette] = useState(false);
+  const [paletteQuery, setPaletteQuery] = useState('');
+  const [miaFocus, setMiaFocus] = useState(null); // { id, n } — a task to show on Mia's board
   const [launchDocMeta, setLaunchDocMeta] = useState(null);
   const [tvOn, setTvOn] = useState(false);
   const [carOn, setCarOn] = useState(false);
@@ -82,8 +87,16 @@ export default function App() {
     setWin(key === 'home' ? null : key);
   }, []);
 
-  // "Hey Mia" from any screen opens Mia, which starts talking (Mia.jsx).
-  useEffect(() => onWake(() => nav('mia')), [nav]);
+  // "Hey Mia" from any screen opens Mia and starts talking on the wake word's
+  // mic (the session lives at the root — shell/TalkHost.jsx).
+  useEffect(
+    () =>
+      onWake(() => {
+        nav('mia');
+        startTalk({ prime: false });
+      }),
+    [nav],
+  );
 
   const openAgent = useCallback(
     (id) => {
@@ -200,6 +213,53 @@ export default function App() {
     }
   }, [tvOn, carOn, console_, sheet, openDoc, sel, win]);
 
+  // ---- Mia drives the panel ------------------------------------------------
+  // `mia panel …` frames (lib/panelCommands.js does the resolving and the
+  // toast); these are the only doors it may open.
+  const panelApi = useRef(null);
+  panelApi.current = {
+    view: (v) => {
+      if (tvOn || carOn) location.hash = '';
+      setPalette(false);
+      setComposer(null);
+      if (v === 'settings') {
+        setConsole(null);
+        setSheet('settings');
+      } else nav(v);
+    },
+    openDoc: (id) => {
+      if (tvOn || carOn) location.hash = '';
+      setPalette(false);
+      setComposer(null);
+      setSheet(null);
+      setConsole(null);
+      setSel(null);
+      setOpenDoc({ id, edit: false });
+    },
+    openAgent: (id) => {
+      if (tvOn || carOn) location.hash = '';
+      setPalette(false);
+      setComposer(null);
+      setSheet(null);
+      setConsole(null);
+      openAgent(id);
+    },
+    openTask: (id) => {
+      panelApi.current.view('mia');
+      setMiaFocus((f) => ({ id, n: (f?.n || 0) + 1 }));
+    },
+    search: (q) => {
+      if (tvOn || carOn) location.hash = '';
+      setComposer(null);
+      setPaletteQuery(q);
+      setPalette(true);
+    },
+  };
+  useEffect(() => onPanelCommand((cmd) => runPanelCommand(cmd, panelApi.current)), []);
+  useEffect(() => {
+    if (!palette) setPaletteQuery('');
+  }, [palette]);
+
   // ---- keyboard ----------------------------------------------------------
   useEffect(() => {
     const typing = () => {
@@ -306,7 +366,7 @@ export default function App() {
     if (kind === 'mia')
       return (
         <Window key="mia" size={size} onClose={() => nav('home')}>
-          <Mia onOpenAgent={openAgent} onClose={() => nav('home')} />
+          <Mia onOpenAgent={openAgent} onClose={() => nav('home')} focusTask={miaFocus} />
         </Window>
       );
     if (kind === 'fleet') return fleetWindow(size);
@@ -342,8 +402,24 @@ export default function App() {
 
   // The takeovers paint their own scene; keeping the shell mounted underneath
   // only bleeds the Home headline through their glass.
-  if (tvOn) return <TvMode onClose={() => (location.hash = '')} />;
-  if (carOn) return <CarMode onClose={() => (location.hash = '')} />;
+  // The talk session outlives every view, takeovers included.
+  const talkHost = <TalkHost onExpand={() => (tvOn || carOn ? (location.hash = 'mia') : nav('mia'))} />;
+  if (tvOn)
+    return (
+      <>
+        <TvMode onClose={() => (location.hash = '')} />
+        {talkHost}
+        <Toast />
+      </>
+    );
+  if (carOn)
+    return (
+      <>
+        <CarMode onClose={() => (location.hash = '')} />
+        {talkHost}
+        <Toast />
+      </>
+    );
 
   return (
     <div className="relative flex flex-col overflow-hidden" style={{ height: 'calc(100dvh + var(--vgap))' }}>
@@ -408,13 +484,18 @@ export default function App() {
 
       <CommandPalette
         open={palette}
-        onClose={() => setPalette(false)}
+        initialQuery={paletteQuery}
+        onClose={() => {
+          setPalette(false);
+          setPaletteQuery('');
+        }}
         onOpenAgent={openAgent}
         onNav={nav}
         onLaunch={() => setSheet('launch')}
         onSettings={() => setSheet('settings')}
         onOpenDoc={(id) => setOpenDoc({ id, edit: false })}
       />
+      {talkHost}
       <Toast />
     </div>
   );

@@ -30,7 +30,7 @@ function score(hay, q) {
   return 400 - gaps - h.length * 0.05;
 }
 
-export default function CommandPalette({ open, onClose, onOpenAgent, onNav, onLaunch, onSettings, onOpenDoc }) {
+export default function CommandPalette({ open, initialQuery = '', onClose, onOpenAgent, onNav, onLaunch, onSettings, onOpenDoc }) {
   const { agents, docs } = useMC(useShallow((s) => ({ agents: s.agents, docs: s.docs })));
   const [q, setQ] = useState('');
   const [cursor, setCursor] = useState(0);
@@ -39,13 +39,13 @@ export default function CommandPalette({ open, onClose, onOpenAgent, onNav, onLa
 
   useEffect(() => {
     if (open) {
-      setQ('');
+      setQ(initialQuery || ''); // `mia panel search` opens it pre-filled
       setCursor(0);
       // Autofocus after the scaleIn starts, or Safari steals it back.
       const t = setTimeout(() => inputRef.current?.focus(), 30);
       return () => clearTimeout(t);
     }
-  }, [open]);
+  }, [open, initialQuery]);
 
   const actions = useMemo(
     () => [

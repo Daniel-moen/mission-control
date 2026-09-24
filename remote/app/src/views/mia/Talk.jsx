@@ -13,6 +13,7 @@ import Segmented from '../../ui/Segmented.jsx';
 import { LABEL, HINT, isMiaMsg, micError, spokenFor, Orb, Line } from './TalkParts.jsx';
 import RealtimeTalk from './RealtimeTalk.jsx';
 import { consumeWake } from '../../lib/wake.js';
+import { talkPhase, registerEngine, getTalk } from '../../lib/talkSession.js';
 
 // TALK — hands-free conversation with Mia, in one of two engines (Settings ›
 // Voice, or the switch in the talk controls): Realtime (RealtimeTalk.jsx —
@@ -62,6 +63,7 @@ function BasicTalk({ mia, onExit, media = null, fellBack = '' }) {
   function setPhase(p) {
     phaseRef.current = p;
     setPhaseState(p);
+    talkPhase(p); // the top-bar pill (TalkPill) shows it off the Mia view
     const m = mic.current;
     if (m) m.setMode(p === 'speaking' ? 'guard' : p === 'paused' || p === 'interrupted' ? 'mute' : 'listen');
   }
@@ -216,11 +218,18 @@ function BasicTalk({ mia, onExit, media = null, fellBack = '' }) {
   // ---- lifecycle ------------------------------------------------------------
   // Talk mode is only ever mounted by a tap on "Talk", so begin() runs inside
   // that gesture's task — which is what iOS needs for the mic and speech.
+  const tapRef = useRef(null);
+  tapRef.current = () => tapOrb();
   useEffect(() => {
     alive.current = true;
+    const unregister = registerEngine('basic', levels, () => tapRef.current?.());
+    // Opened to answer a question Mia announced: the first thing said answers it.
+    const ctx = getTalk().context;
+    if (ctx?.kind === 'question' && ctx.questionId) lastQ.current = ctx;
     begin();
     sttInfo(getMC().token).then((i) => alive.current && setStt(i && i.provider ? i : null));
     return () => {
+      unregister();
       alive.current = false;
       clearTimeout(noteTimer.current);
       clearTimeout(thinkTimer.current);

@@ -12,6 +12,7 @@ import Combine
 ///                  {type:"doc", id, …, content}    one document's body, sent on demand
 ///                  {type:"docSearchResult", q, hits}      library full-text search hits
 ///                  {type:"push", title, body, tag?, url?, urgent?} Web Push for phones (Mia)
+///                  {type:"panel", id, action, arg?, heading?}  `mia panel` → the most recently active panel
 ///   relay → host:  {type:"reply", sessionId, text} type into that agent's terminal
 ///                  {type:"broadcast", text}        send to every controllable agent
 ///                  {type:"kill", sessionId}        terminate that agent's process
@@ -26,6 +27,7 @@ import Combine
 ///                  {type:"pushKey", key}           relay's VAPID public key (echoed in the snapshot)
 ///                  {type:"miaSend|miaAnswer|miaRead|miaTaskAdd|miaTaskCancel|miaTaskSet|
 ///                         miaStart|miaStop|miaSetModel|miaSchedule|miaPushTest", …}  Mia (docs/mia.md §8)
+///                  {type:"panelResult", id, ok, action, arg, detail}   how a `mia panel` command landed
 final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     @Published private(set) var connected = false
     @Published private(set) var viewerCount = 0
@@ -34,7 +36,14 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
     /// Mia's event bus — owns the snapshot's `mia` block and the mia* commands.
     /// Set by the AppDelegate; wires its push frames to this socket.
     weak var mia: MiaManager? {
-        didSet { mia?.onPush = { [weak self] frame in self?.sendPush(frame) } }
+        didSet {
+            mia?.onPush = { [weak self] frame in self?.sendPush(frame) }
+            mia?.onPanel = { [weak self] frame in
+                guard let self, self.connected else { return false }
+                self.sendJSON(frame)
+                return true
+            }
+        }
     }
     private let settings = Settings.shared
     /// Our own bridge for reading terminal screens — stateless, so a second
@@ -211,6 +220,10 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
 
         case let t where t.hasPrefix("mia"):
             handleMia(t, obj)
+
+        case "panelResult":
+            // How a `mia panel` command landed (relay or panel) — docs/mia.md §8.2.
+            mia?.panelResult(obj)
 
         case "reply":
             guard let sid = obj["sessionId"] as? String,

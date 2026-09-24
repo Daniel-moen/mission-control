@@ -57,6 +57,7 @@ the only writer agents use; the app reads and writes them too.
   mcp.json            Gmail MCP config (exists — never overwrite)
   state.json          written by the app: { sessionId, model, enabled, startedAt, restarts }
   messages.jsonl      the Mia <-> Daniel conversation, append-only (see 2.1)
+  panel.jsonl         `mia panel` commands for the panel, append-only (see 8.2)
   tasks/<id>.json     one file per task (see 2.2)
   schedule.json       heartbeats + reminders (see 2.3)
   events.jsonl        system events delivered (or queued) to Mia, append-only (see 2.4)
@@ -79,6 +80,7 @@ whoever creates the task (CLI or app) by scanning `tasks/` for the max.
 
 - `from`: `daniel` | `mia` | `system`
 - `kind`: `chat` (no push) | `question` (push, expects answer) | `notify` (push) | `answer` | `event` (system, shown muted in the thread)
+- `speak: true` (from `--speak`): an open panel reads it aloud even with talk mode off (see 8.3)
 - `read`: the panel marks Mia's messages read by sending `miaRead {upTo: id}`; the app stores `readUpTo` in `state.json`. Badge = Mia messages after `readUpTo` plus unanswered questions.
 
 ### 2.2 `tasks/<id>.json`
@@ -149,11 +151,19 @@ launch (exactly the `mc-doc` pattern). Needs only bash + `python3` (for JSON;
 macOS ships it) — no node dependency. All writes are atomic (write temp + mv).
 
 ```
-mia say    "<text>" [--task <id>]                     chat message to Daniel, no push
-mia notify "<text>" [--task <id>] [--urgent]           message + push + Mac banner
-mia ask    "<question>" [--options "A|B|C"] [--task <id>]
+mia say    "<text>" [--task <id>] [--speak]           chat message to Daniel, no push
+mia notify "<text>" [--task <id>] [--urgent] [--speak] message + push + Mac banner
+mia ask    "<question>" [--options "A|B|C"] [--task <id>] [--speak]
                                                        question; push; prints the question id;
                                                        task status -> asking when --task given
+                                                       --speak: an open panel reads it aloud (8.3)
+mia panel open-doc <library-id|title> [--at "<heading>"]   open a Library doc on the panel (8.2)
+mia panel open-task <id>                               show a task on Mia's board
+mia panel open-agent <name|session-id>                 open an agent's window
+mia panel view <home|fleet|library|mia|insights|settings>
+mia panel open-url <https-url>                         open a link on the iPad (Zoom/Meet/Teams…)
+mia panel search "<text>"                              open search pre-filled
+mia panel scroll-to "<heading>"                        scroll the open doc to a heading
 mia task list [--status <s>]                           id<TAB>status<TAB>priority<TAB>title per line
 mia task show <id>                                     the task JSON
 mia task add "<title>" [--detail <text>|--stdin] [--dir <d>] [--priority n]
@@ -215,6 +225,17 @@ HOW YOU TALK TO DANIEL
 - `mia say "…"` for conversation. `mia notify "…"` when he should be pinged (a task finished, something in mail needs him). `mia ask "…" --options "A|B|C"` when you need a decision — give options whenever you can so he can answer with one tap. Batch questions: one `mia ask` per task, not five.
 - A message that starts with "(voice)" was spoken aloud in talk mode on the panel, and whatever you `mia say` or `mia notify` next is read aloud to him. Reply with `mia say` in one to three short spoken sentences: no markdown, lists, links, code or ids; say times and numbers the way you would out loud. Anything long goes in the Library or a task, and you say so in one sentence.
 - After asking, END YOUR TURN. Do not poll, sleep, or loop. Mission Control delivers his answer as a message starting with `[MC]`.
+- Add `--speak` to `mia say`, `mia notify` or `mia ask` to have an open panel read it aloud to him even when talk mode is off: for questions, finished tasks and anything that needs his attention, in one short spoken sentence ("Hey Daniel, task 14 is done. Anything else?"). Asks and notifies are read out by default; quiet hours and the app being closed are handled for you.
+
+THE PANEL ON HIS SCREEN
+- When Daniel asks to see or open something, use `mia panel`; it acts on the panel he used last. Navigation only, and it reports failures back as `[MC] Panel: …`.
+- `mia panel open-doc <library-id|title words> [--at "<heading>"]` opens a Library doc (find the id with `mc-doc list`).
+- `mia panel open-task <id>` shows a task on your board.
+- `mia panel open-agent <name|session-id>` opens an agent's window.
+- `mia panel view <home|fleet|library|mia|insights|settings>` switches the view.
+- `mia panel open-url <https-url>` opens a link on his iPad, e.g. a Zoom, Meet or Teams join link.
+- `mia panel search "<text>"` opens search with that text.
+- `mia panel scroll-to "<heading>"` scrolls the open doc to a heading.
 
 HOW EVENTS REACH YOU
 - Messages starting with `[MC]` come from Mission Control: Daniel's chat and answers, new tasks, executor results, reminders, heartbeats. Handle them and end your turn.
@@ -354,6 +375,48 @@ model), **without** the strict MCP config (they are ordinary agents).
 | `miaSchedule` | `op: "addReminder"|"removeReminder"|"setHeartbeat"|"removeHeartbeat"`, `item` (the reminder/heartbeat object; `{id}` alone for the remove ops) |
 | `miaPushTest` | — (host sends a test push) |
 
+### 8.2 Panel commands (`mia panel`, Mia → one panel)
+
+`mia panel …` appends `{id:"p_<ms>", at, action, arg?, heading?}` to
+`panel.jsonl`. MiaManager tails it (commands older than 60 s are dropped) and
+sends host → relay `{type:"panel", id, action, arg?, heading?}`. The relay
+never fans it out: it hands it to **one** panel — visible beats hidden, then
+the most recent tap/key (`{type:"viewerActive", visible}` from socket
+panels; `X-MC-Idle` / `X-MC-Visible` headers on HTTP polls), then the newest
+connection. Socket panels hear `{type:"panelFocus", primary}` when that
+changes; pollers get `primary` and any queued `panel` frames on their
+`/api/v1/snapshot` response. The panel runs the action, shows a toast
+("Mia opened …") and answers `{type:"panelDone", id, action, arg, ok, detail}`,
+which the relay forwards to the host as `{type:"panelResult", …}`. No panel
+open, or an action off the list, → the relay answers `panelResult ok:false`
+itself. Failures reach Mia as `[MC] Panel: … didn't work — <reason>`.
+
+| action | arg | panel does |
+|--------|-----|------------|
+| `open-doc` | library id, or title words | opens the doc (exact id, then title, then all-words match, newest first); `heading` scrolls to it |
+| `open-task` | task id | opens Mia with the task highlighted on the board |
+| `open-agent` | name, folder or session id | opens the agent's window |
+| `view` | home, fleet, library, mia, insights, settings | switches view (settings = the sheet) |
+| `open-url` | `https://…` only | `window.open`; in the Home Screen app falls back to navigating (iOS hands meeting links to their apps); in a browser tab offers the link in the top-bar pill |
+| `search` | text | opens ⌘K search pre-filled |
+| `scroll-to` | heading text | scrolls the open doc to it |
+
+Navigation only; nothing edits, sends or deletes. The allow-list is checked in
+the CLI, MiaManager, the relay and the panel.
+
+### 8.3 Spoken announcements
+
+With talk mode off, the panel the relay marks primary reads Mia out loud: a
+short chime, then one sentence (device speech synthesis). Settings ›
+Announcements: **Questions & alerts** (default: `--speak`, every ask and
+notify), **All**, **Off**; quiet hours (default on, 22:00–07:00). Never while
+the app is in the background (push covers that) or talk mode is on (the talk
+engine reads her already). iOS allows sound only after a tap in the page
+session: the first tap anywhere unlocks it; before that the top-bar pill
+shows "Mia wants to talk — tap to hear". After speaking, the pill offers a
+mic: it opens a talk session (Realtime or Basic) with that message as
+context, so "yes" or "option two" answers it.
+
 ### Push (host → relay → phones)
 
 Host sends `{type:"push", title, body, tag?, url?, urgent?}`. The relay does
@@ -417,6 +480,14 @@ POST /api/v1/mia/tasks     {title,detail?,dir?,priority?}
   `display: standalone` (required for iOS push); link it from `index.html`.
 - **Car mode**: read a pending Mia question aloud and accept a spoken answer
   (nice-to-have; do last).
+- **Talk mode survives navigation** (`shell/TalkHost.jsx`,
+  `lib/talkSession.js`): the session is mounted once at the app root and its
+  DOM moves between the Mia view's slot and an off-screen park. Away from the
+  Mia view it shows as a pill in the top bar — phase, level meter, tap to
+  expand back to Mia, stop. On desk-width screens it sits in the middle of the
+  slim top bar; narrower, `--talkbar` reserves a strip under the status bar so
+  it covers no control. It never touches the dock. The same pill carries
+  announcements (8.3) and links Mia opened that the browser blocked.
 
 ## 10. Claude in Chrome
 

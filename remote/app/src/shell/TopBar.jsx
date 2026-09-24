@@ -31,7 +31,8 @@ export default function TopBar({ onPalette, onLaunch, onSettings }) {
     <motion.header
       {...fadeIn}
       className="relative z-30 flex items-center gap-3 px-4 pb-1.5 sm:px-6"
-      style={{ paddingTop: 'calc(env(safe-area-inset-top) + 8px)' }}
+      // --talkbar: room for the voice pill on narrow screens (shell/TalkHost.jsx).
+      style={{ paddingTop: 'calc(env(safe-area-inset-top) + 8px + var(--talkbar, 0px))' }}
     >
       <div className="flex min-w-0 items-baseline gap-2.5" title={longDate}>
         <span className="text-[19px] font-light leading-none tracking-tight text-ink tnum">{clock}</span>

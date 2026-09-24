@@ -29,6 +29,9 @@ final class MiaManager: ObservableObject {
     /// VAPID public key the relay announced ({type:"pushKey"}), echoed in the
     /// snapshot so the panel can subscribe.
     var pushKey: String?
+    /// Panel commands for the relay ({type:"panel", …}) from `mia panel`; set
+    /// by RemoteBridge. Returns false when the relay isn't connected.
+    var onPanel: (([String: Any]) -> Bool)?
 
     private weak var manager: AgentManager?
     private let settings = Settings.shared
@@ -39,6 +42,7 @@ final class MiaManager: ObservableObject {
     private let dispatchDir: String
     private let briefsDir: String
     private let messagesPath: String
+    private let panelPath: String
     private let eventsPath: String
     private let schedulePath: String
     private let statePath: String
@@ -62,6 +66,7 @@ final class MiaManager: ObservableObject {
 
     // Watchers
     private var messagesOffset: UInt64 = 0
+    private var panelOffset: UInt64 = 0
     private var tellRetryAt: [String: Date] = [:]
     private var execLastStatus: [String: AgentStatus] = [:]
     private var execReported: Set<String> = []
@@ -85,6 +90,7 @@ final class MiaManager: ObservableObject {
         dispatchDir = d + "/dispatch"
         briefsDir = d + "/briefs"
         messagesPath = d + "/messages.jsonl"
+        panelPath = d + "/panel.jsonl"
         eventsPath = d + "/events.jsonl"
         schedulePath = d + "/schedule.json"
         statePath = d + "/state.json"
@@ -94,6 +100,7 @@ final class MiaManager: ObservableObject {
         ensureLayout()
         // Only what lands from now on is news; history was already notified.
         messagesOffset = fileSize(messagesPath)
+        panelOffset = fileSize(panelPath)
         loadUndeliveredEvents()
         syncStateSettings()
 
@@ -185,6 +192,7 @@ final class MiaManager: ObservableObject {
         let now = Date()
         superviseMia(now: now)
         scanMessages()
+        scanPanel(now: now)
         scanDispatch(now: now)
         trackExecutors(now: now)
         if now.timeIntervalSince(lastScheduleTick) >= 30 {
@@ -384,6 +392,48 @@ final class MiaManager: ObservableObject {
             if kind == "question" { push["urgent"] = true }
             onPush?(push)
         }
+    }
+
+    // MARK: panel.jsonl → the panel on Daniel's screen
+
+    /// Actions the panel will carry out (docs/mia.md §8.2) — navigation only.
+    /// The CLI, the relay and the panel each check the same list.
+    static let panelActions: Set<String> = ["open-doc", "open-task", "open-agent", "view",
+                                            "open-url", "search", "scroll-to"]
+
+    /// `mia panel …` lines → {type:"panel"} frames. A command older than a
+    /// minute is dropped: opening a doc long after she asked would surprise him.
+    private func scanPanel(now: Date) {
+        let size = fileSize(panelPath)
+        if size < panelOffset { panelOffset = size; return }
+        guard size > panelOffset, let fh = FileHandle(forReadingAtPath: panelPath) else { return }
+        defer { try? fh.close() }
+        try? fh.seek(toOffset: panelOffset)
+        let data = fh.readDataToEndOfFile()
+        guard let lastNL = data.lastIndex(of: 0x0A) else { return }
+        let chunk = data[data.startIndex...lastNL]
+        panelOffset += UInt64(chunk.count)
+        for raw in chunk.split(separator: 0x0A) {
+            guard let obj = try? JSONSerialization.jsonObject(with: Data(raw)) as? [String: Any],
+                  let action = obj["action"] as? String, Self.panelActions.contains(action) else { continue }
+            if let at = Self.date(obj["at"]), now.timeIntervalSince(at) > 60 { continue }
+            var frame: [String: Any] = ["type": "panel", "action": action,
+                                        "id": obj["id"] as? String ?? "p_\(Int(now.timeIntervalSince1970 * 1000))"]
+            for k in ["arg", "heading"] { if let v = obj[k] as? String { frame[k] = v } }
+            if onPanel?(frame) != true {
+                enqueue(kind: "system", line: "[MC] Panel: couldn't \(action) — the relay isn't connected, so no panel can be reached.")
+            }
+        }
+    }
+
+    /// The relay's (or the panel's) answer to a panel command. Success is
+    /// silent — Daniel sees it happen — so only failures reach Mia.
+    func panelResult(_ obj: [String: Any]) {
+        guard (obj["ok"] as? Bool) != true else { return }
+        let action = obj["action"] as? String ?? "panel command"
+        let arg = (obj["arg"] as? String).map { " \($0)" } ?? ""
+        let detail = obj["detail"] as? String ?? "failed"
+        enqueue(kind: "system", line: "[MC] Panel: \(action)\(arg) didn't work — \(detail)")
     }
 
     // MARK: dispatch/ → executors
@@ -1053,6 +1103,17 @@ HOW YOU TALK TO DANIEL
 - `mia say "…"` for conversation. `mia notify "…"` when he should be pinged (a task finished, something in mail needs him). `mia ask "…" --options "A|B|C"` when you need a decision — give options whenever you can so he can answer with one tap. Batch questions: one `mia ask` per task, not five.
 - A message that starts with "(voice)" was spoken aloud in talk mode on the panel, and whatever you `mia say` or `mia notify` next is read aloud to him. Reply with `mia say` in one to three short spoken sentences: no markdown, lists, links, code or ids; say times and numbers the way you would out loud. Anything long goes in the Library or a task, and you say so in one sentence.
 - After asking, END YOUR TURN. Do not poll, sleep, or loop. Mission Control delivers his answer as a message starting with `[MC]`.
+- Add `--speak` to `mia say`, `mia notify` or `mia ask` to have an open panel read it aloud to him even when talk mode is off: for questions, finished tasks and anything that needs his attention, in one short spoken sentence ("Hey Daniel, task 14 is done. Anything else?"). Asks and notifies are read out by default; quiet hours and the app being closed are handled for you.
+
+THE PANEL ON HIS SCREEN
+- When Daniel asks to see or open something, use `mia panel`; it acts on the panel he used last. Navigation only, and it reports failures back as `[MC] Panel: …`.
+- `mia panel open-doc <library-id|title words> [--at "<heading>"]` opens a Library doc (find the id with `mc-doc list`).
+- `mia panel open-task <id>` shows a task on your board.
+- `mia panel open-agent <name|session-id>` opens an agent's window.
+- `mia panel view <home|fleet|library|mia|insights|settings>` switches the view.
+- `mia panel open-url <https-url>` opens a link on his iPad, e.g. a Zoom, Meet or Teams join link.
+- `mia panel search "<text>"` opens search with that text.
+- `mia panel scroll-to "<heading>"` scrolls the open doc to a heading.
 
 HOW EVENTS REACH YOU
 - Messages starting with `[MC]` come from Mission Control: Daniel's chat and answers, new tasks, executor results, reminders, heartbeats. Handle them and end your turn.

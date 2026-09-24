@@ -7,6 +7,7 @@ import { connectRealtime, reportUsage, addUsage, emptyUsage, realtimeSupported }
 import Icon from '../../ui/Icon.jsx';
 import Button from '../../ui/Button.jsx';
 import { LABEL, HINT, isMiaMsg, micError, spokenFor, Orb, Line } from './TalkParts.jsx';
+import { talkPhase, registerEngine, getTalk } from '../../lib/talkSession.js';
 
 // REALTIME TALK — Mia's natural voice. The panel holds a WebRTC call with
 // OpenAI's Realtime API (lib/realtime.js); the relay minted the session with
@@ -117,6 +118,7 @@ export default function RealtimeTalk({ mia, onExit, onFallback, switcher }) {
   function setPhase(p) {
     phaseRef.current = p;
     setPhaseState(p);
+    talkPhase(p); // the top-bar pill (TalkPill) shows it off the Mia view
   }
   function flash(t, ms = 5000) {
     setNote(t);
@@ -381,6 +383,14 @@ export default function RealtimeTalk({ mia, onExit, onFallback, switcher }) {
         c.responding = true;
         session.send({ type: 'response.create', response: { instructions: 'Daniel just called you by name. Answer with a very short, warm acknowledgement of one to three words, like "Yes?" or "I\'m here." and then listen.' } });
       }
+      // Opened to answer an announcement: put it in the call first, so a bare
+      // "yes" or "option two" has something to land on.
+      const ctx = getTalk().context;
+      if (ctx && !ctxUsed.current) {
+        ctxUsed.current = true;
+        c.inbox.push({ m: ctx, text: injectText(ctx) });
+        flush();
+      }
       try {
         wake.current = await navigator.wakeLock?.request('screen');
       } catch {}
@@ -425,7 +435,10 @@ export default function RealtimeTalk({ mia, onExit, onFallback, switcher }) {
     }
   }
 
-  // The orb.
+  // The orb (also the pill's tap, via registerEngine).
+  const tapRef = useRef(null);
+  const ctxUsed = useRef(false);
+  tapRef.current = () => tapOrb();
   function tapOrb() {
     const p = phaseRef.current;
     if (p === 'standby' || p === 'error') {
@@ -449,6 +462,7 @@ export default function RealtimeTalk({ mia, onExit, onFallback, switcher }) {
   // ---- lifecycle ----------------------------------------------------------------
   useEffect(() => {
     alive.current = true;
+    const unregister = registerEngine('realtime', levels, () => tapRef.current?.());
     begin(false);
     // 1 Hz: the clock, the quiet/length limits, and a usage report every 30 s.
     tick.current = setInterval(() => {
@@ -481,6 +495,7 @@ export default function RealtimeTalk({ mia, onExit, onFallback, switcher }) {
       window.removeEventListener('pagehide', onPageHide);
       clearInterval(tick.current);
       clearTimeout(noteTimer.current);
+      unregister();
       alive.current = false;
       end('exit');
       stopSpeaking();

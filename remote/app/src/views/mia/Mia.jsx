@@ -16,9 +16,9 @@ import Segmented from '../../ui/Segmented.jsx';
 import EmptyState from '../../ui/EmptyState.jsx';
 import Thread from './Thread.jsx';
 import Tasks from './Tasks.jsx';
-import Talk from './Talk.jsx';
-import { primeTalk, talkSupported } from '../../lib/voice.js';
-import { onWake, wakePending } from '../../lib/wake.js';
+import { talkSupported } from '../../lib/voice.js';
+import { useTalk, startTalk } from '../../lib/talkSession.js';
+import { TalkSlot } from '../../shell/TalkHost.jsx';
 import { WakeToggle } from './Wake.jsx';
 
 // MIA — the assistant's window (docs/mia.md §9). Chromeless like Library: the
@@ -154,7 +154,7 @@ function ModelPick({ mia }) {
   );
 }
 
-export default function Mia({ onOpenAgent, onClose }) {
+export default function Mia({ onOpenAgent, onClose, focusTask }) {
   const mia = useMC((s) => s.mia);
   const snapshot = useMC((s) => s.snapshot);
   const link = useMC((s) => s.link);
@@ -165,9 +165,17 @@ export default function Mia({ onOpenAgent, onClose }) {
   const wide = width >= WIDE;
 
   const [tab, setTab] = useState('thread');
-  // Opened by "Hey Mia" (App.jsx navigates here first): start talking.
-  const [talking, setTalking] = useState(wakePending);
-  useEffect(() => onWake(() => setTalking(true)), []);
+  // The session itself lives at the app root (shell/TalkHost.jsx) so it keeps
+  // running when Daniel leaves this view; here it only borrows a slot.
+  const talkOn = useTalk((s) => s.on);
+  // Set aside: the session runs on in the top-bar pill while the thread and
+  // board show here (e.g. Mia opened a task mid-conversation).
+  const [talkAside, setTalkAside] = useState(false);
+  const expandN = useTalk((s) => s.expandN);
+  useEffect(() => {
+    setTalkAside(false);
+  }, [talkOn, expandN]);
+  const talking = talkOn && !talkAside;
   const [highlight, setHighlight] = useState(null); // { id, n } — n re-fires the same id
 
   const openQ = miaOpenQuestions(mia, local).length;
@@ -184,6 +192,14 @@ export default function Mia({ onOpenAgent, onClose }) {
     else if (tasksFolded) toggleTasks();
   };
 
+  // `mia panel open-task <id>`: App bumps focusTask.n; show that task.
+  useEffect(() => {
+    if (!focusTask?.id) return;
+    setTalkAside(true);
+    showTask(focusTask.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusTask?.n]);
+
   // Talk: the tap itself unlocks speech and asks for the mic (iOS only allows
   // both inside a gesture); the Talk view picks the session up when it mounts.
   const talkButton =
@@ -192,12 +208,9 @@ export default function Mia({ onOpenAgent, onClose }) {
         size="sm"
         variant="primary"
         icon="mic"
-        onClick={() => {
-          primeTalk();
-          setTalking(true);
-        }}
+        onClick={() => (talkOn ? setTalkAside(false) : startTalk())}
       >
-        Talk
+        {talkOn ? 'Back to talk' : 'Talk'}
       </Button>
     ) : null;
 
@@ -250,9 +263,7 @@ export default function Mia({ onOpenAgent, onClose }) {
           }
         />
       ) : talking ? (
-        <div className="flex min-h-0 flex-1 flex-col border-t border-glass-line">
-          <Talk mia={mia} onExit={() => setTalking(false)} />
-        </div>
+        <TalkSlot />
       ) : wide ? (
         <div className="flex min-h-0 flex-1 border-t border-glass-line">
           <div className="flex min-h-0 min-w-0 flex-1 flex-col pt-3">

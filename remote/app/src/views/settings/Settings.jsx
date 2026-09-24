@@ -11,6 +11,7 @@ import { realtimeInfo } from '../../lib/realtime.js';
 import Segmented from '../../ui/Segmented.jsx';
 import { WakeToggle, WAKE_HINT } from '../mia/Wake.jsx';
 import { wakeSupported } from '../../lib/wake.js';
+import AnnounceSection from './AnnounceSection.jsx';
 
 // Settings — the device's own page: what it is connected to, the two ambient
 // modes, the backdrop photograph, and how a bot gets the same access.
@@ -208,6 +209,7 @@ export default function Settings({ onClose }) {
         </Section>
 
         <VoiceSection />
+        <AnnounceSection Section={Section} Row={Row} />
 
         <Section title="Modes">
           <Row label="TV mode" hint="Ambient fleet display for a big screen — or open #tv directly">

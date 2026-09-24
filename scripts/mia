@@ -31,6 +31,7 @@ TASKS = os.path.join(D, "tasks")
 DISPATCH = os.path.join(D, "dispatch")
 BRIEFS = os.path.join(D, "briefs")
 MSGS = os.path.join(D, "messages.jsonl")
+PANEL = os.path.join(D, "panel.jsonl")
 EVENTS = os.path.join(D, "events.jsonl")
 SCHED = os.path.join(D, "schedule.json")
 STATE = os.path.join(D, "state.json")
@@ -266,22 +267,28 @@ def message(kind, text, task=None, **extra):
 
 # ---- commands -------------------------------------------------------------
 
+def speak_extra(o):
+    """--speak: an open panel reads the message aloud (docs/mia.md §8.3)."""
+    return {"speak": True} if o.get("--speak") else {}
+
+
 def cmd_say(args):
-    pos, o = parse(args, {"--task": True})
+    pos, o = parse(args, {"--task": True, "--speak": False})
     task = norm_id(o["--task"]) if "--task" in o else None
-    m = message("chat", text_arg(pos, "message"), task)
+    m = message("chat", text_arg(pos, "message"), task, **speak_extra(o))
     print(m["id"])
 
 
 def cmd_notify(args):
-    pos, o = parse(args, {"--task": True, "--urgent": False})
+    pos, o = parse(args, {"--task": True, "--urgent": False, "--speak": False})
     task = norm_id(o["--task"]) if "--task" in o else None
-    m = message("notify", text_arg(pos, "message"), task, urgent=bool(o.get("--urgent")))
+    m = message("notify", text_arg(pos, "message"), task, urgent=bool(o.get("--urgent")),
+                **speak_extra(o))
     print(m["id"])
 
 
 def cmd_ask(args):
-    pos, o = parse(args, {"--task": True, "--options": True})
+    pos, o = parse(args, {"--task": True, "--options": True, "--speak": False})
     text = text_arg(pos, "question")
     task = norm_id(o["--task"]) if "--task" in o else None
     options = [x.strip() for x in o.get("--options", "").split("|") if x.strip()]
@@ -292,6 +299,7 @@ def cmd_ask(args):
         at = now_iso()
         m = {"id": mid, "at": at, "from": "mia", "kind": "question",
              "text": text, "options": options, "questionId": qid}
+        m.update(speak_extra(o))
         if task:
             m["taskId"] = task
         append_jsonl(MSGS, m)
@@ -624,12 +632,80 @@ def cmd_status(args):
         print("Undelivered events: %d (see `mia inbox`)" % len(pend))
 
 
+# ---- panel ------------------------------------------------------------------
+# `mia panel …` drives the Mission Control panel on Daniel's iPad: navigation
+# and view actions only, from a fixed allow-list. Each command is a line in
+# panel.jsonl; the app ships it to the relay, which hands it to the most
+# recently active panel (docs/mia.md §8.2). Fire-and-forget: if no panel is
+# open or the target isn't found, an [MC] event says so.
+
+PANEL_VIEWS = ["home", "fleet", "library", "mia", "insights", "settings"]
+
+
+def panel_cmd(action, **fields):
+    with Lock():
+        pid = next_stamp(PANEL, "p_")
+        c = {"id": pid, "at": now_iso(), "action": action}
+        c.update({k: v for k, v in fields.items() if v is not None})
+        append_jsonl(PANEL, c)
+    print(pid)
+
+
+def one_arg(pos, usage, limit=200):
+    t = " ".join(pos).strip()
+    if not t:
+        die("usage: mia panel " + usage)
+    if len(t) > limit or "\n" in t:
+        die("argument too long or multi-line")
+    return t
+
+
+def cmd_panel(args):
+    if not args or args[0] in ("help", "-h", "--help"):
+        die("panel needs: open-doc|open-task|open-agent|view|open-url|search|scroll-to (see mia help)")
+    sub, rest = args[0], args[1:]
+    if sub == "open-doc":
+        pos, o = parse(rest, {"--at": True})
+        heading = o.get("--at")
+        panel_cmd("open-doc", arg=one_arg(pos, "open-doc <library-id|title> [--at <heading>]"),
+                  heading=heading.strip() if heading else None)
+    elif sub == "open-task":
+        pos, o = parse(rest, {})
+        if len(pos) != 1:
+            die("usage: mia panel open-task <id>")
+        panel_cmd("open-task", arg=norm_id(pos[0]))
+    elif sub == "open-agent":
+        pos, o = parse(rest, {})
+        panel_cmd("open-agent", arg=one_arg(pos, "open-agent <name|session-id>", 120))
+    elif sub == "view":
+        pos, o = parse(rest, {})
+        if len(pos) != 1 or pos[0] not in PANEL_VIEWS:
+            die("usage: mia panel view <%s>" % "|".join(PANEL_VIEWS))
+        panel_cmd("view", arg=pos[0])
+    elif sub == "open-url":
+        pos, o = parse(rest, {})
+        url = one_arg(pos, "open-url <https-url>", 2000)
+        if not re.match(r"^https://[^\s/$.?#][^\s]*$", url, re.I):
+            die("open-url takes an https:// link only")
+        panel_cmd("open-url", arg=url)
+    elif sub == "search":
+        pos, o = parse(rest, {})
+        panel_cmd("search", arg=one_arg(pos, 'search "<text>"'))
+    elif sub == "scroll-to":
+        pos, o = parse(rest, {})
+        panel_cmd("scroll-to", arg=one_arg(pos, 'scroll-to "<heading>"'))
+    else:
+        die("unknown panel command: %s (try: mia help)" % sub)
+
+
 HELP = """mia — Mia's line to Daniel and the Mission Control task list.
 
-  mia say    "<text>" [--task <id>]                 chat message to Daniel (no push)
-  mia notify "<text>" [--task <id>] [--urgent]       message + push + Mac banner
-  mia ask    "<question>" [--options "A|B|C"] [--task <id>]
+  mia say    "<text>" [--task <id>] [--speak]       chat message to Daniel (no push)
+  mia notify "<text>" [--task <id>] [--urgent] [--speak]
+                                                    message + push + Mac banner
+  mia ask    "<question>" [--options "A|B|C"] [--task <id>] [--speak]
                                                     ask Daniel; prints the question id
+                                                    --speak: an open panel reads it aloud
   mia task list [--status <s>]                      id<TAB>status<TAB>priority<TAB>title
   mia task show <id>                                the task JSON
   mia task add "<title>" [--detail <text>|--stdin] [--dir <d>] [--priority n]
@@ -645,6 +721,14 @@ HELP = """mia — Mia's line to Daniel and the Mission Control task list.
   mia heartbeat set <id> (--every <min>|--at HH:MM) [--label <l>] [--prompt <p>]
                                                     add or change a recurring prompt
   mia heartbeat enable|disable|remove <id>
+  mia panel open-doc <library-id|title> [--at "<heading>"]
+                                                    open a Library doc on Daniel's panel
+  mia panel open-task <id>                          show a task on Mia's board
+  mia panel open-agent <name|session-id>            open an agent's window
+  mia panel view <home|fleet|library|mia|insights|settings>
+  mia panel open-url <https-url>                    open a link on the iPad (Zoom/Meet/Teams…)
+  mia panel search "<text>"                         open search with this text
+  mia panel scroll-to "<heading>"                   scroll the open doc to a heading
   mia inbox [-n 50]                                 recent system events
   mia status                                        tasks, open questions, reminders
   mia help
@@ -660,7 +744,8 @@ def main(argv):
     cmd, rest = argv[0], argv[1:]
     table = {"say": cmd_say, "notify": cmd_notify, "ask": cmd_ask, "task": cmd_task,
              "dispatch": cmd_dispatch, "tell": cmd_tell, "remind": cmd_remind,
-             "heartbeat": cmd_heartbeat, "inbox": cmd_inbox, "status": cmd_status}
+             "heartbeat": cmd_heartbeat, "inbox": cmd_inbox, "status": cmd_status,
+             "panel": cmd_panel}
     if cmd not in table:
         die("unknown command: %s (try: mia help)" % cmd)
     table[cmd](rest)

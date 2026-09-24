@@ -41,6 +41,9 @@ function createApi({
   snapshotMeta = () => ({ seq: 0, at: 0 }),
   allowedTypes = [],
   notePoller = () => {},
+  notePresence = () => {},
+  pollerExtras = () => ({}),
+  onPanelDone = () => {},
 }) {
   // ---------------------------------------------------------------------------
   // Assembled terminal screens for HTTP pollers: sessionId → { seq, text, at }.
@@ -265,22 +268,42 @@ function createApi({
     }
 
     if (route[0] === 'snapshot' && m === 'GET') {
-      if (pollerId) notePoller(pollerId);
+      if (pollerId) {
+        notePoller(pollerId);
+        // Panel presence rides the poll: ms since the last tap/key and whether
+        // the page is visible (who Mia's `mia panel` commands go to).
+        const idle = req.headers['x-mc-idle'];
+        const vis = req.headers['x-mc-visible'];
+        if (idle !== undefined || vis !== undefined) {
+          notePresence(pollerId, { idleMs: idle !== undefined ? Number(idle) : NaN, visible: vis === undefined ? undefined : vis !== '0' });
+        }
+      }
       const snap = snapshot();
       if (!snap) return json(res, 502, { ok: false, hostOnline: hostOnline(), error: 'no snapshot yet — Mac may be offline' });
       const meta = snapshotMeta();
+      const extras = pollerId ? pollerExtras(pollerId) : {};
       return json(res, 200, {
         ok: true,
         hostOnline: hostOnline(),
         seq: meta.seq,
         ageMs: meta.at ? Math.max(0, Date.now() - meta.at) : null,
         snapshot: snap,
+        ...extras,
       });
     }
 
     // ---- panel HTTP fallback ------------------------------------------------
     if (route[0] === 'cmd' && route.length === 1 && m === 'POST') {
       if (pollerId) notePoller(pollerId);
+      // Relay-local frames (see server.js): presence and panel-command results.
+      if (body && body.type === 'viewerActive') {
+        if (pollerId) notePresence(pollerId, { idleMs: body.visible === false ? NaN : 0, visible: body.visible !== false });
+        return json(res, 200, { ok: true });
+      }
+      if (body && body.type === 'panelDone') {
+        onPanelDone(body);
+        return json(res, 200, { ok: true });
+      }
       if (!body || typeof body.type !== 'string' || !allowedTypes.includes(body.type)) {
         return json(res, 400, { ok: false, error: `type ${JSON.stringify(body && body.type)} is not an allowed command` });
       }

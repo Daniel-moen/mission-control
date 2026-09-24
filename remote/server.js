@@ -234,6 +234,84 @@ const ALLOWED_VIEWER_TYPES = [
   'miaStart', 'miaStop', 'miaSetModel', 'miaSchedule', 'miaPushTest',
 ];
 
+// ---------------------------------------------------------------------------
+// Mia → panel commands (`mia panel …`, docs/mia.md §8.2). The host sends
+// {type:'panel', id, action, arg?, heading?}; exactly ONE panel gets it: the
+// most recently active one (visible beats hidden, then the latest tap/key,
+// then the newest connection). Navigation only — anything off the allow-list
+// is dropped here as well as on the Mac and in the panel.
+const PANEL_ACTIONS = ['open-doc', 'open-task', 'open-agent', 'view', 'open-url', 'search', 'scroll-to'];
+const PANEL_VIEWS = ['home', 'fleet', 'library', 'mia', 'insights', 'settings'];
+const pollerPresence = new Map(); // poller id → { activeAt, visible }
+const pollerInbox = new Map(); // poller id → panel frames waiting for its next poll
+let primaryKey = null; // 'ws:<n>' | 'poll:<id>' — who gets panel commands (and speaks announcements)
+let wsSeq = 0;
+
+function cleanPanelFrame(f) {
+  if (!f || !PANEL_ACTIONS.includes(f.action)) return null;
+  const s = (v, n) => (typeof v === 'string' ? v.replace(/[\r\n]+/g, ' ').trim().slice(0, n) : '');
+  const out = { type: 'panel', id: s(f.id, 40) || `p_${Date.now()}`, action: f.action, arg: s(f.arg, 2000) };
+  const heading = s(f.heading, 200);
+  if (heading) out.heading = heading;
+  if (f.action === 'view' && !PANEL_VIEWS.includes(out.arg)) return null;
+  if (f.action === 'open-url' && !/^https:\/\/[^\s]+$/i.test(out.arg)) return null;
+  if (f.action !== 'view' && f.action !== 'open-url' && !out.arg) return null;
+  return out;
+}
+
+function panelCandidates() {
+  const out = [];
+  for (const v of viewers) {
+    if (v.readyState === v.OPEN) out.push({ key: `ws:${v.seq}`, ws: v, visible: v.visible !== false, activeAt: v.activeAt || 0, since: v.connectedAt || 0 });
+  }
+  const cutoff = Date.now() - POLLER_TTL_MS;
+  for (const [id, at] of pollers) {
+    if (at < cutoff) continue;
+    const p = pollerPresence.get(id) || {};
+    out.push({ key: `poll:${id}`, poller: id, visible: p.visible !== false, activeAt: p.activeAt || 0, since: p.since || at });
+  }
+  out.sort((a, b) => (b.visible - a.visible) || (b.activeAt - a.activeAt) || (b.since - a.since));
+  return out;
+}
+
+// Tell socket panels whether they're the one Mia talks to; pollers read it
+// off their snapshot response.
+function refreshPrimary() {
+  const best = panelCandidates()[0] || null;
+  const key = best ? best.key : null;
+  if (key === primaryKey) return;
+  primaryKey = key;
+  for (const v of viewers) sendTo(v, { type: 'panelFocus', primary: `ws:${v.seq}` === key });
+}
+
+function routePanel(frame) {
+  const f = cleanPanelFrame(frame);
+  const result = (ok, detail) =>
+    sendTo(host, { type: 'panelResult', id: frame.id || '', ok, action: frame.action || '', arg: typeof frame.arg === 'string' ? frame.arg.slice(0, 200) : '', detail });
+  if (!f) return result(false, 'not an allowed panel command');
+  const target = panelCandidates()[0];
+  if (!target) return result(false, 'no panel is open');
+  if (target.ws) sendTo(target.ws, f);
+  else {
+    const q = pollerInbox.get(target.poller) || [];
+    q.push({ ...f, queuedAt: Date.now() });
+    pollerInbox.set(target.poller, q.slice(-10));
+  }
+  console.log(`panel ${f.action} → ${target.key}`);
+}
+
+// What a panel reports back after running a command → the Mac (Mia).
+function panelDone(msg) {
+  sendTo(host, {
+    type: 'panelResult',
+    id: String(msg.id || '').slice(0, 40),
+    ok: !!msg.ok,
+    action: PANEL_ACTIONS.includes(msg.action) ? msg.action : '',
+    arg: String(msg.arg || '').slice(0, 200),
+    detail: String(msg.detail || '').slice(0, 300),
+  });
+}
+
 const api = createApi({
   tokenOk,
   hostOnline: () => host !== null,
@@ -241,6 +319,20 @@ const api = createApi({
   snapshotMeta: () => ({ seq: snapshotSeq, at: lastSnapshotAt }),
   sendToHost: (obj) => sendTo(host, obj),
   allowedTypes: ALLOWED_VIEWER_TYPES,
+  notePresence: (id, { idleMs, visible }) => {
+    const p = pollerPresence.get(id) || { since: Date.now() };
+    if (Number.isFinite(idleMs) && idleMs >= 0) p.activeAt = Math.max(p.activeAt || 0, Date.now() - idleMs);
+    if (typeof visible === 'boolean') p.visible = visible;
+    pollerPresence.set(id, p);
+    refreshPrimary();
+  },
+  pollerExtras: (id) => {
+    const q = pollerInbox.get(id);
+    pollerInbox.delete(id);
+    const fresh = (q || []).filter((f) => Date.now() - f.queuedAt < 30000).map(({ queuedAt, ...f }) => f);
+    return { primary: primaryKey === `poll:${id}`, panel: fresh };
+  },
+  onPanelDone: panelDone,
   notePoller: (id) => {
     const fresh = !pollers.has(id);
     pollers.set(id, Date.now());
@@ -287,9 +379,12 @@ setInterval(() => {
   for (const [id, at] of pollers) {
     if (at < cutoff) {
       pollers.delete(id);
+      pollerPresence.delete(id);
+      pollerInbox.delete(id);
       changed = true;
     }
   }
+  if (changed) refreshPrimary();
   if (changed) {
     console.log(`poller gone (${pollers.size})`);
     tellHostViewerCount();
@@ -339,6 +434,11 @@ wss.on('connection', (ws) => {
         push.send(frame).catch((err) => console.error('push send error:', err));
         return;
       }
+      if (frame.type === 'panel') {
+        // Mia → one panel, never fanned out (see routePanel).
+        routePanel(frame);
+        return;
+      }
       if (frame.type === 'snapshot') {
         lastSnapshot = text;
         lastSnapshotAt = Date.now();
@@ -359,11 +459,15 @@ wss.on('connection', (ws) => {
   }
 
   // Viewer.
+  ws.seq = ++wsSeq;
+  ws.connectedAt = Date.now();
   viewers.add(ws);
   console.log(`viewer connected (${viewers.size})`);
   sendTo(ws, { type: 'hostState', online: host !== null });
   if (lastSnapshot) ws.send(lastSnapshot);
   tellHostViewerCount();
+  primaryKey = null; // re-announce to everyone, the newcomer included
+  refreshPrimary();
 
   ws.on('message', (data) => {
     const text = data.toString();
@@ -374,6 +478,18 @@ wss.on('connection', (ws) => {
       return;
     }
     if (!msg || typeof msg.type !== 'string') return;
+    // Relay-local: presence (who Mia's panel commands go to) and the result of
+    // one. Neither needs the Mac online to be accepted.
+    if (msg.type === 'viewerActive') {
+      if (msg.visible !== false) ws.activeAt = Date.now();
+      ws.visible = msg.visible !== false;
+      refreshPrimary();
+      return;
+    }
+    if (msg.type === 'panelDone') {
+      panelDone(msg);
+      return;
+    }
     if (!ALLOWED_VIEWER_TYPES.includes(msg.type)) return;
     if (!host) {
       // 'watch' is a ~3s lease heartbeat, not a user action — drop it silently
@@ -390,6 +506,7 @@ wss.on('connection', (ws) => {
     viewers.delete(ws);
     console.log(`viewer disconnected (${viewers.size})`);
     tellHostViewerCount();
+    refreshPrimary();
   });
 });
 
