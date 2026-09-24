@@ -49,6 +49,16 @@ const mockOpenAI = http.createServer((req, res) => {
       res.end(JSON.stringify({ value: 'ek_mock_123', expires_at: Math.floor(Date.now() / 1000) + 120, session: {} }));
       return;
     }
+    if (req.url === '/v1/realtime/calls' && req.method === 'POST') {
+      res.writeHead(201, { 'content-type': 'application/sdp', location: '/v1/realtime/calls/rtc_mock1' });
+      res.end('v=0\r\nmock-answer\r\n');
+      return;
+    }
+    if (/^\/v1\/realtime\/calls\/[\w-]+\/hangup$/.test(req.url) && req.method === 'POST') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+      return;
+    }
     if (req.url === '/v1/audio/speech' && req.method === 'POST') {
       if (/"input":"FAIL/.test(body)) {
         res.writeHead(400, { 'content-type': 'application/json' });
@@ -313,18 +323,24 @@ async function main() {
     ok((await fetch(`${RT}/session`, { method: 'POST', headers: { authorization: 'Bearer nope' } })).status === 401, 'a wrong token is a 401 too');
     ok((await fetch(RT)).status === 401, 'GET /realtime needs the token');
     const info = await (await fetch(RT, { headers: bearer })).json();
-    ok(info.ok && info.available === true && info.model === 'gpt-realtime-2.1' && info.voice === 'marin', 'GET /realtime reports model + voice when the key is set');
-    ok(info.limits.idleSeconds === 60 && info.limits.maxSeconds === 900, 'limits: 60 s quiet, 15 min cap');
+    ok(info.ok && info.available === true && info.model === 'gpt-realtime-2.1-mini' && info.models.premium === 'gpt-realtime-2.1' && info.voice === 'marin', 'GET /realtime: Standard is gpt-realtime-2.1-mini, Premium gpt-realtime-2.1, voice marin');
+    ok(info.limits.idleSeconds === 30 && info.limits.awaitSeconds === 90 && info.limits.maxSeconds === 600, 'limits: 30 s quiet, 90 s awaiting Mia, 10 min cap');
+    ok(info.budget.cap === 1.5 && info.budget.over === false && info.week.days.length === 7, 'GET /realtime: $1.50 daily budget and the last 7 days');
 
     const s = await (await fetch(`${RT}/session`, { method: 'POST', headers: bearer })).json();
-    ok(s.ok && s.value === 'ek_mock_123' && s.id && s.callsUrl === `http://localhost:${OPENAI_PORT}/v1/realtime/calls`, 'POST /realtime/session returns the ephemeral secret + calls URL');
+    ok(s.ok && s.id && s.callsUrl === `/realtime/calls/${s.id}` && s.model === 'gpt-realtime-2.1-mini', 'POST /realtime/session → the ephemeral session, SDP routed through the relay');
     ok(!JSON.stringify(s).includes('sk-test-relay-only'), 'the OpenAI key never appears in the response');
     const minted = openaiSeen.find((x) => x.url === '/v1/realtime/client_secrets');
     ok(minted && minted.auth === 'Bearer sk-test-relay-only', 'the relay mints with its own key');
     const cfg = minted ? JSON.parse(minted.body) : {};
     const sess = cfg.session || {};
-    ok(sess.type === 'realtime' && sess.model === 'gpt-realtime-2.1' && sess.audio?.output?.voice === 'marin', 'session: realtime model + voice');
-    ok(sess.audio?.input?.turn_detection?.type === 'server_vad' && sess.audio.input.turn_detection.interrupt_response === true, 'session: server VAD with barge-in');
+    ok(sess.type === 'realtime' && sess.model === 'gpt-realtime-2.1-mini' && sess.audio?.output?.voice === 'marin', 'session: mini model + voice by default');
+    const td = sess.audio?.input?.turn_detection || {};
+    ok(td.type === 'semantic_vad' && td.eagerness === 'low' && td.interrupt_response === true, 'session: semantic VAD, low eagerness, with barge-in');
+    ok(sess.audio?.input?.noise_reduction?.type === 'near_field', 'session: near-field noise reduction');
+    ok(!sess.audio?.input?.transcription, 'session: no input transcription unless asked for');
+    ok(sess.truncation?.type === 'retention_ratio' && sess.truncation.retention_ratio > 0 && sess.truncation.token_limits?.post_instructions <= 4000, 'session: truncation keeps only the last few turns');
+    ok(sess.reasoning?.effort === 'low', 'session: low reasoning effort');
     ok(['send_to_mia', 'get_status', 'answer_question', 'end_session'].every((n) => (sess.tools || []).some((t) => t.name === n)), 'session: the four relay tools');
     ok(/you do not answer from memory/i.test(sess.instructions || '') && /call send_to_mia/.test(sess.instructions || ''), 'session: persona routes everything substantive, never answers itself');
     ok(/Never reveal how you work inside/.test(sess.instructions || '') && !/Mia says/.test(JSON.stringify(sess)), 'session: one assistant — no hand-off talk, no "Mia says"');
@@ -333,28 +349,94 @@ async function main() {
     ok((sess.tools || []).every((t) => !/to Mia|Mia's|\bagent|Claude|relay/i.test(t.description)), 'session: tool descriptions don\'t leak the architecture');
     ok(cfg.expires_after?.seconds <= 600, 'the client secret is short-lived');
 
+    const prem = await (await fetch(`${RT}/session`, { method: 'POST', headers: { ...bearer, 'content-type': 'application/json' }, body: JSON.stringify({ quality: 'premium', transcript: true }) })).json();
+    const pcfg = JSON.parse(openaiSeen.filter((x) => x.url === '/v1/realtime/client_secrets').pop().body).session;
+    ok(prem.ok && prem.model === 'gpt-realtime-2.1' && pcfg.model === 'gpt-realtime-2.1' && pcfg.audio.input.transcription?.model === 'gpt-4o-mini-transcribe' && prem.transcript === true, 'Premium + transcript: gpt-realtime-2.1 with input transcription');
+
+    const sdp = (id, body = 'v=0\r\nfake-offer\r\n') => fetch(`http://localhost:${PORT}/realtime/calls/${id}`, { method: 'POST', headers: { ...bearer, 'content-type': 'application/sdp' }, body });
+    ok((await fetch(`http://localhost:${PORT}/realtime/calls/${s.id}`, { method: 'POST', body: 'x' })).status === 401, 'the SDP route needs the token');
+    const ans = await sdp(s.id);
+    const fwd = openaiSeen.find((x) => x.url === '/v1/realtime/calls');
+    ok(ans.status === 201 && (await ans.text()).includes('mock-answer') && fwd?.auth === 'Bearer ek_mock_123' && fwd.body.includes('fake-offer'), 'SDP offer relayed to OpenAI with the ephemeral secret; answer returned');
+    ok((await sdp(s.id)).status === 404, 'a session secret opens one call only');
+
     const rep = async (body) => fetch(`${RT}/usage`, { method: 'POST', headers: { ...bearer, 'content-type': 'application/json' }, body: JSON.stringify(body) });
     ok((await rep({ id: 'rt_bogus', seconds: 10 })).status === 404, 'usage for an unknown session is refused');
     await rep({ id: s.id, seconds: 90, usage: { audioIn: 1000, audioOut: 2000 } });
     const r2 = await (await rep({ id: s.id, seconds: 90, usage: { audioIn: 1000, audioOut: 2000 } })).json();
-    ok(r2.ok && r2.today.minutes === 1.5 && r2.today.sessions === 1, 'usage: running totals, a repeat report is not double-counted');
-    ok(Math.abs(r2.today.usd - (1000 * 32 + 2000 * 64) / 1e6) < 0.001, 'usage: token cost estimate');
-    await rep({ id: s.id, seconds: 99999 });
+    ok(r2.ok && r2.today.minutes >= 1.5 && r2.today.sessions === 2 && r2.today.open === 2, 'usage: running totals, a repeat report is not double-counted; open calls count');
+    await rep({ id: s.id, seconds: 99999, final: 'done' });
+    await sleep(300);
     const capped = await (await fetch(RT, { headers: bearer })).json();
-    ok(capped.today.minutes <= 15.5, 'usage: one session can\'t log past the 15-minute cap');
+    const rec = capped.days.find((d) => d.day === capped.today.day);
+    ok(capped.today.open === 1 && capped.today.minutes <= 10.6, 'usage: a final report settles the session; one session can\'t log past the 10-minute cap');
+    ok(Math.abs(rec.tokens.audioIn - 1000) < 1 && Math.abs(rec.tokens.audioOut - 2000) < 1, 'usage: per-session tokens recorded in the day');
+    ok((await rep({ id: s.id, seconds: 100 })).status === 200, 'a late report for a settled session is harmless');
     const health = await (await fetch(`http://localhost:${PORT}/health`)).json();
     ok(health.realtime && health.realtime.available === true && typeof health.realtime.today.minutes === 'number', '/health shows realtime minutes used today');
     ok(health.stt !== 'openai', '/stt never switches to OpenAI, even with OPENAI_API_KEY set');
     await sleep(700);
     const saved = JSON.parse(fs.readFileSync(path.join(TMP, 'realtime-usage.json'), 'utf8'));
-    ok(Object.values(saved.days)[0]?.sessions === 1, 'usage is persisted per day');
+    ok(Object.values(saved.days)[0]?.sessions === 2 && saved.log.some((e) => e.id === s.id && e.model === 'gpt-realtime-2.1-mini') && saved.open[prem.id], 'usage is persisted per day, with a per-session log and the open calls');
 
     const { createRealtime } = require('../realtime.js');
-    const noKey = createRealtime({ tokenOk: (t) => t === TOKEN, env: { REALTIME_STORE: path.join(TMP, 'rt2.json') }, log: { log() {}, warn() {}, error() {} } });
+    const quiet = { log() {}, warn() {}, error() {} };
     const fakeRes = () => { const r = { status: 0, body: '' }; r.writeHead = (st) => { r.status = st; }; r.end = (b) => { r.body = b; }; r.headersSent = false; return r; };
+    const fakeReq = (method, body) => {
+      const h = new (require('node:events').EventEmitter)();
+      Object.assign(h, { method, headers: { authorization: `Bearer ${TOKEN}` } });
+      setImmediate(() => { if (body) h.emit('data', body); h.emit('end'); });
+      return h;
+    };
+    const noKey = createRealtime({ tokenOk: (t) => t === TOKEN, env: { REALTIME_STORE: path.join(TMP, 'rt2.json') }, log: quiet });
     const res503 = fakeRes();
     await noKey.handle({ method: 'POST', headers: { authorization: `Bearer ${TOKEN}` } }, res503, new URL('http://x/realtime/session'));
     ok(res503.status === 503 && noKey.info().available === false, 'without OPENAI_API_KEY minting is a 503 (the panel falls back to basic)');
+    noKey.close();
+
+    // Watchdog + durable tally + budget, on an instance with a fake OpenAI.
+    const seen = [];
+    const lines = [];
+    const fakeFetch = async (url, o = {}) => {
+      seen.push({ url: String(url), method: o.method });
+      if (/client_secrets$/.test(url)) return new Response(JSON.stringify({ value: 'ek_unit' }), { status: 200 });
+      if (/\/calls$/.test(url)) return new Response('v=0\r\nanswer\r\n', { status: 201, headers: { location: '/v1/realtime/calls/rtc_unit' } });
+      if (/hangup$/.test(url)) return new Response('{}', { status: 200 });
+      return new Response('', { status: 404 });
+    };
+    const store3 = path.join(TMP, 'rt3', 'realtime-usage.json');
+    const env3 = { OPENAI_API_KEY: 'sk-unit', RAILWAY_VOLUME_MOUNT_PATH: path.join(TMP, 'rt3'), REALTIME_SILENT_SECONDS: '0.2', REALTIME_DAILY_USD: '0.05' };
+    const logger = { log: (...a) => lines.push(a.join(' ')), warn: (...a) => lines.push('WARN ' + a.join(' ')), error: (...a) => lines.push('ERR ' + a.join(' ')) };
+    const rt3 = createRealtime({ tokenOk: (t) => t === TOKEN, env: env3, log: logger, fetchImpl: fakeFetch });
+    const call3 = async (method, route, body) => { const r = fakeRes(); await rt3.handle(fakeReq(method, body), r, new URL(`http://x${route}`)); return { status: r.status, body: r.body && r.body[0] === '{' ? JSON.parse(r.body) : r.body }; };
+    const m3 = await call3('POST', '/realtime/session', '{}');
+    await call3('POST', m3.body.callsUrl, 'v=0\r\noffer\r\n');
+    await call3('POST', '/realtime/usage', JSON.stringify({ id: m3.body.id, seconds: 20, usage: { audioIn: 600, audioOut: 1200, textIn: 1500, textInCached: 3000 } }));
+    await sleep(400);
+    await rt3.watchdog();
+    ok(seen.some((x) => x.url.endsWith('/v1/realtime/calls/rtc_unit/hangup')), 'watchdog: a call whose panel went silent is hung up relay-side');
+    const endLine = lines.find((l) => /session .* ended \(watchdog: panel went silent\)/.test(l));
+    ok(endLine && /min · tokens in \d+ .* out \d+ · \$\d/.test(endLine), `one log line per ended session with minutes, tokens and $ ("${(endLine || '').slice(10, 140)}…")`);
+    rt3.close();
+    ok(fs.existsSync(store3), 'with a Railway volume mounted, the tally lives on it');
+    // "Redeploy": a fresh instance on the same volume keeps the tally.
+    const rt4 = createRealtime({ tokenOk: (t) => t === TOKEN, env: env3, log: logger, fetchImpl: fakeFetch });
+    const t4 = rt4.info().today;
+    ok(t4.sessions === 1 && t4.usd > 0, `the tally survives a restart ($${t4.usd})`);
+    // Past the budget: an open session that never reported an end counts, then new sessions are refused.
+    const r4 = fakeRes();
+    await rt4.handle(fakeReq('POST', '{}'), r4, new URL('http://x/realtime/session'));
+    const id4 = JSON.parse(r4.body).id;
+    const r4b = fakeRes();
+    await rt4.handle(fakeReq('POST', JSON.stringify({ id: id4, seconds: 60, usage: { audioIn: 2000, audioOut: 2000 } })), r4b, new URL('http://x/realtime/usage'));
+    ok(lines.some((l) => /^WARN realtime: \d+% of today's \$0.05 voice budget used/.test(l)), 'warns at 80% of the daily budget');
+    const r5 = fakeRes();
+    await rt4.handle(fakeReq('POST', '{}'), r5, new URL('http://x/realtime/session'));
+    ok(r5.status === 429 && /budget/.test(JSON.parse(r5.body).error), 'past REALTIME_DAILY_USD new sessions are refused (429 → the panel uses Basic)');
+    rt4.close();
+    const rt5 = createRealtime({ tokenOk: (t) => t === TOKEN, env: env3, log: logger, fetchImpl: fakeFetch });
+    ok(rt5.info().today.open === 1, 'a call open across a restart is still counted');
+    rt5.close();
   }
 
   console.log('announcement voice (/tts)');
@@ -447,8 +529,9 @@ async function main() {
 
 main()
   .catch((err) => { console.error(err); process.exitCode = 1; })
-  .finally(() => {
-    for (const p of procs) p.kill();
+  .finally(async () => {
+    // The relay writes its realtime tally on SIGTERM — let it finish first.
+    await Promise.all(procs.map((p) => new Promise((r) => { if (p.exitCode !== null || p.signalCode) return r(); p.once('exit', r); p.kill(); })));
     mockOpenAI.close();
-    fs.rmSync(TMP, { recursive: true, force: true });
+    fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 3 });
   });

@@ -21,11 +21,14 @@ import { talkPhase, registerEngine, getTalk } from '../../lib/talkSession.js';
 // system items, so the voice reads them out and offers ask-options aloud. To
 // Daniel it is one assistant: nothing the voice hears mentions a hand-off.
 //
-// Cost safety: the call ends after ~60 s of quiet (3 min while waiting on a
-// reply from Mia), when the app goes to the background, and at 15 minutes.
-// Then the view sits in `standby`: mic off, Mia's replies read by the device's
-// own voice, one tap to talk again. Minutes and tokens go to the relay's
-// per-day tally (/realtime/usage).
+// Cost safety: the call ends after 30 s of quiet (90 s while waiting on a
+// reply from Mia), whenever the app is hidden (background, screen lock, app
+// switch), and at 10 minutes. Then the view sits in `standby`: mic off, Mia's
+// replies read by the device's own voice, one tap to talk again. Usage goes
+// to the relay every 20 s (/realtime/usage) — that is also its heartbeat: if
+// it stops, the relay hangs the call up itself. Mia's results go in short
+// (answer first, ~350 chars), and what Daniel says is only transcribed when
+// Settings › Voice asks for it (it's billed separately).
 //
 // If the call can't start or drops, onFallback(reason, media) hands the live
 // mic to the basic whisper voice (Talk.jsx).
@@ -34,8 +37,8 @@ import { talkPhase, registerEngine, getTalk } from '../../lib/talkSession.js';
 // → listening …, plus paused (mic muted by a tap), standby and error.
 
 const REASON = {
-  idle: 'Ended after a quiet minute.',
-  cap: 'Ended at the 15-minute limit.',
+  idle: 'Ended after a quiet spell.',
+  cap: 'Ended at the 10-minute limit.',
   background: 'Ended when the app left the screen.',
   done: 'Bye for now.',
   lost: 'The connection dropped.',
@@ -50,8 +53,18 @@ function fmt(s) {
 // work (the voice and Mia are one assistant to Daniel — the persona never
 // mentions a hand-off), plus the question id and options for an ask so
 // answer_question can be called.
+// Mia's results go in short — every token in the call is re-sent with each
+// response — cut at a sentence end where one is close.
+const INJECT_CHARS = 360;
+function brief(text, max = INJECT_CHARS) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max);
+  const end = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+  return end > max * 0.5 ? cut.slice(0, end + 1) : `${cut.slice(0, cut.lastIndexOf(' ') > 0 ? cut.lastIndexOf(' ') : max)}…`;
+}
 function injectText(m) {
-  let t = `Result: ${speakable(m.text)}`;
+  let t = `Result: ${brief(speakable(m.text))}`;
   const opts = Array.isArray(m.options) ? m.options.filter(Boolean) : [];
   if (m.kind === 'question' && m.questionId)
     t += `\n(This is a question you need Daniel to answer, question id ${m.questionId}.${opts.length ? ` Options: ${opts.join(' | ')}.` : ''} Ask it in your own words${opts.length ? ' and offer the options' : ''}; when he answers, call answer_question.)`;
@@ -71,12 +84,12 @@ function toolStatus() {
   return {
     ok: true,
     reachable: mc.link === 'linked' && mia.online,
-    active: tasks.filter((t) => live.includes(t.status)).sort(byTime).slice(0, 12).map((t) => ({ id: t.id, title: t.title, status: t.status })),
+    active: tasks.filter((t) => live.includes(t.status)).sort(byTime).slice(0, 8).map((t) => ({ id: t.id, title: t.title, status: t.status })),
     recentlyFinished: tasks
       .filter((t) => !live.includes(t.status))
       .sort(byTime)
-      .slice(0, 4)
-      .map((t) => ({ id: t.id, title: t.title, status: t.status, result: t.result ? String(t.result).slice(0, 240) : undefined })),
+      .slice(0, 3)
+      .map((t) => ({ id: t.id, title: t.title, status: t.status, result: t.result ? brief(t.result, 160) : undefined })),
     openQuestions: miaOpenQuestions(mia).map((q) => ({ id: q.questionId, task: q.taskId, question: q.text, options: q.options || [] })),
   };
 }
@@ -237,7 +250,7 @@ export default function RealtimeTalk({ mia, onExit, onFallback, switcher }) {
         c.userSpeaking = true;
         touch();
         if (phaseRef.current !== 'paused') setPhase('hearing');
-        if (ev.item_id) upsert(ev.item_id, 'you', (l) => ({ text: l?.text || '…', pending: true }));
+        if (ev.item_id && c.transcript) upsert(ev.item_id, 'you', (l) => ({ text: l?.text || '…', pending: true }));
         break;
       case 'input_audio_buffer.speech_stopped':
         c.userSpeaking = false;
@@ -356,6 +369,7 @@ export default function RealtimeTalk({ mia, onExit, onFallback, switcher }) {
         token: getMC().token,
         stream: m.stream,
         audio: m.audio,
+        ctx: m.ctx,
         onEvent,
         onState: (st) => {
           if (call.current !== c) return;
@@ -372,7 +386,10 @@ export default function RealtimeTalk({ mia, onExit, onFallback, switcher }) {
       }
       rt.current = session;
       c.id = session.id;
-      c.limits = { idleSeconds: 60, awaitSeconds: 180, maxSeconds: 900, ...session.limits };
+      c.limits = { idleSeconds: 30, awaitSeconds: 90, maxSeconds: 600, ...session.limits };
+      c.transcript = session.transcript;
+      const b = session.budget;
+      if (b?.warn) flash(`Voice budget: $${b.used.toFixed(2)} of $${b.cap.toFixed(2)} used today.`, 6000);
       c.startedAt = Date.now();
       c.lastActive = Date.now();
       setClock(0);
@@ -398,7 +415,7 @@ export default function RealtimeTalk({ mia, onExit, onFallback, switcher }) {
       call.current = null;
       if (!alive.current) return;
       console.warn('realtime: could not start:', e.message);
-      fallback(e.status === 503 ? 'no OpenAI key on the relay' : e.status === 429 ? 'daily limit reached' : e.message);
+      fallback(e.status === 503 ? 'no OpenAI key on the relay' : e.status === 429 ? (/budget/i.test(e.message) ? 'today’s voice budget is spent' : 'daily limit reached') : e.message);
     }
   }
 
@@ -415,7 +432,7 @@ export default function RealtimeTalk({ mia, onExit, onFallback, switcher }) {
     const c = call.current;
     call.current = null;
     clearTimeout(c?.dropTimer);
-    if (c?.id) reportUsage(getMC().token, c.id, c.startedAt ? (Date.now() - c.startedAt) / 1000 : 0, c.usage, { final: true });
+    if (c?.id) reportUsage(getMC().token, c.id, c.startedAt ? (Date.now() - c.startedAt) / 1000 : 0, c.usage, { final: why || 'ended' });
     rt.current?.close();
     rt.current = null;
     setLive(false);
@@ -464,10 +481,13 @@ export default function RealtimeTalk({ mia, onExit, onFallback, switcher }) {
     alive.current = true;
     const unregister = registerEngine('realtime', levels, () => tapRef.current?.());
     begin(false);
-    // 1 Hz: the clock, the quiet/length limits, and a usage report every 30 s.
+    // 1 Hz: the clock, the quiet/length limits, and a usage report (the
+    // relay's heartbeat) every 20 s.
     tick.current = setInterval(() => {
       const c = call.current;
       if (!c || !c.startedAt) return;
+      // A missed visibilitychange (iOS can suspend first, tell later).
+      if (document.visibilityState !== 'visible') return end('background');
       const now = Date.now();
       const secs = (now - c.startedAt) / 1000;
       setClock(secs);
@@ -476,7 +496,7 @@ export default function RealtimeTalk({ mia, onExit, onFallback, switcher }) {
       const waiting = c.awaiting && now - c.awaiting < L.awaitSeconds * 1000;
       if (secs >= L.maxSeconds) return end('cap');
       if ((now - c.lastActive) / 1000 >= (waiting ? L.awaitSeconds : L.idleSeconds)) return end('idle');
-      if (secs - c.reported >= 30) {
+      if (secs - c.reported >= 20) {
         c.reported = secs;
         reportUsage(getMC().token, c.id, secs, c.usage);
       }
@@ -490,9 +510,11 @@ export default function RealtimeTalk({ mia, onExit, onFallback, switcher }) {
     const onPageHide = () => call.current && end('background');
     document.addEventListener('visibilitychange', onHide);
     window.addEventListener('pagehide', onPageHide);
+    document.addEventListener('freeze', onPageHide);
     return () => {
       document.removeEventListener('visibilitychange', onHide);
       window.removeEventListener('pagehide', onPageHide);
+      document.removeEventListener('freeze', onPageHide);
       clearInterval(tick.current);
       clearTimeout(noteTimer.current);
       unregister();

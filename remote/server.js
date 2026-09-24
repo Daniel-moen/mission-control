@@ -34,8 +34,10 @@
 //
 // Realtime voice (realtime.js): POST /realtime/session mints an ephemeral
 // OpenAI Realtime client secret so the panel can speak to OpenAI over WebRTC
-// directly; OPENAI_API_KEY never leaves this process. /realtime/usage keeps a
-// per-day minutes tally, shown on /health and in the panel's Settings.
+// directly; OPENAI_API_KEY never leaves this process. The one SDP exchange
+// goes through /realtime/calls/:id so the relay can watch the call (usage)
+// and hang it up (watchdog). A durable per-day tally (Railway volume) and a
+// daily $ cap, shown on /health and in the panel's Settings.
 //
 // Announcement voice (tts.js): POST /tts turns a spoken announcement into mp3
 // in the same OpenAI voice as the realtime call, with a per-text cache, a
@@ -78,6 +80,12 @@ const push = createPush({ tokenOk });
 const stt = createStt({ tokenOk });
 const realtime = createRealtime({ tokenOk });
 const tts = createTts({ tokenOk });
+// A redeploy sends SIGTERM: write the realtime tally (open calls included)
+// before going, so the next process can settle them.
+process.on('SIGTERM', () => {
+  realtime.close();
+  process.exit(0);
+});
 
 // ---------------------------------------------------------------------------
 // HTTP: serve the built SPA + a health check.

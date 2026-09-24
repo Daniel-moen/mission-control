@@ -94,6 +94,7 @@ const INIT = () => {
     n.connect(d);
     n.start();
     window.__mics = (window.__mics || 0) + 1;
+    window.__micTracks = [...(window.__micTracks || []), ...d.stream.getAudioTracks().map((t) => t.id)];
     window.__say = async (url) => {
       const buf = await ctx.decodeAudioData(await (await fetch(url)).arrayBuffer());
       const s = ctx.createBufferSource();
@@ -112,7 +113,7 @@ const INIT = () => {
   }
   class FakePC {
     constructor() { this.connectionState = 'new'; this.s = []; rt.pc = this; }
-    addTrack(t) { this.s.push({ track: t }); rt.tracks = (rt.tracks || 0) + 1; }
+    addTrack(t) { this.s.push({ track: t }); rt.tracks = (rt.tracks || 0) + 1; rt.trackIds = [...(rt.trackIds || []), t.id]; }
     getSenders() { return this.s; }
     removeTrack() {}
     createDataChannel(name) { rt.channel = name; return new FakeDC(); }
@@ -168,8 +169,12 @@ async function main() {
   ok(await page.getAttribute('[data-talk]', 'data-engine') === 'realtime', 'Talk opens the realtime engine by default');
   const mint = calls.find((c) => c.url === '/v1/realtime/client_secrets');
   ok(mint && mint.auth === 'Bearer sk-e2e-fake', 'relay minted the session with its own key');
+  const mintCfg = JSON.parse(mint.body).session;
+  ok(mintCfg.model === 'gpt-realtime-2.1-mini' && !mintCfg.audio.input.transcription && mintCfg.audio.input.turn_detection.type === 'semantic_vad', 'default call: Standard (mini), no transcription, semantic VAD');
   const sdp = calls.find((c) => c.url === '/v1/realtime/calls');
-  ok(sdp && /^Bearer ek_mock_/.test(sdp.auth) && sdp.type === 'application/sdp' && sdp.body.includes('fake-offer'), 'panel POSTs its SDP offer to OpenAI with the ephemeral secret');
+  ok(sdp && /^Bearer ek_mock_/.test(sdp.auth) && sdp.type === 'application/sdp' && sdp.body.includes('fake-offer'), 'the SDP offer reaches OpenAI (via the relay) with the ephemeral secret');
+  const gated = await page.evaluate(() => ({ sent: window.__rt.trackIds || [], mic: window.__micTracks || [] }));
+  ok(gated.sent.length === 1 && !gated.mic.includes(gated.sent[0]), 'the call gets the noise-gated track, not the raw mic');
   let s = await rt();
   ok(s.answer.includes('fake-answer') && s.channel === 'oai-events' && s.tracks === 1, 'answer applied, oai-events channel, mic track added');
   ok(await page.locator('[data-rt-live]').isVisible(), 'the "Realtime on" indicator shows while the call is live');
@@ -186,8 +191,8 @@ async function main() {
   const out1 = s.sent.find((e) => e.type === 'conversation.item.create' && e.item.call_id === 'c1');
   ok(out1 && JSON.parse(out1.item.output).ok === true, 'send_to_mia returns ok to the model');
   ok(s.sent.some((e) => e.type === 'response.create'), 'and asks for the follow-up response');
-  await page.getByText('Remind me to call Sam at three.').waitFor();
-  ok(await page.getByText('Working on: Remind me to call Sam at 3').isVisible(), 'transcript shows what Daniel said and what went to Mia');
+  await page.getByText('Working on: Remind me to call Sam at 3').waitFor();
+  ok(true, 'the transcript shows what went to Mia');
   // The model's short confirmation plays, then finishes.
   await emit({ type: 'response.created' });
   await emit({ type: 'output_audio_buffer.started' });
@@ -241,8 +246,16 @@ async function main() {
     j.limits = { ...j.limits, idleSeconds: 2 };
     await route.fulfill({ response: r, json: j });
   });
+  await page.evaluate(() => localStorage.setItem('mc.talk.transcript', 'true'));
   await page.locator('[data-phase]').click(); // orb: tap to talk again
   await until(async () => (await phase()) === 'listening', 6000, 'relisten');
+  const mint2 = JSON.parse(calls.filter((c) => c.url === '/v1/realtime/client_secrets').pop().body).session;
+  ok(mint2.audio.input.transcription?.model === 'gpt-4o-mini-transcribe', 'with "Show what I say" on, the next call asks for transcription');
+  await emit({ type: 'input_audio_buffer.speech_started', item_id: 'u9' });
+  await emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'u9', transcript: 'What is on my calendar?' });
+  ok(await page.getByText('What is on my calendar?').isVisible(), '…and what Daniel says shows on screen');
+  await emit({ type: 'input_audio_buffer.speech_stopped', item_id: 'u9' });
+  await emit({ type: 'response.done', response: { output: [{ type: 'message' }] } });
   ok((await page.evaluate(() => window.__mics)) === 2, 'restart from standby opens the mic from the tap');
   await until(async () => (await phase()) === 'standby', 6000, 'idle end');
   ok(await until(async () => /quiet/.test(await page.locator('[data-talk]').innerText()), 2000, 'quiet').catch(() => false), 'the call ends by itself after the quiet limit');
@@ -269,12 +282,22 @@ async function main() {
   ok((await page.evaluate(() => window.__mics)) === 4, 'the basic voice adopts the mic the tap opened (no second prompt)');
   await page.getByRole('button', { name: 'End', exact: true }).click();
   await page.unroute('**/realtime/session');
+  await page.route('**/realtime/session', (route) => route.fulfill({ status: 429, json: { ok: false, error: 'Today\'s voice budget is spent ($1.52 of $1.50)' } }));
+  await page.getByRole('button', { name: 'Talk', exact: true }).click();
+  await until(async () => !(await page.getAttribute('[data-talk]', 'data-engine')), 6000, 'basic (budget)');
+  ok(/voice budget is spent/.test(await page.locator('[data-talk]').innerText()), 'past the daily $ cap the basic voice takes over and says why');
+  await page.getByRole('button', { name: 'End', exact: true }).click();
+  await page.unroute('**/realtime/session');
 
   console.log('settings');
   await page.getByRole('button', { name: /settings/i }).first().click();
   await page.getByText('Talk engine').waitFor();
   const usage = await page.locator('[data-rt-usage]').innerText();
-  ok(/min today/.test(usage), `Settings shows realtime usage ("${usage}")`);
+  ok(/min · \d+ sessions? · ≈ \$/.test(usage), `Settings shows today's realtime usage ("${usage}")`);
+  const weekU = await page.locator('[data-rt-week]').innerText();
+  ok(/min · \d+ sessions? · ≈ \$/.test(weekU), `…and the last 7 days ("${weekU}")`);
+  ok(await page.getByText('Voice quality').isVisible() && await page.getByRole('button', { name: 'Standard' }).getAttribute('aria-pressed') === 'true', 'Voice quality: Standard by default');
+  ok(await page.getByText('Show what I say').isVisible(), 'the transcript toggle is there');
   await page.screenshot({ path: path.join(process.env.E2E_SHOTS || TMP, 'settings-voice.png') });
 
   if (process.env.WAKE_MODEL) {
@@ -363,5 +386,5 @@ main()
   .finally(() => {
     for (const p of procs) p.kill();
     mock.close();
-    fs.rmSync(TMP, { recursive: true, force: true });
+    try { fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch {}
   });

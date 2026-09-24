@@ -7,7 +7,7 @@ import Button from '../../ui/Button.jsx';
 import Icon from '../../ui/Icon.jsx';
 import { spring } from '../../lib/motion.js';
 import { useLocalStorage } from '../../lib/hooks.js';
-import { realtimeInfo } from '../../lib/realtime.js';
+import { realtimeInfo, QUALITY_KEY, TRANSCRIPT_KEY } from '../../lib/realtime.js';
 import Segmented from '../../ui/Segmented.jsx';
 import { WakeToggle, WAKE_HINT } from '../mia/Wake.jsx';
 import { wakeSupported } from '../../lib/wake.js';
@@ -81,6 +81,8 @@ async function ttsInfo(token) {
 function VoiceSection() {
   const token = useMC((s) => s.token);
   const [engine, setEngine] = useLocalStorage('mc.talk.engine', 'realtime');
+  const [quality, setQuality] = useLocalStorage(QUALITY_KEY, 'standard');
+  const [transcript, setTranscript] = useLocalStorage(TRANSCRIPT_KEY, false);
   const [info, setInfo] = useState(undefined);
   const [tts, setTts] = useState(null);
   useEffect(() => {
@@ -92,7 +94,11 @@ function VoiceSection() {
     };
   }, [token]);
   const today = info?.today;
-  const usage = today ? `${today.minutes} min today · ${today.sessions} session${today.sessions === 1 ? '' : 's'} · ≈ $${today.usd.toFixed(2)}` : '';
+  const week = info?.week;
+  const usage = today ? `${today.minutes} min · ${today.sessions} session${today.sessions === 1 ? '' : 's'} · ≈ $${today.usd.toFixed(2)}` : '';
+  const weekUsage = week ? `${week.minutes} min · ${week.sessions} session${week.sessions === 1 ? '' : 's'} · ≈ $${week.usd.toFixed(2)}` : '';
+  const budget = info?.budget;
+  const models = info?.models || {};
   const hint =
     info === undefined
       ? 'Checking the relay…'
@@ -119,15 +125,48 @@ function VoiceSection() {
         </Row>
       )}
       {info?.available && (
-        <Row
-          label="Realtime usage"
-          hint={`Ends after ${info.limits.idleSeconds}s of quiet, when the app is closed, or at ${Math.round(info.limits.maxSeconds / 60)} min. Daily cap ${info.limits.dailyMinutes} min.`}
-          last={!tts?.available}
-        >
-          <span className="tnum font-mono text-[12.5px] text-ink" data-rt-usage>
-            {usage}
-          </span>
-        </Row>
+        <>
+          <Row
+            label="Voice quality"
+            hint={`Standard (${models.standard || 'mini'}) costs about a third of Premium (${models.premium || 'gpt-realtime-2.1'}). Applies from the next call.`}
+          >
+            <Segmented
+              value={quality === 'premium' ? 'premium' : 'standard'}
+              onChange={setQuality}
+              options={[
+                { value: 'standard', label: 'Standard' },
+                { value: 'premium', label: 'Premium' },
+              ]}
+            />
+          </Row>
+          <Row label="Show what I say" hint="Writes your words on screen during a realtime call. Transcription is billed separately, so it’s off by default.">
+            <Segmented
+              value={transcript === true ? 'on' : 'off'}
+              onChange={(v) => setTranscript(v === 'on')}
+              options={[
+                { value: 'off', label: 'Off' },
+                { value: 'on', label: 'On' },
+              ]}
+            />
+          </Row>
+          <Row
+            label="Realtime today"
+            hint={`Ends after ${info.limits.idleSeconds}s of quiet, when the app is hidden, or at ${Math.round(info.limits.maxSeconds / 60)} min.${
+              budget ? ` Daily budget $${budget.cap.toFixed(2)} — past it, the basic voice.` : ''
+            }`}
+          >
+            <span className={`tnum font-mono text-[12.5px] ${budget?.warn ? 'text-warn' : 'text-ink'}`} data-rt-usage>
+              {usage}
+            </span>
+          </Row>
+          {week && (
+            <Row label="Last 7 days" hint={week.days.filter((d) => d.sessions).map((d) => `${d.day.slice(5)} $${d.usd.toFixed(2)}`).join(' · ') || 'No calls yet.'} last={!tts?.available}>
+              <span className="tnum font-mono text-[12.5px] text-ink" data-rt-week>
+                {weekUsage}
+              </span>
+            </Row>
+          )}
+        </>
       )}
       {tts?.available && (
         <Row

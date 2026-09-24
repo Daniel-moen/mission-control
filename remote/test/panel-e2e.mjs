@@ -457,7 +457,7 @@ main()
   })
   .finally(() => {
     for (const p of procs) p.kill('SIGKILL');
-    fs.rmSync(TMP, { recursive: true, force: true });
+    try { fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch {}
     console.log(`\n${passed} passed, ${failed} failed`);
     process.exit(failed ? 1 : 0);
   });

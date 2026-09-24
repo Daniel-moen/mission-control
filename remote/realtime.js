@@ -1,39 +1,79 @@
 // Realtime voice for the panel's talk mode (Mia view).
 //
-// The panel talks to OpenAI's Realtime API directly over WebRTC — audio never
-// passes through the relay. The relay's only jobs are to keep OPENAI_API_KEY
-// (Railway env, never sent to the client) and trade it for a short-lived
-// ephemeral client secret, with Mia's voice persona and tools baked into the
-// session, and to keep a per-day tally of minutes and tokens used.
+// The panel talks to OpenAI's Realtime API over WebRTC — audio never passes
+// through the relay. The relay keeps OPENAI_API_KEY (Railway env, never sent
+// to the client) and trades it for a short-lived ephemeral client secret with
+// Mia's voice persona and tools baked into the session; it relays the one SDP
+// offer/answer so it learns OpenAI's call id, and with that it can watch the
+// call (a "sideband" WebSocket: token usage from every response.done) and hang
+// it up (the watchdog). It keeps a durable per-day tally and a daily $ cap.
 //
-// Flow: panel POST /realtime/session → relay POST {OPENAI}/v1/realtime/client_secrets
-// → panel gets { value: "ek_…" } → panel POSTs its SDP offer to
-// {OPENAI}/v1/realtime/calls with that secret → audio + an "oai-events" data
-// channel. The tools (send_to_mia, get_status, answer_question) run in the
-// panel, which already holds the chat path and the snapshot.
+// Flow: panel POST /realtime/session {quality, transcript} → relay POST
+// {OPENAI}/v1/realtime/client_secrets → { id, callsUrl: /realtime/calls/<id> }
+// → panel POSTs its SDP offer there → relay forwards it to
+// {OPENAI}/v1/realtime/calls with the ephemeral secret, reads the call id off
+// the Location header, returns the answer → audio + an "oai-events" data
+// channel between the panel and OpenAI. The tools (send_to_mia, get_status,
+// answer_question, end_session) run in the panel.
 //
-// Env: OPENAI_API_KEY (required), REALTIME_MODEL (gpt-realtime-2.1),
-// REALTIME_VOICE (marin), REALTIME_REASONING (low), REALTIME_DAILY_MINUTES
-// (120 — minting stops past this), REALTIME_STORE (usage file),
+// Cost control: gpt-realtime-2.1-mini by default ("Standard"; "Premium" is
+// gpt-realtime-2.1), conversation truncated to the last few turns, semantic
+// VAD at low eagerness, input transcription only when the panel asks for the
+// on-screen transcript. Sessions end after 30 s quiet / 90 s awaiting Mia /
+// 10 min (panel), and the relay's watchdog hangs up a call whose panel stopped
+// reporting (iOS background, lock, crash) or that ran past the cap. A session
+// that never reports an end is counted as open until the cap.
+//
+// Env: OPENAI_API_KEY (required), REALTIME_MODEL (gpt-realtime-2.1-mini — the
+// Standard model), REALTIME_MODEL_PREMIUM (gpt-realtime-2.1), REALTIME_VOICE
+// (marin), REALTIME_REASONING (low), REALTIME_DAILY_USD (1.50 — new sessions
+// are refused past it; warns at 80%), REALTIME_DAILY_MINUTES (120),
+// REALTIME_STORE (usage file; defaults to the Railway volume when mounted),
 // OPENAI_BASE_URL (tests point this at a mock).
 //
 // HTTP (token auth, same as /api and /stt):
-//   GET  /realtime          → { ok, available, model, voice, limits, today, days }
-//   POST /realtime/session  → { ok, id, value, expiresAt, model, voice, callsUrl, limits }
-//   POST /realtime/usage    body { id, seconds, usage? } → { ok, today }
+//   GET  /realtime             → { ok, available, model, models, voice, limits, budget, today, week, days }
+//   POST /realtime/session     body { quality?, transcript? } → { ok, id, value, callsUrl, model, voice, limits, budget }
+//   POST /realtime/calls/:id   SDP offer (application/sdp) → SDP answer
+//   POST /realtime/usage       body { id, seconds, usage?, final? } → { ok, today }
 
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+let WebSocket = null;
+try {
+  WebSocket = require('ws');
+} catch {}
 
-// Per-session limits the panel enforces (and the relay clamps its tally to).
-const LIMITS = { idleSeconds: 60, awaitSeconds: 180, maxSeconds: 15 * 60 };
+// Per-session limits the panel enforces (and the relay's watchdog backs up).
+const LIMITS = { idleSeconds: 30, awaitSeconds: 90, maxSeconds: 10 * 60 };
+// The panel reports every 20 s; this long without a report and the call is
+// presumed orphaned (app backgrounded, screen locked, tab killed) and hung up.
+const SILENT_SECONDS = 60;
 
-// USD per 1M tokens for gpt-realtime-2.1 (developers.openai.com, 2026-09).
-// Only used for the running estimate in the usage log.
-const PRICE = { audioIn: 32, audioInCached: 0.4, audioOut: 64, textIn: 4, textInCached: 0.4, textOut: 24 };
+const MODELS = { standard: 'gpt-realtime-2.1-mini', premium: 'gpt-realtime-2.1' };
+
+// USD per 1M tokens (developers.openai.com, 2026-09). Unknown models are
+// priced as the premium one, so the cap errs on the safe side.
+const PRICES = {
+  'gpt-realtime-2.1': { audioIn: 32, audioInCached: 0.4, audioOut: 64, textIn: 4, textInCached: 0.4, textOut: 24 },
+  'gpt-realtime-2.1-mini': { audioIn: 10, audioInCached: 0.3, audioOut: 20, textIn: 0.6, textInCached: 0.06, textOut: 2.4 },
+  'gpt-realtime-mini': { audioIn: 10, audioInCached: 0.3, audioOut: 20, textIn: 0.6, textInCached: 0.06, textOut: 2.4 },
+};
+const priceFor = (model) => PRICES[model] || PRICES[MODELS.premium];
+const PRICE = PRICES[MODELS.standard];
+// Rough $/min for a session whose token usage never arrived (neither the
+// panel nor the sideband reported any), and for gpt-4o-mini-transcribe.
+const EST_PER_MIN = { 'gpt-realtime-2.1': 0.12, 'gpt-realtime-2.1-mini': 0.04, 'gpt-realtime-mini': 0.04 };
+const TRANSCRIBE_PER_MIN = 0.003;
+const TOKEN_KEYS = ['audioIn', 'audioInCached', 'audioOut', 'textIn', 'textInCached', 'textOut'];
+
+// Conversation kept per response: once what follows the instructions passes
+// this many tokens, the oldest half is dropped — only the last few turns are
+// re-sent (audio is ~10 tokens/s heard, ~20 tokens/s spoken).
+const TRUNCATION = { type: 'retention_ratio', retention_ratio: 0.5, token_limits: { post_instructions: 2000 } };
 
 const INSTRUCTIONS = `You are Mia, Daniel's personal assistant, speaking with him live by voice on his iPad or phone. You have his files, email, calendar, the web and a team of coding agents at your disposal through your tools. To Daniel you are one single assistant: you are the one who does the work.
 
@@ -92,111 +132,281 @@ const TOOLS = [
 ];
 
 const day = (t = Date.now()) => new Date(t).toISOString().slice(0, 10);
+const round = (n, p = 1000) => Math.round(n * p) / p;
+const emptyTokens = () => Object.fromEntries(TOKEN_KEYS.map((k) => [k, 0]));
 
-function createRealtime({ tokenOk, env = process.env, log = console, fetchImpl = globalThis.fetch } = {}) {
+// Token counts from a response.done event, folded into `acc` (same split as
+// the panel's addUsage: cached input is billed at a fraction).
+function addUsage(acc, u) {
+  if (!u) return acc;
+  const i = u.input_token_details || {};
+  const o = u.output_token_details || {};
+  const c = i.cached_tokens_details || {};
+  acc.audioInCached += c.audio_tokens || 0;
+  acc.textInCached += c.text_tokens || 0;
+  acc.audioIn += Math.max(0, (i.audio_tokens || 0) - (c.audio_tokens || 0));
+  acc.textIn += Math.max(0, (i.text_tokens || 0) - (c.text_tokens || 0));
+  acc.audioOut += o.audio_tokens || 0;
+  acc.textOut += o.text_tokens || 0;
+  return acc;
+}
+
+function createRealtime({ tokenOk, env = process.env, log = console, fetchImpl = globalThis.fetch, WS = WebSocket } = {}) {
   const key = env.OPENAI_API_KEY || '';
   const base = (env.OPENAI_BASE_URL || 'https://api.openai.com').replace(/\/+$/, '');
-  const model = env.REALTIME_MODEL || 'gpt-realtime-2.1';
+  const models = { standard: env.REALTIME_MODEL || MODELS.standard, premium: env.REALTIME_MODEL_PREMIUM || MODELS.premium };
+  const model = models.standard;
   const voice = env.REALTIME_VOICE || 'marin';
   const reasoning = env.REALTIME_REASONING || 'low';
   const dailyMinutes = Number(env.REALTIME_DAILY_MINUTES) || 120;
-  const storePath = path.resolve(env.REALTIME_STORE || './realtime-usage.json');
-  const limits = { ...LIMITS, dailyMinutes };
+  const dailyUsd = Number(env.REALTIME_DAILY_USD) || 1.5;
+  const volume = env.RAILWAY_VOLUME_MOUNT_PATH || '';
+  const storePath = path.resolve(env.REALTIME_STORE || (volume ? path.join(volume, 'realtime-usage.json') : './realtime-usage.json'));
+  const silentSeconds = Number(env.REALTIME_SILENT_SECONDS) || SILENT_SECONDS;
+  const limits = { ...LIMITS, dailyMinutes, dailyUsd };
 
-  if (key) log.log(`realtime: ${model} / ${voice}`);
+  if (key) log.log(`realtime: ${models.standard} (premium ${models.premium}) / ${voice} · cap $${dailyUsd}/day · tally ${storePath}`);
   else log.warn('realtime: OPENAI_API_KEY is not set — talk mode will use the basic voice.');
 
-  // ---- usage tally: { days: { 'YYYY-MM-DD': { sessions, seconds, tokens:{…}, usd } } }
-  let store = { days: {} };
+  // ---- durable tally ------------------------------------------------------------
+  // { days: { 'YYYY-MM-DD': { sessions, seconds, tokens, usd, warned } },
+  //   open: { id: session } — so a redeploy mid-call still settles it,
+  //   log: [ ended sessions, newest last ] }
+  let store = { days: {}, open: {}, log: [] };
   try {
-    store = JSON.parse(fs.readFileSync(storePath, 'utf8'));
-    if (!store || typeof store.days !== 'object') store = { days: {} };
+    const s = JSON.parse(fs.readFileSync(storePath, 'utf8'));
+    if (s && typeof s.days === 'object') store = { days: s.days, open: s.open || {}, log: Array.isArray(s.log) ? s.log : [] };
   } catch {}
-  const sessions = new Map(); // id → { day, seconds, usage }
+  const sessions = new Map(Object.entries(store.open)); // id → session (see mintSession)
   let saveTimer = null;
+  function flushStore() {
+    const keys = Object.keys(store.days).sort();
+    for (const k of keys.slice(0, Math.max(0, keys.length - 60))) delete store.days[k];
+    store.log = store.log.slice(-300);
+    store.open = Object.fromEntries([...sessions].map(([id, s]) => [id, { ...s, ws: undefined, secret: undefined }]));
+    try {
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      const tmp = `${storePath}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(store, (k, v) => (k === 'ws' ? undefined : v), 2));
+      fs.renameSync(tmp, storePath);
+    } catch (e) {
+      log.error('realtime: could not save usage:', e.message);
+    }
+  }
   function save() {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-      // Keep ~60 days.
-      const keys = Object.keys(store.days).sort();
-      for (const k of keys.slice(0, Math.max(0, keys.length - 60))) delete store.days[k];
-      try {
-        const tmp = `${storePath}.tmp`;
-        fs.writeFileSync(tmp, JSON.stringify(store, null, 2));
-        fs.renameSync(tmp, storePath);
-      } catch (e) {
-        log.error('realtime: could not save usage:', e.message);
-      }
-    }, 500);
+    saveTimer = setTimeout(flushStore, 500);
     saveTimer.unref?.();
   }
   function dayRec(d) {
-    if (!store.days[d]) store.days[d] = { sessions: 0, seconds: 0, tokens: { audioIn: 0, audioInCached: 0, audioOut: 0, textIn: 0, textInCached: 0, textOut: 0 }, usd: 0 };
+    if (!store.days[d]) store.days[d] = { sessions: 0, seconds: 0, tokens: emptyTokens(), usd: 0 };
     return store.days[d];
   }
+
+  // What a session costs so far: its tokens at its model's prices (the larger
+  // of the panel's and the sideband's running totals, key by key — both count
+  // the same responses), or, with no tokens at all, a per-minute estimate.
+  function sessionTokens(s) {
+    const t = emptyTokens();
+    for (const k of TOKEN_KEYS) t[k] = Math.max(s.usage?.[k] || 0, s.side?.[k] || 0);
+    return t;
+  }
+  function sessionUsd(s, seconds = s.seconds) {
+    const t = sessionTokens(s);
+    const p = priceFor(s.model);
+    let usd = TOKEN_KEYS.reduce((a, k) => a + (t[k] * p[k]) / 1e6, 0);
+    if (!TOKEN_KEYS.some((k) => t[k] > 0)) usd = (seconds / 60) * (EST_PER_MIN[s.model] || EST_PER_MIN[MODELS.premium]);
+    if (s.transcript) usd += (seconds / 60) * TRANSCRIBE_PER_MIN;
+    return usd;
+  }
+  const elapsed = (s, now = Date.now()) => Math.min(LIMITS.maxSeconds, Math.max(0, (now - (s.connectedAt || s.at)) / 1000));
+
   function summary(d = day()) {
-    const r = store.days[d];
-    if (!r) return { day: d, sessions: 0, minutes: 0, usd: 0 };
-    return { day: d, sessions: r.sessions, minutes: Math.round((r.seconds / 60) * 10) / 10, usd: Math.round(r.usd * 1000) / 1000 };
+    const r = store.days[d] || { sessions: 0, seconds: 0, usd: 0, tokens: emptyTokens() };
+    let seconds = r.seconds;
+    let usd = r.usd;
+    let open = 0;
+    // Calls still running count at what they've cost so far.
+    for (const s of sessions.values()) {
+      if (s.day !== d) continue;
+      open += 1;
+      const sec = Math.max(s.seconds, s.connectedAt ? elapsed(s) : 0);
+      seconds += sec;
+      usd += sessionUsd(s, sec);
+    }
+    return { day: d, sessions: r.sessions, open, minutes: round(seconds / 60, 10), usd: round(usd), tokens: r.tokens };
+  }
+  function week() {
+    const out = [];
+    for (let i = 6; i >= 0; i--) out.push(summary(day(Date.now() - i * 86400e3)));
+    return {
+      days: out.map(({ day: d, sessions: n, minutes, usd }) => ({ day: d, sessions: n, minutes, usd })),
+      sessions: out.reduce((a, x) => a + x.sessions, 0),
+      minutes: round(out.reduce((a, x) => a + x.minutes, 0), 10),
+      usd: round(out.reduce((a, x) => a + x.usd, 0)),
+    };
+  }
+  function budget() {
+    const used = summary().usd;
+    return { cap: dailyUsd, used, left: round(Math.max(0, dailyUsd - used)), warn: used >= dailyUsd * 0.8, over: used >= dailyUsd };
   }
 
-  // The panel reports running totals for its session; only the growth since
-  // the last report is added, so a repeated or late report can't double-count.
-  function report(id, seconds, usage) {
+  // ---- ending a session -----------------------------------------------------------
+  function finish(id, why, seconds) {
     const s = sessions.get(id);
-    if (!s) return false;
+    if (!s) return;
+    sessions.delete(id);
+    try {
+      s.ws?.close();
+    } catch {}
+    const sec = Math.max(0, Math.min(LIMITS.maxSeconds + 30, seconds));
+    const usd = sessionUsd(s, sec);
+    const t = sessionTokens(s);
     const rec = dayRec(s.day);
-    const sec = Math.max(0, Math.min(LIMITS.maxSeconds + 30, Number(seconds) || 0));
-    if (sec > s.seconds) {
-      rec.seconds += sec - s.seconds;
-      s.seconds = sec;
+    rec.seconds += sec;
+    rec.usd += usd;
+    for (const k of TOKEN_KEYS) rec.tokens[k] = (rec.tokens[k] || 0) + t[k];
+    const tokIn = t.audioIn + t.audioInCached + t.textIn + t.textInCached;
+    const tokOut = t.audioOut + t.textOut;
+    const entry = { id, day: s.day, at: s.at, model: s.model, why, seconds: Math.round(sec), tokens: t, usd: round(usd, 1e5), source: s.sideSeen ? 'sideband' : TOKEN_KEYS.some((k) => s.usage[k]) ? 'panel' : 'estimate' };
+    store.log.push(entry);
+    log.log(
+      `realtime: session ${id} ended (${why}) · ${s.model} · ${(sec / 60).toFixed(2)} min · tokens in ${tokIn} (cached ${t.audioInCached + t.textInCached}) out ${tokOut} · $${usd.toFixed(4)} (${entry.source}) · today $${summary().usd.toFixed(3)} of $${dailyUsd}`,
+    );
+    checkWarn();
+    save();
+  }
+  function checkWarn() {
+    const b = budget();
+    const rec = dayRec(day());
+    if (b.warn && !rec.warned) {
+      rec.warned = true;
+      log.warn(`realtime: ${Math.round((b.used / b.cap) * 100)}% of today's $${b.cap} voice budget used ($${b.used})`);
     }
-    if (usage && typeof usage === 'object') {
-      for (const k of Object.keys(PRICE)) {
-        const v = Math.max(0, Number(usage[k]) || 0);
-        const prev = s.usage[k] || 0;
-        if (v > prev) {
-          rec.tokens[k] = (rec.tokens[k] || 0) + (v - prev);
-          rec.usd += ((v - prev) * PRICE[k]) / 1e6;
-          s.usage[k] = v;
-        }
+  }
+
+  async function hangup(s) {
+    if (!s.callId || !key) return false;
+    try {
+      const r = await fetchImpl(`${base}/v1/realtime/calls/${encodeURIComponent(s.callId)}/hangup`, { method: 'POST', headers: { authorization: `Bearer ${key}` } });
+      return r.ok || r.status === 404;
+    } catch (e) {
+      log.warn('realtime: hangup failed:', e.message);
+      return false;
+    }
+  }
+
+  // The watchdog: the panel is supposed to end its call (quiet, cap, app
+  // hidden) and say so. When it goes silent instead, the relay hangs the call
+  // up itself; a call it can't hang up (no call id) is counted to the cap.
+  async function watchdog() {
+    const now = Date.now();
+    for (const [id, s] of [...sessions]) {
+      if (!s.connectedAt) {
+        // Minted but never connected: the secret expires in 2 minutes.
+        if (now - s.at > 150e3) finish(id, 'never connected', 0);
+        continue;
+      }
+      const age = (now - s.connectedAt) / 1000;
+      const silent = (now - (s.lastReport || s.connectedAt)) / 1000;
+      if (age >= LIMITS.maxSeconds + 20) {
+        await hangup(s);
+        finish(id, 'watchdog: max length', LIMITS.maxSeconds);
+      } else if (silent >= silentSeconds) {
+        const hung = await hangup(s);
+        if (hung) finish(id, 'watchdog: panel went silent', age);
+        else s.silentNoHangup = true; // leave it open: counted until the cap
       }
     }
-    save();
+  }
+  const dog = setInterval(() => watchdog().catch((e) => log.error('realtime: watchdog:', e.message)), 10e3);
+  dog.unref?.();
+  // Calls left open by the previous process (a deploy mid-call).
+  for (const s of sessions.values()) {
+    s.ws = null;
+    s.lastReport = Math.min(s.lastReport || s.at, Date.now() - silentSeconds * 1000);
+  }
+
+  // The panel reports running totals; only the growth counts, so a repeated
+  // or late report can't double-count.
+  function report(id, seconds, usage, final) {
+    const s = sessions.get(id);
+    if (!s) return store.log.some((e) => e.id === id); // already settled: fine
+    s.lastReport = Date.now();
+    const sec = Math.max(0, Math.min(LIMITS.maxSeconds + 30, Number(seconds) || 0));
+    if (sec > s.seconds) s.seconds = sec;
+    if (usage && typeof usage === 'object') for (const k of TOKEN_KEYS) s.usage[k] = Math.max(s.usage[k] || 0, Number(usage[k]) || 0);
+    if (final) {
+      // Give the sideband a moment for the last response.done.
+      const why = `panel: ${String(final === true ? 'ended' : final).slice(0, 24)}`;
+      if (s.ws) setTimeout(() => finish(id, why, s.seconds), 2500).unref?.();
+      else finish(id, why, s.seconds);
+    } else {
+      checkWarn();
+      save();
+    }
     return true;
   }
 
-  function sessionConfig() {
-    return {
+  // The sideband: the relay's own view of the call's events — usage from each
+  // response.done, whatever the panel manages to report.
+  function watch(s) {
+    if (!WS || !s.callId || !/^https:/.test(base)) return;
+    let ws;
+    try {
+      ws = new WS(`${base.replace(/^http/, 'ws')}/v1/realtime?call_id=${encodeURIComponent(s.callId)}`, { headers: { authorization: `Bearer ${key}` } });
+    } catch (e) {
+      log.warn('realtime: sideband failed:', e.message);
+      return;
+    }
+    s.ws = ws;
+    ws.on('message', (buf) => {
+      let ev;
+      try {
+        ev = JSON.parse(buf.toString());
+      } catch {
+        return;
+      }
+      if (ev.type === 'response.done' && ev.response?.usage) {
+        s.side = addUsage(s.side || emptyTokens(), ev.response.usage);
+        s.sideSeen = true;
+        save();
+      }
+    });
+    ws.on('error', (e) => log.warn(`realtime: sideband ${s.callId}:`, e.message));
+    ws.on('close', () => {
+      if (s.ws === ws) s.ws = null;
+    });
+  }
+
+  function sessionConfig({ model: m, transcript }) {
+    const input = {
+      noise_reduction: { type: 'near_field' },
+      // Semantic VAD waits for Daniel to finish a thought instead of firing on
+      // any sound; low eagerness is the least trigger-happy setting.
+      turn_detection: { type: 'semantic_vad', eagerness: 'low', create_response: true, interrupt_response: true },
+    };
+    // Billed separately (gpt-4o-mini-transcribe) and only used for the
+    // on-screen transcript — off unless the panel asks for it.
+    if (transcript) input.transcription = { model: 'gpt-4o-mini-transcribe', language: 'en' };
+    const cfg = {
       type: 'realtime',
-      model,
+      model: m,
       instructions: INSTRUCTIONS,
       output_modalities: ['audio'],
-      audio: {
-        input: {
-          noise_reduction: { type: 'near_field' },
-          transcription: { model: 'gpt-4o-mini-transcribe', language: 'en' },
-          turn_detection: {
-            type: 'server_vad',
-            threshold: 0.55,
-            prefix_padding_ms: 300,
-            silence_duration_ms: 600,
-            create_response: true,
-            interrupt_response: true,
-          },
-        },
-        output: { voice },
-      },
+      audio: { input, output: { voice } },
       tools: TOOLS,
       tool_choice: 'auto',
-      reasoning: { effort: reasoning },
+      truncation: TRUNCATION,
       // Hard stop on a rambling reply. Covers the spoken audio as well as
       // text and tool calls, so it stays roomy enough for two sentences.
       max_output_tokens: 200,
     };
+    if (/realtime-2/.test(m)) cfg.reasoning = { effort: reasoning };
+    return cfg;
   }
 
-  async function mint() {
+  async function mint(opts) {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 15000);
     try {
@@ -207,7 +417,7 @@ function createRealtime({ tokenOk, env = process.env, log = console, fetchImpl =
           'content-type': 'application/json',
           'OpenAI-Safety-Identifier': crypto.createHash('sha256').update('mission-control:daniel').digest('hex').slice(0, 32),
         },
-        body: JSON.stringify({ expires_after: { anchor: 'created_at', seconds: 120 }, session: sessionConfig() }),
+        body: JSON.stringify({ expires_after: { anchor: 'created_at', seconds: 120 }, session: sessionConfig(opts) }),
         signal: ctl.signal,
       });
       const data = await r.json().catch(() => ({}));
@@ -230,22 +440,23 @@ function createRealtime({ tokenOk, env = process.env, log = console, fetchImpl =
     const bearer = h.startsWith('Bearer ') ? h.slice(7) : '';
     return tokenOk(bearer || url.searchParams.get('token') || '');
   }
-  function readJson(req) {
+  function readBody(req, max = 16384) {
     return new Promise((resolve) => {
       let body = '';
       req.on('data', (c) => {
         body += c;
-        if (body.length > 16384) req.destroy();
+        if (body.length > max) req.destroy();
       });
-      req.on('end', () => {
-        try {
-          resolve(JSON.parse(body || '{}'));
-        } catch {
-          resolve({});
-        }
-      });
-      req.on('error', () => resolve({}));
+      req.on('end', () => resolve(body));
+      req.on('error', () => resolve(''));
     });
+  }
+  async function readJson(req) {
+    try {
+      return JSON.parse((await readBody(req)) || '{}');
+    } catch {
+      return {};
+    }
   }
 
   async function handle(req, res, url) {
@@ -254,43 +465,85 @@ function createRealtime({ tokenOk, env = process.env, log = console, fetchImpl =
 
     if (route === '/realtime' && req.method === 'GET') {
       const days = Object.keys(store.days).sort().slice(-14).map((d) => summary(d));
-      return json(res, 200, { ok: true, available: !!key, model, voice, limits, today: summary(), days });
+      return json(res, 200, { ok: true, available: !!key, model, models, voice, limits, budget: budget(), today: summary(), week: week(), days });
     }
 
     if (route === '/realtime/session' && req.method === 'POST') {
       if (!key) return json(res, 503, { ok: false, error: 'OPENAI_API_KEY is not set on the relay' });
+      const body = await readJson(req);
+      const b = budget();
+      if (b.over) {
+        log.warn(`realtime: refused a session — today's $${b.cap} voice budget is spent ($${b.used})`);
+        return json(res, 429, { ok: false, error: `Today's voice budget is spent ($${b.used.toFixed(2)} of $${b.cap.toFixed(2)})`, budget: b });
+      }
       const today = summary();
-      if (today.minutes >= dailyMinutes) return json(res, 429, { ok: false, error: `Daily realtime limit reached (${dailyMinutes} min)` });
+      if (today.minutes >= dailyMinutes) return json(res, 429, { ok: false, error: `Daily realtime limit reached (${dailyMinutes} min)`, budget: b });
+      const quality = body.quality === 'premium' ? 'premium' : 'standard';
+      const opts = { model: models[quality], transcript: body.transcript === true };
       let secret;
       try {
-        secret = await mint();
+        secret = await mint(opts);
       } catch (e) {
         log.error('realtime: mint failed:', e.message);
         return json(res, 502, { ok: false, error: `OpenAI refused the session: ${e.message}` });
       }
       const id = `rt_${Date.now().toString(36)}${crypto.randomBytes(3).toString('hex')}`;
-      sessions.set(id, { day: day(), seconds: 0, usage: {}, at: Date.now() });
+      sessions.set(id, { day: day(), at: Date.now(), model: opts.model, transcript: opts.transcript, secret: secret.value, seconds: 0, usage: emptyTokens(), callId: '', connectedAt: 0, lastReport: 0 });
       dayRec(day()).sessions += 1;
       save();
-      // Forget sessions that can no longer report.
-      for (const [k, s] of sessions) if (Date.now() - s.at > 2 * 3600e3) sessions.delete(k);
-      log.log(`realtime: session ${id} minted (${today.minutes} min used today)`);
+      log.log(`realtime: session ${id} minted · ${opts.model}${opts.transcript ? ' + transcript' : ''} · today ${today.minutes} min, $${b.used.toFixed(3)} of $${b.cap}`);
       return json(res, 200, {
         ok: true,
         id,
         value: secret.value,
         expiresAt: secret.expires_at || null,
-        model,
+        model: opts.model,
+        quality,
+        transcript: opts.transcript,
         voice,
-        callsUrl: `${base}/v1/realtime/calls`,
+        callsUrl: `/realtime/calls/${id}`,
         limits,
+        budget: b,
       });
+    }
+
+    const callRoute = route.match(/^\/realtime\/calls\/([\w-]+)$/);
+    if (callRoute && req.method === 'POST') {
+      const s = sessions.get(callRoute[1]);
+      if (!s || !s.secret) return json(res, 404, { ok: false, error: 'unknown or used session' });
+      const offer = await readBody(req, 65536);
+      const secret = s.secret;
+      s.secret = ''; // one call per session
+      let r;
+      try {
+        r = await fetchImpl(`${base}/v1/realtime/calls`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/sdp' },
+          body: offer,
+          signal: AbortSignal.timeout(15000),
+        });
+      } catch (e) {
+        return json(res, 504, { ok: false, error: `OpenAI unreachable: ${e.message}` });
+      }
+      const answer = await r.text();
+      if (!r.ok) {
+        log.error(`realtime: SDP refused (${r.status}):`, answer.slice(0, 200));
+        res.writeHead(r.status, { 'content-type': 'text/plain' });
+        return res.end(answer.slice(0, 500));
+      }
+      s.callId = (r.headers.get('location') || '').split('/').filter(Boolean).pop() || '';
+      s.connectedAt = Date.now();
+      s.lastReport = Date.now();
+      watch(s);
+      save();
+      res.writeHead(r.status === 201 ? 201 : 200, { 'content-type': 'application/sdp', 'cache-control': 'no-store' });
+      return res.end(answer);
     }
 
     if (route === '/realtime/usage' && req.method === 'POST') {
       const body = await readJson(req);
-      if (!report(String(body.id || ''), body.seconds, body.usage)) return json(res, 404, { ok: false, error: 'unknown session' });
-      return json(res, 200, { ok: true, today: summary() });
+      if (!report(String(body.id || ''), body.seconds, body.usage, body.final)) return json(res, 404, { ok: false, error: 'unknown session' });
+      return json(res, 200, { ok: true, today: summary(), budget: budget() });
     }
 
     return json(res, 404, { ok: false, error: 'not found' });
@@ -298,8 +551,13 @@ function createRealtime({ tokenOk, env = process.env, log = console, fetchImpl =
 
   return {
     handle,
-    info: () => ({ available: !!key, model, today: summary() }),
+    info: () => ({ available: !!key, model, today: summary(), budget: budget() }),
+    watchdog,
+    close() {
+      clearInterval(dog);
+      flushStore();
+    },
   };
 }
 
-module.exports = { createRealtime, INSTRUCTIONS, TOOLS, LIMITS };
+module.exports = { createRealtime, INSTRUCTIONS, TOOLS, LIMITS, MODELS, PRICES, PRICE, addUsage };
