@@ -170,6 +170,11 @@ final class MiaManager: ObservableObject {
     private func syncStateSettings() {
         updateState { s in
             s["enabled"] = settings.miaEnabled
+            // A session launched by an older build never recorded what it runs
+            // on: it's whatever `model` said then, before the default moves.
+            if s["runningModel"] == nil, s["startedAt"] != nil, let m = s["model"] as? String {
+                s["runningModel"] = m
+            }
             s["model"] = settings.miaModel
             if s["restarts"] == nil { s["restarts"] = 0 }
             if !settings.miaReadUpTo.isEmpty { s["readUpTo"] = settings.miaReadUpTo }
@@ -267,6 +272,9 @@ final class MiaManager: ObservableObject {
             }
             s["startedAt"] = Self.iso(now)
             s["model"] = settings.miaModel
+            // What this session actually runs on; `model` can move on (the
+            // panel's picker) while she keeps running on this one.
+            s["runningModel"] = settings.miaModel
             s["enabled"] = true
             s["sessionId"] = NSNull()
         }
@@ -837,6 +845,23 @@ final class MiaManager: ObservableObject {
         return Outcome(ok: true, detail: "Mia stopped")
     }
 
+    /// Stop her session and bring a fresh one up at once (the panel's
+    /// "Restart Mia now" after a model switch). Unlike stop + start this skips
+    /// the crash backoff, and the new session opens on "You were restarted".
+    func restart() -> Outcome {
+        guard settings.miaEnabled else { return start() }
+        if let manager {
+            for run in manager.agents where run.isMia && run.processAlive { manager.destroy(run) }
+        }
+        // Her going away is deliberate: not an exit to back off from.
+        miaUpSince = nil
+        launchPendingUntil = nil
+        consecutiveExits = 0
+        // A moment for the old process to exit before the new one opens.
+        nextLaunchAt = Date().addingTimeInterval(2)
+        return Outcome(ok: true, detail: "Restarting Mia on \(settings.miaModel)")
+    }
+
     func setModel(_ raw: String) -> Outcome {
         let model = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !model.isEmpty else { return Outcome(ok: false, detail: "No model") }
@@ -924,6 +949,9 @@ final class MiaManager: ObservableObject {
             "online": live != nil,
             "sessionId": (live?.sessionId ?? state["sessionId"] as? String).map { $0 as Any } ?? NSNull(),
             "model": settings.miaModel,
+            // The model her live session was launched on (null when she's
+            // down): differs from `model` until she restarts after a switch.
+            "runningModel": live != nil ? (state["runningModel"] as? String).map { $0 as Any } ?? NSNull() : NSNull(),
             "restarts": (state["restarts"] as? Int) ?? 0,
             "readUpTo": settings.miaReadUpTo.isEmpty ? NSNull() as Any : settings.miaReadUpTo,
             "messages": Array(msgs.suffix(200)),
@@ -1164,7 +1192,7 @@ RESEARCH
 
 TASKS
 - `mia task list / show / add / set / note` manage the list. Statuses: queued → asking → running → checking → done | failed | cancelled.
-- For each queued task: decide if the brief is clear enough. If not, `mia ask` (status becomes asking). If yes, pick the folder (Daniel's projects are under ~; check the task's dir, ask if unknown), write a precise brief, and `mia dispatch <id> --dir <folder> --stdin` with the brief on stdin. The executor is an Opus Claude Code session in that folder. Never run two tasks in the same folder at once. A task you can finish yourself (no code) you just do, then mark it done.
+- For each queued task: decide if the brief is clear enough. If not, `mia ask` (status becomes asking). If yes, pick the folder (Daniel's projects are under ~; check the task's dir, ask if unknown), write a precise brief, and `mia dispatch <id> --dir <folder> --stdin` with the brief on stdin. The executor is a Claude Code session in that folder, on your own model unless you pass `--model`. Never run two tasks in the same folder at once. A task you can finish yourself (no code) you just do, then mark it done.
 - When `[MC] Executor for task <id> finished` arrives, read the report, check it (you may read files and run tests, never edit), then `mia task set <id> status done` and `mia notify` with a one-line summary and the obvious next step — or `mia tell <id> "…"` to send the executor corrections and keep it running.
 - Keep task notes short and factual with `mia task note`.
 

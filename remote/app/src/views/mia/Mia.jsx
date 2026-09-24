@@ -1,8 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import {
-  useMC, miaStart, miaStop, miaSetModel, miaPushTest, miaOpenQuestions,
-  MIA_MODELS, MIA_DEFAULT_MODEL,
+  useMC, miaStart, miaStop, miaRestart, miaSetModel, miaPushTest, miaOpenQuestions,
+  MIA_MODELS, miaModelLabel,
 } from '../../lib/store.js';
 import { enablePush } from '../../lib/push.js';
 import { modelLabel } from '../../lib/models.js';
@@ -11,7 +11,6 @@ import { spring } from '../../lib/motion.js';
 import Icon from '../../ui/Icon.jsx';
 import Button from '../../ui/Button.jsx';
 import IconButton from '../../ui/IconButton.jsx';
-import Select from '../../ui/Select.jsx';
 import Segmented from '../../ui/Segmented.jsx';
 import EmptyState from '../../ui/EmptyState.jsx';
 import Thread from './Thread.jsx';
@@ -137,20 +136,110 @@ function StartStop({ mia }) {
   );
 }
 
+// The model picker in the header's top-right corner. It shows the model the
+// Mac has saved for her (the snapshot's `model` — never a panel default) and a
+// pick goes to the host as miaSetModel, which applies from her next start. A
+// native <select> sits invisibly over the pill, so iPad gets the system picker.
 function ModelPick({ mia }) {
   const models = useMC((s) => s.models);
-  const value = mia?.model || MIA_DEFAULT_MODEL;
-  const options = MIA_MODELS.some((m) => m.value === value)
+  const value = mia?.model || '';
+  const label = miaModelLabel(value) || (value ? modelLabel(value, models) : 'Model');
+  const options = !value || MIA_MODELS.some((m) => m.value === value)
     ? MIA_MODELS
-    : [...MIA_MODELS, { value, label: modelLabel(value, models) }];
+    : [...MIA_MODELS, { value, label }];
   return (
-    <Select
-      className="w-[118px] flex-none"
-      aria-label="Mia's model"
-      value={value}
-      onChange={(v) => v !== value && miaSetModel(v)}
-      options={options}
-    />
+    <label
+      className="pill glass-soft glass-soft-hover relative inline-flex h-8 flex-none cursor-pointer items-center gap-1 pl-3 pr-2 text-[12.5px] text-ink transition-colors"
+      title="Mia's model — a change applies from her next start"
+      data-mia-model={value}
+    >
+      <span className="whitespace-nowrap">{label}</span>
+      <Icon name="chevronDown" size={13} className="text-ink3" />
+      <select
+        aria-label="Mia's model"
+        value={value}
+        onChange={(e) => e.target.value && e.target.value !== value && miaSetModel(e.target.value)}
+        className="absolute inset-0 cursor-pointer appearance-none opacity-0"
+      >
+        {!value && (
+          <option value="" disabled>
+            Model
+          </option>
+        )}
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+// After a switch she keeps running on the old model until she restarts: say
+// so, and offer the restart. Driven by the host's runningModel vs model; a Mac
+// app that doesn't report runningModel falls back to "switched from this panel
+// while she was online".
+function RestartOffer({ mia }) {
+  const [switched, setSwitched] = useState(null); // model picked here while she ran (old hosts)
+  const [restarting, setRestarting] = useState(false);
+  const timer = useRef(null);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const prev = useRef(mia?.model);
+  useEffect(() => {
+    if (prev.current && mia?.model && prev.current !== mia.model && mia.online) setSwitched(mia.model);
+    prev.current = mia?.model;
+  }, [mia?.model, mia?.online]);
+  const sid = useRef(mia?.sessionId);
+  useEffect(() => {
+    // A new session (or her going down) ends the offer for old hosts.
+    if (mia?.sessionId !== sid.current || !mia?.online) setSwitched(null);
+    sid.current = mia?.sessionId;
+  }, [mia?.sessionId, mia?.online]);
+
+  const running = mia?.runningModel || '';
+  const stale =
+    !!mia?.enabled && !!mia.model &&
+    (running ? mia.online && running !== mia.model : !!switched && switched === mia.model);
+  // "Restarting…" holds while she's down and ends once she's back on it.
+  const back = !!mia?.online && (running ? running === mia.model : !switched);
+  useEffect(() => {
+    if (back) {
+      clearTimeout(timer.current);
+      setRestarting(false);
+    }
+  }, [back, mia?.sessionId]);
+  if (!stale && !restarting) return null;
+  const now = miaModelLabel(mia.model) || mia.model;
+  const was = running ? miaModelLabel(running) || running : '';
+  return (
+    <div
+      data-mia-restart={restarting ? 'restarting' : 'offer'}
+      className="glass-soft flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl2 px-3.5 py-2.5 text-[12.5px] text-ink2"
+    >
+      <span className="min-w-0 flex-1">
+        {restarting
+          ? `Restarting Mia on ${now}…`
+          : was
+            ? `Mia is still running on ${was}. ${now} applies from her next start.`
+            : `${now} applies from Mia's next start.`}
+      </span>
+      {!restarting && (
+        <Button
+          size="sm"
+          variant="primary"
+          icon="refresh"
+          onClick={() => {
+            if (!miaRestart()) return;
+            setRestarting(true);
+            clearTimeout(timer.current);
+            timer.current = setTimeout(() => setRestarting(false), 120000);
+          }}
+        >
+          Restart Mia now
+        </Button>
+      )}
+    </div>
   );
 }
 
@@ -216,7 +305,7 @@ export default function Mia({ onOpenAgent, onClose, focusTask }) {
 
   const controls = (
     <>
-      {mia && <ModelPick mia={mia} />}
+      {!wide && talkSupported && mia && <WakeToggle />}
       <StartStop mia={mia} />
       <Notifications />
     </>
@@ -232,7 +321,7 @@ export default function Mia({ onOpenAgent, onClose, focusTask }) {
           </h2>
           <Presence mia={mia} link={link} />
           <span className="flex-1" />
-          {talkSupported && mia && !talking && <WakeToggle />}
+          {wide && talkSupported && mia && !talking && <WakeToggle />}
           {talkButton}
           {wide && !talking && <div className="flex flex-wrap items-center justify-end gap-2">{controls}</div>}
           {wide && mia && !talking && (
@@ -244,9 +333,11 @@ export default function Mia({ onOpenAgent, onClose, focusTask }) {
               onClick={toggleTasks}
             />
           )}
+          {mia && <ModelPick mia={mia} />}
           {onClose && <IconButton icon="close" label="Close" size="sm" variant="glass" onClick={onClose} />}
         </div>
         {!wide && !talking && <div className="noscroll -mx-4 flex items-center gap-2 overflow-x-auto px-4 sm:-mx-5 sm:px-5">{controls}</div>}
+        {mia && <RestartOffer mia={mia} />}
       </header>
 
       {!snapshot ? (

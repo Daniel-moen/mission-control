@@ -3,15 +3,19 @@ import { getMC } from './store.js';
 import { getTalk } from './talkSession.js';
 import { speak, stopSpeaking, unlockSpeech, newAudioContext, ttsSupported, blessedAudio } from './voice.js';
 import { spokenFor, isMiaMsg } from '../views/mia/TalkParts.jsx';
+import { speakable, firstSentences } from './spoken.js';
 
 // ANNOUNCEMENTS — Mia speaks up on an open panel even when talk mode is off
 // ("Hey Daniel, I have a question for you…"), docs/mia.md §8.3.
 //
-// Which messages: Settings › Announcements —
-//   important (default): anything Mia flagged `--speak`, every `mia ask` and
-//                        every `mia notify`;
-//   all:                 every message from her;
+// Which messages: Settings › Announcements › "Speak Mia's updates" (stored per
+// device in localStorage — the sound comes out of this device):
+//   important (default): "Important only" — anything Mia flagged `--speak`,
+//                        every `mia ask` and every `mia notify`;
+//   all:                 "Everything" — every message from her (`mia say` too);
 //   off:                 none.
+// Short-spoken: a long message is read as its first sentence + "More on the
+// panel." (firstSentences), markdown and URLs stripped (speakable).
 // Never while talk mode is on (the talk engine reads her out already), never
 // when the app is in the background (Web Push covers that), never during
 // quiet hours (default 22:00–07:00), and only on the panel the relay marks as
@@ -67,12 +71,19 @@ export function wantsAnnounce(m, mode = announceMode()) {
   return !!m.speak || m.kind === 'question' || m.kind === 'notify';
 }
 
+const MORE = ' More on the panel.';
+
 export function announceText(m) {
   const said = spokenFor(m);
-  if (m.speak || m.kind === 'chat') return said;
-  const short = said.length <= 200;
-  if (m.kind === 'question') return `Hey Daniel, I have a question for you. ${short ? said : 'It’s on the panel.'}`;
-  return short ? `Hey Daniel, ${said.charAt(0).toLowerCase()}${said.slice(1)}` : 'Hey Daniel, I have an update for you. It’s on the panel.';
+  if (m.kind === 'question') {
+    const q = speakable(said);
+    return `Hey Daniel, I have a question for you. ${q.length <= 200 ? q : 'It’s on the panel.'}`;
+  }
+  const { text, cut } = firstSentences(said);
+  if (!text) return '';
+  const more = cut ? MORE : '';
+  if (m.speak || m.kind === 'chat') return text + more;
+  return `Hey Daniel, ${text.charAt(0).toLowerCase()}${text.slice(1)}${more}`;
 }
 
 // ---- audio unlock + chime --------------------------------------------------------

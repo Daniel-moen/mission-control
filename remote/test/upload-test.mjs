@@ -82,7 +82,7 @@ const health = async (port = PORT) => (await fetch(`http://localhost:${port}/hea
 
 // The Mac is ready once a snapshot from THIS host (with its caps) has reached
 // the relay — the relay keeps the last host's snapshot, so check the caps.
-async function hostReady(port = PORT, { caps = ['upload'] } = {}) {
+async function hostReady(port = PORT, { caps = ['upload', 'miaRestart'] } = {}) {
   const up = await waitFor(async () => {
     const r = await fetch(`http://localhost:${port}/api/v1/snapshot`, { headers: { Authorization: `Bearer ${TOKEN}` } });
     const d = await r.json();

@@ -422,6 +422,7 @@ const mia = {
   online: true,
   sessionId: 'mia-session-0001',
   model: 'claude-opus-5-5',
+  runningModel: 'claude-opus-5-5', // what the live session runs on (null when down)
   restarts: 0,
   readUpTo: null,
   pushKey: null, // filled from the relay's {type:'pushKey'} on connect
@@ -451,7 +452,10 @@ function miaBlock() {
       if (q.answer == null) pendingQuestions.push({ questionId: q.id, taskId: t.id, text: q.text, options: q.options || [], askedAt: q.askedAt });
     }
   }
-  return { ...mia, messages: mia.messages.slice(-200), pendingQuestions };
+  const block = { ...mia, messages: mia.messages.slice(-200), pendingQuestions };
+  // FAKE_HOST_LEGACY_MIA=1 impersonates a Mac app before 0027 (no runningModel).
+  if (process.env.FAKE_HOST_LEGACY_MIA) delete block.runningModel;
+  return block;
 }
 
 function miaMessage(fields) {
@@ -465,6 +469,7 @@ function miaMessage(fields) {
 function handleMia(type, msg) {
   const ack = (ok, detail, extra = {}) => ({ type: 'ack', cmd: type, ok, detail, ...extra });
   const task = (id) => mia.tasks.find((t) => t.id === String(id));
+  if (type.startsWith('mia') && type !== 'miaRead') log(`mia cmd ${type}${msg.model ? ` ${msg.model}` : ''}`);
   switch (type) {
     case 'miaSend': {
       const text = String(msg.text ?? '').trim();
@@ -525,11 +530,21 @@ function handleMia(type, msg) {
     case 'miaStart':
       mia.enabled = true;
       mia.online = true;
+      mia.runningModel = mia.model;
       return ack(true, 'Mia starting');
     case 'miaStop':
       mia.enabled = false;
       mia.online = false;
+      mia.runningModel = null;
       return ack(true, 'Mia stopped');
+    case 'miaRestart':
+      // Like MiaManager.restart(): a fresh session on the saved model.
+      mia.enabled = true;
+      mia.online = true;
+      mia.runningModel = mia.model;
+      mia.restarts += 1;
+      mia.sessionId = `mia-session-${String(mia.restarts + 1).padStart(4, '0')}`;
+      return ack(true, `Restarting Mia on ${mia.model}`);
     case 'miaSetModel':
       if (!String(msg.model ?? '').trim()) return ack(false, 'Model is empty');
       mia.model = String(msg.model);
@@ -583,7 +598,7 @@ function snapshot() {
     at: Date.now() / 1000,
     // What this host can do beyond the base protocol (the relay gates uploads on it).
     // FAKE_HOST_CAPS='' impersonates an older Mac app.
-    caps: (process.env.FAKE_HOST_CAPS ?? 'upload').split(',').filter(Boolean),
+    caps: (process.env.FAKE_HOST_CAPS ?? 'upload,miaRestart').split(',').filter(Boolean),
     summary: {
       active, idle, done, total: agents.length,
       attention: idle,

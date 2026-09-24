@@ -61,7 +61,7 @@ final class Settings: ObservableObject {
     }
 
     /// Keep Mia — the persistent assistant session — running. Off by default:
-    /// she is a long-lived Opus session with her own mailbox.
+    /// she is a long-lived Fable session with her own mailbox.
     @Published var miaEnabled: Bool {
         didSet { defaults.set(miaEnabled, forKey: Keys.miaEnabled) }
     }
@@ -128,7 +128,9 @@ final class Settings: ObservableObject {
         remoteURL = store.string(forKey: Keys.remoteURL) ?? ""
         remoteToken = store.string(forKey: Keys.remoteToken) ?? ""
         miaEnabled = bool(Keys.miaEnabled, default: false)
-        miaModel = store.string(forKey: Keys.miaModel) ?? "claude-opus-5-5"
+        // Only the default: a model picked in the panel (miaSetModel) is stored
+        // and wins over this.
+        miaModel = store.string(forKey: Keys.miaModel) ?? "claude-fable-5-1"
         miaReadUpTo = store.string(forKey: Keys.miaReadUpTo) ?? ""
     }
 }

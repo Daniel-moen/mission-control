@@ -282,7 +282,7 @@ const ALLOWED_VIEWER_TYPES = [
   'planGet', 'planSave', 'planCreate', 'planDelete',
   // Mia, the persistent assistant (docs/mia.md §8).
   'miaSend', 'miaAnswer', 'miaRead', 'miaTaskAdd', 'miaTaskCancel', 'miaTaskSet',
-  'miaStart', 'miaStop', 'miaSetModel', 'miaSchedule', 'miaPushTest',
+  'miaStart', 'miaStop', 'miaRestart', 'miaSetModel', 'miaSchedule', 'miaPushTest',
 ];
 
 // ---------------------------------------------------------------------------

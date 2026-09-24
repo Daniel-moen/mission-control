@@ -311,6 +311,8 @@ async function main() {
   {
     const page = await newPage(browser, { viewport: { width: 1180, height: 820 } });
     await page.evaluate(() => localStorage.setItem('mc.talk.engine', JSON.stringify('basic')));
+    // Default quiet hours are 22:00–07:00: off, so the suite passes at night too.
+    await page.evaluate(() => localStorage.setItem('mc.announce.quiet', JSON.stringify({ on: false, from: '22:00', to: '07:00' })));
     await page.mouse.click(600, 400); // unlock
     await sleep(300);
     const said = () => page.evaluate(() => window.__said.slice());
@@ -365,6 +367,7 @@ async function main() {
   // Locked audio: no tap in this page session yet.
   {
     const page = await newPage(browser, { viewport: { width: 820, height: 1180 } });
+    await page.evaluate(() => localStorage.setItem('mc.announce.quiet', JSON.stringify({ on: false, from: '22:00', to: '07:00' })));
     mia('ask', '--speak', 'Shall I deploy now?', '--options', 'Yes|No');
     await page.locator('[data-announce="locked"]').waitFor({ timeout: 5000 });
     ok(await page.getByText('Mia wants to talk — tap to hear').isVisible(), 'before any tap: the "Mia wants to talk — tap to hear" banner');
@@ -392,6 +395,7 @@ async function main() {
       if (mode === 'fail') return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ ok: false, error: 'no key' }) });
       return route.fulfill({ status: 200, contentType: 'audio/wav', body: WAV });
     });
+    await page.evaluate(() => localStorage.setItem('mc.announce.quiet', JSON.stringify({ on: false, from: '22:00', to: '07:00' })));
     await page.mouse.click(600, 400); // unlock (blesses the <audio>)
     await sleep(300);
     const said = () => page.evaluate(() => window.__said.slice());

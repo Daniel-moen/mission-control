@@ -4,6 +4,11 @@ import Segmented from '../../ui/Segmented.jsx';
 
 // Settings › Announcements — when Mia may speak up on this panel with talk
 // mode off (lib/announce.js). Settings owns Section/Row; they're passed in.
+const MODE_HINT = {
+  off: 'Mia stays silent on this panel.',
+  important: 'Her questions, alerts (mia notify) and anything she marks to be spoken.',
+  all: 'Everything she writes to you, chat replies included.',
+};
 const TIME = 'h-9 rounded-xl border border-glass-line bg-white/[0.05] px-2 font-mono text-[12.5px] text-ink tnum';
 
 export default function AnnounceSection({ Section, Row }) {
@@ -13,16 +18,16 @@ export default function AnnounceSection({ Section, Row }) {
   return (
     <Section title="Announcements">
       <Row
-        label="Mia speaks up"
-        hint="With the panel open and talk mode off, Mia reads out what needs you — a chime, then one sentence. Tap the mic in the top bar to answer. Never while the app is in the background."
+        label="Speak Mia's updates"
+        hint={`${MODE_HINT[mode] || MODE_HINT.important} With the panel open and talk mode off: a chime, then her voice — long messages as their first sentence. Tap the mic in the top bar to answer. Never while the app is in the background. Set on this device.`}
       >
         <Segmented
           value={mode}
           onChange={setMode}
           options={[
-            { value: 'all', label: 'All' },
-            { value: 'important', label: 'Questions & alerts' },
             { value: 'off', label: 'Off' },
+            { value: 'important', label: 'Important only' },
+            { value: 'all', label: 'Everything' },
           ]}
         />
       </Row>

@@ -120,7 +120,7 @@ export const useMC = create(() => ({
 export const getMC = () => useMC.getState();
 const set = (patch) => useMC.setState(patch);
 
-export const PANEL_BUILD = 'v23.10 · 2026-09-24 · send Mia files';
+export const PANEL_BUILD = 'v23.11 · 2026-09-24 · Mia model picker + spoken updates';
 
 // ---- status helpers ---------------------------------------------------------
 // Status semantics: working = green, needs-you = amber, done = quiet neutral,
@@ -1425,15 +1425,21 @@ export function stopAll() {
 
 // ---- Mia --------------------------------------------------------------------
 // The persistent assistant (docs/mia.md §8). The host puts a `mia` block on the
-// snapshot: { enabled, online, sessionId, model, restarts, readUpTo, messages,
-// tasks, pendingQuestions, schedule, pushKey }. Every field is optional here —
-// an absent block means "Mia is off / host predates her", never a crash.
+// snapshot: { enabled, online, sessionId, model, runningModel, restarts,
+// readUpTo, messages, tasks, pendingQuestions, schedule, pushKey }. Every field
+// is optional here — an absent block means "Mia is off / host predates her",
+// never a crash. `model` is the saved choice (Settings.miaModel on the Mac);
+// `runningModel` is what her live session was launched on — the two differ
+// after a switch until she restarts. Hosts before 0027 don't send it ('').
 
-export const MIA_DEFAULT_MODEL = 'claude-opus-5-5';
+// The models the Mia picker offers (the Mac's default is the first).
 export const MIA_MODELS = [
+  { value: 'claude-fable-5-1', label: 'Fable 5.1' },
   { value: 'claude-opus-5-5', label: 'Opus 5.5' },
   { value: 'claude-sonnet-5', label: 'Sonnet 5' },
+  { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
 ];
+export const miaModelLabel = (flag) => MIA_MODELS.find((m) => m.value === flag)?.label || '';
 
 const arr = (v) => (Array.isArray(v) ? v.filter((x) => x && typeof x === 'object') : []);
 const str = (v) => (v == null ? '' : String(v));
@@ -1444,7 +1450,8 @@ function normMia(m) {
     enabled: !!m.enabled,
     online: !!m.online,
     sessionId: str(m.sessionId),
-    model: str(m.model) || MIA_DEFAULT_MODEL,
+    model: str(m.model),
+    runningModel: str(m.runningModel),
     restarts: Number(m.restarts) || 0,
     readUpTo: str(m.readUpTo),
     messages: arr(m.messages),
@@ -1545,6 +1552,7 @@ const MIA_ACK_OK = {
   miaTaskSet: 'Task updated',
   miaStart: 'Starting Mia',
   miaStop: 'Mia stopped',
+  miaRestart: 'Restarting Mia',
   miaSetModel: 'Model saved — applies on her next start',
   miaSchedule: 'Schedule updated',
   miaPushTest: 'Test notification sent',
@@ -1626,6 +1634,15 @@ export function miaStop() {
 }
 export function miaSetModel(model) {
   return !!model && send({ type: 'miaSetModel', model });
+}
+// A fresh session on the saved model (after a switch). A Mac app that predates
+// miaRestart (no "miaRestart" in its caps) gets stop, then start.
+export function miaRestart() {
+  const caps = getMC().snapshot?.caps || [];
+  if (caps.includes('miaRestart')) return send({ type: 'miaRestart' });
+  if (!send({ type: 'miaStop' })) return false;
+  setTimeout(() => send({ type: 'miaStart' }), 1500);
+  return true;
 }
 // op: addReminder | removeReminder | setHeartbeat | removeHeartbeat; `item` is
 // the reminder / heartbeat object (just `{ id }` for the remove ops).

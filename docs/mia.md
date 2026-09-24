@@ -20,8 +20,10 @@ launch, car/TV mode) stays exactly as it is. Mia is purely additive.
 
 ## 1. Fixed decisions
 
-- Mia's model: **Opus 5.5** (`claude-opus-5-5`). Executors: also Opus 5.5.
-  The model is a setting, not a constant, but that is the default.
+- Mia's model: **Fable 5.1** (`claude-fable-5-1`) by default. Executors
+  default to Mia's model too (a dispatch can pass `--model`). The model is a
+  setting, not a constant: Daniel switches it from the picker in the top
+  corner of the panel's Mia view (§8.5); it applies from her next start.
 - Mia **never edits code herself**. She dispatches executors.
 - Mia's Gmail is her own account (`daniel.moen32@gmail.com`). Her session is
   launched with `--mcp-config ~/.mission-control/mia/mcp.json --strict-mcp-config`
@@ -55,7 +57,8 @@ the only writer agents use; the app reads and writes them too.
 ```
 ~/.mission-control/mia/
   mcp.json            Gmail MCP config (exists — never overwrite)
-  state.json          written by the app: { sessionId, model, enabled, startedAt, restarts }
+  state.json          written by the app: { sessionId, model, runningModel, enabled, startedAt, restarts }
+                      (model = the saved choice; runningModel = what the live session was launched on)
   messages.jsonl      the Mia <-> Daniel conversation, append-only (see 2.1)
   panel.jsonl         `mia panel` commands for the panel, append-only (see 8.2)
   tasks/<id>.json     one file per task (see 2.2)
@@ -263,7 +266,7 @@ RESEARCH
 
 TASKS
 - `mia task list / show / add / set / note` manage the list. Statuses: queued → asking → running → checking → done | failed | cancelled.
-- For each queued task: decide if the brief is clear enough. If not, `mia ask` (status becomes asking). If yes, pick the folder (Daniel's projects are under ~; check the task's dir, ask if unknown), write a precise brief, and `mia dispatch <id> --dir <folder> --stdin` with the brief on stdin. The executor is an Opus Claude Code session in that folder. Never run two tasks in the same folder at once. A task you can finish yourself (no code) you just do, then mark it done.
+- For each queued task: decide if the brief is clear enough. If not, `mia ask` (status becomes asking). If yes, pick the folder (Daniel's projects are under ~; check the task's dir, ask if unknown), write a precise brief, and `mia dispatch <id> --dir <folder> --stdin` with the brief on stdin. The executor is a Claude Code session in that folder, on your own model unless you pass `--model`. Never run two tasks in the same folder at once. A task you can finish yourself (no code) you just do, then mark it done.
 - When `[MC] Executor for task <id> finished` arrives, read the report, check it (you may read files and run tests, never edit), then `mia task set <id> status done` and `mia notify` with a one-line summary and the obvious next step — or `mia tell <id> "…"` to send the executor corrections and keep it running.
 - Keep task notes short and factual with `mia task note`.
 
@@ -344,7 +347,11 @@ model), **without** the strict MCP config (they are ordinary agents).
   heartbeats (`everyMinutes` since last fire; daily `at` once per day, tracked
   in `state.json.lastHeartbeat[id]`). Nothing fires while Mia is disabled.
 - **Settings**: `miaEnabled` (default false), `miaModel` (default
-  `claude-opus-5-5`), `miaReadUpTo`.
+  `claude-fable-5-1`; a value stored in UserDefaults — any pick from the
+  panel — wins over the default), `miaReadUpTo`.
+- **Restart** (`miaRestart`): kills her live session and launches a fresh one
+  ~2 s later on the saved model, without the crash backoff. The new session
+  opens on "[MC] You were restarted…". If she is disabled it acts as start.
 - **Local UI**: no new macOS UI beyond a "Mia" toggle in the ⚙ settings menu.
   Everything else is the web panel.
 
@@ -356,7 +363,8 @@ model), **without** the strict MCP config (they are ordinary agents).
 
 ```json
 "mia": {
-  "enabled": true, "online": true, "sessionId": "…", "model": "claude-opus-5-5",
+  "enabled": true, "online": true, "sessionId": "…", "model": "claude-fable-5-1",
+  "runningModel": "claude-opus-5-5",   // live session's model; null when she's down
   "restarts": 1, "readUpTo": "m_…",
   "messages": [ …last 200 lines of messages.jsonl… ],
   "tasks": [ …every tasks/<id>.json, cancelled/done older than 7 days omitted… ],
@@ -377,7 +385,8 @@ model), **without** the strict MCP config (they are ordinary agents).
 | `miaTaskCancel` | `id` |
 | `miaTaskSet` | `id`, `field`, `value` (status/priority/dir) |
 | `miaStart` / `miaStop` | — (`miaStop` kills her session and sets enabled=false; `miaStart` sets enabled=true and launches) |
-| `miaSetModel` | `model` |
+| `miaSetModel` | `model` (saved; applies from her next start) |
+| `miaRestart` | — (fresh session on the saved model; the host lists `"miaRestart"` in the snapshot's `caps`) |
 | `miaSchedule` | `op: "addReminder"|"removeReminder"|"setHeartbeat"|"removeHeartbeat"`, `item` (the reminder/heartbeat object; `{id}` alone for the remove ops) |
 | `miaPushTest` | — (host sends a test push) |
 
@@ -414,8 +423,16 @@ the CLI, MiaManager, the relay and the panel.
 
 With talk mode off, the panel the relay marks primary reads Mia out loud: a
 short chime, then one sentence in Mia's realtime voice. Settings ›
-Announcements: **Questions & alerts** (default: `--speak`, every ask and
-notify), **All**, **Off**; quiet hours (default on, 22:00–07:00). Never while
+Announcements › **Speak Mia's updates**: **Off**, **Important only** (default:
+`--speak`, every ask and notify), **Everything** (every message from her,
+`mia say` chat included); quiet hours (default on, 22:00–07:00). Both are
+stored per device (localStorage `mc.announce.mode` = off|important|all,
+`mc.announce.quiet`), because the sound comes out of that device.
+**Short-spoken** (`app/src/lib/spoken.js`): markdown and URLs are stripped
+and a message over 180 characters is read as its first sentence (two if the
+first is a few words), followed by "More on the panel." A question is read
+whole with its options when it's under 200 characters, else "I have a
+question for you. It's on the panel." Never while
 the app is in the background (push covers that) or talk mode is on (the talk
 engine reads her already). iOS allows sound only after a tap in the page
 session: the first tap anywhere unlocks it; before that the top-bar pill
@@ -471,6 +488,20 @@ host  → relay   {type:"uploadDone", id, ok, path?, detail?}   → relay delete
   sheet (Web Share Target isn't supported by Safari). Share to Files, then
   pick it from the panel.
 
+### 8.5 Mia's model picker (panel)
+
+Top-right corner of the Mia view's header, on the title row at every width:
+a pill with her **saved** model (`mia.model` from the host's snapshot, never
+a panel default) over a native `<select>`: Fable 5.1 (`claude-fable-5-1`),
+Opus 5.5 (`claude-opus-5-5`), Sonnet 5 (`claude-sonnet-5`), Haiku 4.5
+(`claude-haiku-4-5-20251001`); a model saved outside that list shows too.
+A pick sends `miaSetModel`. While she's online and `runningModel` ≠ `model`,
+a line under the header says "Mia is still running on X. Y applies from her
+next start." with **Restart Mia now** → `miaRestart`; it shows "Restarting
+Mia on Y…" until she's back on Y. A Mac app without `"miaRestart"` in its
+caps (and without `runningModel`) gets the offer only right after a switch
+on that panel, and the button sends `miaStop` then `miaStart`.
+
 ### Push (host → relay → phones)
 
 Host sends `{type:"push", title, body, tag?, url?, urgent?}`. The relay does
@@ -523,7 +554,8 @@ POST /api/v1/mia/tasks     {title,detail?,dir?,priority?}
      with an optional folder picker (uses `knownDirs`). Each card: title,
      folder, priority, executor link (opens the executor's agent view),
      result when done, cancel.
-- **Header**: Mia online/offline dot, model select, Start/Stop, a bell button
+- **Header**: Mia online/offline dot, model picker in the top-right corner
+  (§8.5), Start/Stop, a bell button
   that requests notification permission, registers `sw.js`, subscribes, and
   POSTs to `/push/subscribe`; shows "Notifications on" once done, and a
   "Test" button (`miaPushTest`).

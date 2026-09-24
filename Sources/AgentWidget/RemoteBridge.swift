@@ -27,7 +27,7 @@ import Combine
 ///                  {type:"viewers", count}         how many panels are watching
 ///                  {type:"pushKey", key}           relay's VAPID public key (echoed in the snapshot)
 ///                  {type:"miaSend|miaAnswer|miaRead|miaTaskAdd|miaTaskCancel|miaTaskSet|
-///                         miaStart|miaStop|miaSetModel|miaSchedule|miaPushTest", …}  Mia (docs/mia.md §8)
+///                         miaStart|miaStop|miaRestart|miaSetModel|miaSchedule|miaPushTest", …}  Mia (docs/mia.md §8)
 ///                  {type:"panelResult", id, ok, action, arg, detail}   how a `mia panel` command landed
 ///                  {type:"upload", id, key, name, mime, size, sha256, caption?, batch?, batchId?}
 ///                                                  a file for Mia; fetch GET /upload/<id> (token + X-MC-Key)
@@ -493,6 +493,8 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
             r = mia.start()
         case "miaStop":
             r = mia.stop()
+        case "miaRestart":
+            r = mia.restart()
         case "miaSetModel":
             r = mia.setModel(str("model"))
         case "miaSchedule":
@@ -946,8 +948,9 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
         return [
             "type": "snapshot",
             "at": Date().timeIntervalSince1970,
-            // Beyond the base protocol: "upload" = this app takes files for Mia.
-            "caps": ["upload"],
+            // Beyond the base protocol: "upload" = this app takes files for Mia;
+            // "miaRestart" = it restarts her in one step (else stop + start).
+            "caps": ["upload", "miaRestart"],
             "summary": summary,
             "agents": agents,
             "fleets": fleets,

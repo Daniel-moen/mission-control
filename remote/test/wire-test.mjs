@@ -351,7 +351,7 @@ async function main() {
   });
 
   // 12 — every mia* command type crosses the relay and is acked by the host.
-  await step('12. all eleven mia* commands pass through and are acked', async () => {
+  await step('12. all twelve mia* commands pass through and are acked', async () => {
     const cmds = [
       { type: 'miaSend', text: 'hello Mia' },
       { type: 'miaAnswer', questionId: 'q_seed1', text: 'Whole app' },
@@ -361,7 +361,8 @@ async function main() {
       { type: 'miaTaskCancel', id: '0001' },
       { type: 'miaStop' },
       { type: 'miaStart' },
-      { type: 'miaSetModel', model: 'claude-opus-5-5' },
+      { type: 'miaSetModel', model: 'claude-fable-5-1' },
+      { type: 'miaRestart' },
       { type: 'miaSchedule', op: 'addReminder', item: { id: 'r_wire', at: '2030-01-01T09:00:00Z', text: 'Chase the invoice' } },
       { type: 'miaPushTest' },
     ];
@@ -376,6 +377,10 @@ async function main() {
     assert(snap.mia.tasks.some((t) => t.title === 'Wire task' && t.priority === 1), 'added task missing from snapshot');
     assert(!snap.mia.pendingQuestions.some((q) => q.questionId === 'q_seed1'), 'answered question still pending');
     assert(snap.mia.schedule.reminders.some((r) => r.id === 'r_wire'), 'reminder missing from snapshot');
+    // miaSetModel → saved model; miaRestart → her session now runs on it.
+    assert(snap.mia.model === 'claude-fable-5-1', `model after miaSetModel was ${snap.mia.model}`);
+    assert(snap.mia.runningModel === 'claude-fable-5-1' && snap.mia.online, `runningModel after miaRestart was ${snap.mia.runningModel}`);
+    assert((snap.caps || []).includes('miaRestart'), 'host caps lack miaRestart');
   });
 
   // 13 — /push/key is token-gated; the host was told the same key on connect.
