@@ -20,6 +20,8 @@
 import WebSocket from 'ws';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import crypto from 'node:crypto';
 
 const PORT = process.env.PORT || 8899;
 const TOKEN = process.env.MC_TOKEN || 'test';
@@ -579,6 +581,9 @@ function snapshot() {
   return {
     type: 'snapshot',
     at: Date.now() / 1000,
+    // What this host can do beyond the base protocol (the relay gates uploads on it).
+    // FAKE_HOST_CAPS='' impersonates an older Mac app.
+    caps: (process.env.FAKE_HOST_CAPS ?? 'upload').split(',').filter(Boolean),
     summary: {
       active, idle, done, total: agents.length,
       attention: idle,
@@ -727,6 +732,14 @@ function connect() {
       case 'pushKey':
         mia.pushKey = msg.key ?? null;
         log('relay: push key received');
+        return;
+
+      case 'upload':
+        // A file for Mia: pull it with its one-off key, save it like MiaManager.
+        receiveUpload(msg).catch((err) => {
+          log(`upload ${msg.id} failed: ${err.message}`);
+          send({ type: 'uploadDone', id: msg.id, ok: false, detail: err.message });
+        });
         return;
 
       case 'panelResult':
@@ -1044,6 +1057,51 @@ if (MIA_DIR) {
       log(`mia ${m.kind}${m.speak ? ' (speak)' : ''}: ${m.text}`);
     }
   }, 300);
+}
+
+// Uploads (upload.js / MiaUploads.swift): the relay offers {type:'upload'};
+// fetch the bytes, check them, save to <MIA_DIR>/uploads/<date>/<name>, put the
+// file in the thread and the [MC] event in events.jsonl, answer uploadDone.
+// FAKE_UPLOAD_IGNORE=1 impersonates a Mac that never collects (queue/TTL tests).
+const UPLOAD_ROOT = MIA_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'mc-fake-mia-'));
+const uploaded = new Map(); // relay id → saved path (a re-offer must not duplicate)
+function humanSize(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+function safeUploadName(raw) {
+  let n = String(raw || '').normalize('NFC').replace(/[\u0000-\u001f\u007f/\\:]+/g, ' ').replace(/\s+/g, ' ').trim().replace(/^\.+/, '');
+  return n || 'upload';
+}
+async function receiveUpload(f) {
+  if (process.env.FAKE_UPLOAD_IGNORE) return log(`upload ${f.id} offered — ignoring (FAKE_UPLOAD_IGNORE)`);
+  if (uploaded.has(f.id)) return send({ type: 'uploadDone', id: f.id, ok: true, path: uploaded.get(f.id) });
+  const r = await fetch(`http://localhost:${PORT}/upload/${f.id}`, { headers: { Authorization: `Bearer ${TOKEN}`, 'X-MC-Key': f.key } });
+  if (!r.ok) throw new Error(`relay answered ${r.status}`);
+  const buf = Buffer.from(await r.arrayBuffer());
+  const sha = crypto.createHash('sha256').update(buf).digest('hex');
+  if (buf.length !== f.size || sha !== f.sha256) throw new Error('size or checksum mismatch');
+  const day = new Date().toISOString().slice(0, 10);
+  const dir = path.join(UPLOAD_ROOT, 'uploads', day);
+  fs.mkdirSync(dir, { recursive: true });
+  const name = safeUploadName(f.name);
+  const ext = path.extname(name);
+  const stem = name.slice(0, name.length - ext.length);
+  let file = path.join(dir, name);
+  for (let i = 2; fs.existsSync(file); i += 1) file = path.join(dir, `${stem}-${i}${ext}`);
+  fs.writeFileSync(file, buf, { mode: 0o600 });
+  uploaded.set(f.id, file);
+  const nOfN = f.batch ? ` (${f.batch.replace('/', ' of ')})` : '';
+  const line = `[MC] Daniel uploaded a file${nOfN}: ${file} (${f.mime}, ${humanSize(f.size)})${f.caption ? ` — note: ${f.caption.replace(/\s*\n\s*/g, ' ')}` : ''}`;
+  const rec = { id: f.id, at: iso(), path: file, name: path.basename(file), originalName: f.name, mime: f.mime, size: f.size, sha256: f.sha256 };
+  if (f.caption) rec.caption = f.caption;
+  if (f.batch) { rec.batch = f.batch; rec.batchId = f.batchId; }
+  miaMessage({ from: 'daniel', kind: 'upload', text: f.caption ? `Uploaded ${rec.name} — ${f.caption}` : `Uploaded ${rec.name}`, caption: f.caption || '', uploadId: f.id, batch: f.batch, batchId: f.batchId, file: { name: rec.name, path: file, mime: f.mime, size: f.size } });
+  fs.appendFileSync(path.join(UPLOAD_ROOT, 'uploads.jsonl'), JSON.stringify(rec) + '\n');
+  fs.appendFileSync(path.join(UPLOAD_ROOT, 'events.jsonl'), JSON.stringify({ id: `e_${Date.now()}`, at: iso(), kind: 'upload', text: line, delivered: true }) + '\n');
+  log(line);
+  send({ type: 'uploadDone', id: f.id, ok: true, path: file });
 }
 
 connect();

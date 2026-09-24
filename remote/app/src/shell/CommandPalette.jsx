@@ -7,6 +7,7 @@ import { spring, fadeIn } from '../lib/motion.js';
 import Icon from '../ui/Icon.jsx';
 import StatusDot from '../ui/StatusDot.jsx';
 import Kbd from '../ui/Kbd.jsx';
+import { pickFiles } from '../lib/upload.js';
 
 // ⌘K: jump to any agent, any document, or any action, from anywhere.
 // Subsequence match (Raycast-style) — "pfm" finds "PaymentForm" — scored so
@@ -51,6 +52,8 @@ export default function CommandPalette({ open, initialQuery = '', onClose, onOpe
     () => [
       { id: 'a:launch', label: 'Launch an agent', icon: 'launch', run: () => onLaunch?.() },
       { id: 'a:mia', label: 'Open Mia', icon: 'mia', run: () => onNav?.('mia') },
+      // The picker has to open inside this tap; the files wait in Mia's tray.
+      { id: 'a:upload', label: 'Send a file to Mia', icon: 'attach', run: () => { pickFiles(); onNav?.('mia'); } },
       { id: 'a:fleet', label: 'Open fleet', icon: 'agents', run: () => onNav?.('fleet') },
       { id: 'a:insights', label: 'Open insights', icon: 'overview', run: () => onNav?.('insights') },
       { id: 'a:library', label: 'Open library', icon: 'library', run: () => onNav?.('library') },

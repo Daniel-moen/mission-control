@@ -21,6 +21,10 @@ export default defineConfig({
       '/api': {
         target: `http://localhost:${process.env.MC_RELAY || 8899}`,
       },
+      // Files for Mia (lib/upload.js → upload.js).
+      '/upload': {
+        target: `http://localhost:${process.env.MC_RELAY || 8899}`,
+      },
       // The Mia tab's push subscription talks to the relay over plain HTTP.
       '/push': {
         target: `http://localhost:${process.env.MC_RELAY || 8899}`,

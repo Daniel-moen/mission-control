@@ -11,7 +11,10 @@ import Icon from '../../ui/Icon.jsx';
 // Enter sends, Shift+Enter makes a newline (it is a textarea so a long
 // instruction can breathe). The mic button is simply absent where the Web
 // Speech API isn't — no dead control, no apology.
-export default function MicField({ onSend, placeholder = 'Message…', autoFocus = false }) {
+//
+// `leading` sits left of the field (the Mia thread's attach button);
+// `canSendEmpty` lets Send go with no text (files staged, the note optional).
+export default function MicField({ onSend, placeholder = 'Message…', autoFocus = false, leading = null, canSendEmpty = false }) {
   const [value, setValue] = useState('');
   const [recording, setRecording] = useState(false);
   const session = useRef(null);
@@ -50,7 +53,7 @@ export default function MicField({ onSend, placeholder = 'Message…', autoFocus
   function submit() {
     session.current?.stop();
     const text = value.trim();
-    if (!text) return;
+    if (!text && !canSendEmpty) return;
     // A handler may refuse (socket down) — keep the text so nothing is lost.
     if (onSend?.(text) === false) return;
     setValue('');
@@ -58,6 +61,7 @@ export default function MicField({ onSend, placeholder = 'Message…', autoFocus
 
   return (
     <div className="flex items-end gap-2">
+      {leading}
       <textarea
         ref={field}
         rows={1}
@@ -70,7 +74,7 @@ export default function MicField({ onSend, placeholder = 'Message…', autoFocus
             submit();
           }
         }}
-        className={`noscroll max-h-32 min-h-[48px] flex-1 resize-none rounded-xl2 border bg-term px-4 py-3 text-[16px] leading-snug text-ink outline-none transition-colors placeholder:text-ink3 ${
+        className={`noscroll max-h-32 min-h-[48px] min-w-0 flex-1 resize-none rounded-xl2 border bg-term px-4 py-3 text-[16px] leading-snug text-ink outline-none transition-colors placeholder:text-ink3 ${
           recording ? 'border-crit/45' : 'border-glass-line focus:border-glass-line2'
         }`}
       />
@@ -92,7 +96,7 @@ export default function MicField({ onSend, placeholder = 'Message…', autoFocus
       <motion.button
         {...press}
         onClick={submit}
-        disabled={!value.trim()}
+        disabled={!value.trim() && !canSendEmpty}
         aria-label="Send"
         className="grid h-12 w-12 flex-none place-items-center rounded-xl2 bg-ink text-bg transition-opacity disabled:pointer-events-none disabled:opacity-40"
       >

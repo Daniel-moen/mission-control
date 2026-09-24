@@ -63,6 +63,8 @@ the only writer agents use; the app reads and writes them too.
   events.jsonl        system events delivered (or queued) to Mia, append-only (see 2.4)
   dispatch/<id>.json  executor launch requests written by `mia dispatch`; consumed by the app
   briefs/<id>.md      executor briefs written by Mia
+  uploads/<yyyy-MM-dd>/<name>   files Daniel sent from the panel (see 8.4)
+  uploads.jsonl       one line per saved upload: {id, at, path, name, originalName, mime, size, sha256, caption?, batch?, batchId?}
 ```
 
 Task ids are zero-padded 4-digit counters (`0001`, `0002`, …), assigned by
@@ -79,7 +81,7 @@ whoever creates the task (CLI or app) by scanning `tasks/` for the max.
 ```
 
 - `from`: `daniel` | `mia` | `system`
-- `kind`: `chat` (no push) | `question` (push, expects answer) | `notify` (push) | `answer` | `event` (system, shown muted in the thread)
+- `kind`: `chat` (no push) | `question` (push, expects answer) | `notify` (push) | `answer` | `event` (system, shown muted in the thread) | `upload` (a file from Daniel: `file {name, path, mime, size}`, `caption`, `uploadId`, `batch?`/`batchId?`; `text` is a readable fallback, "Uploaded <name> — <caption>")
 - `speak: true` (from `--speak`): an open panel reads it aloud even with talk mode off (see 8.3)
 - `read`: the panel marks Mia's messages read by sending `miaRead {upTo: id}`; the app stores `readUpTo` in `state.json`. Badge = Mia messages after `readUpTo` plus unanswered questions.
 
@@ -138,7 +140,7 @@ every 5 s; `mia inbox` prints the last 50 so a freshly restarted Mia can catch
 up. The app marks an entry delivered once `send` returns `.sent`.
 
 ```json
-{"id":"e_…","at":"…","kind":"answer|chat|task|executor|reminder|heartbeat|system","text":"…","delivered":true}
+{"id":"e_…","at":"…","kind":"answer|chat|task|executor|reminder|heartbeat|upload|system","text":"…","delivered":true}
 ```
 
 ---
@@ -183,6 +185,7 @@ mia heartbeat set <id> (--every <min>|--at HH:MM) [--label <l>] [--prompt <p>]
                                                        add or change a heartbeat (upsert)
 mia heartbeat enable|disable|remove <id>
 mia inbox [-n 50]                                      recent system events (catch-up after restart)
+mia uploads [-n 20] [--json]                           files Daniel sent from the panel (uploads.jsonl), newest last
 mia status                                             one-screen summary: tasks by status, open questions
 mia help
 ```
@@ -203,6 +206,8 @@ Every delivered event is one line, prefixed so Mia can recognise it, sent via
 [MC] New task 0009 queued: <title>                        (task added from panel)
 [MC] Executor for task 0007 finished (session <id>). Review it: mia task show 0007 ; report at ~/.mission-control/mia/briefs/0007.report.md
 [MC] Executor for task 0007 exited without finishing.
+[MC] Daniel uploaded a file: <path> (<mime>, <size>) — note: <caption>     (upload; "— note" only with a caption)
+[MC] Daniel uploaded a file (2 of 3): <path> (<mime>, <size>) — note: <caption>   (several files sent together)
 [MC] Reminder: <text>                                     (reminder)
 [MC] Heartbeat "<label>": <prompt>                        (heartbeat)
 [MC] You were restarted. Run `mia inbox` and `mia status` to catch up.   (first message after a relaunch)
@@ -239,6 +244,7 @@ THE PANEL ON HIS SCREEN
 
 HOW EVENTS REACH YOU
 - Messages starting with `[MC]` come from Mission Control: Daniel's chat and answers, new tasks, executor results, reminders, heartbeats. Handle them and end your turn.
+- `[MC] Daniel uploaded a file: <path> (<type>, <size>) — note: <his note>` means he sent you a document from the panel; it is saved at that path (under ~/.mission-control/mia/uploads/). Read it and do what the note says; with no note, say in one line what it is and ask what he wants. Files sent together are numbered `(2 of 3)` and share the note — act once you have them all. `mia uploads` lists recent ones.
 - On startup or after `[MC] You were restarted`, run `mia status` and `mia inbox` to catch up.
 
 DO IT YOURSELF, OR DISPATCH
@@ -425,6 +431,45 @@ trimmed to `TTS_MAX_CHARS` (400, whole sentences), `TTS_DAILY_CHARS` (20 000)
 caps a day, the same text within 10 min is served from memory for free. Any
 failure (no key → 503, cap → 429, offline, won't play) falls back to device
 speech synthesis. Usage per day on `/health` (`tts`) and Settings › Voice.
+
+### 8.4 Uploads (panel → relay → Mac)
+
+Daniel hands Mia files from the panel: the paperclip in the Mia thread's
+composer (the iPad picker: Files, Photo Library, Take Photo), drag-and-drop or
+paste onto the thread, or ⌘K "Send a file to Mia". Files wait in a tray above
+the composer; the composer text goes with them as an optional note; Send
+uploads them one at a time with per-file progress, and each lands in the
+thread as a file card.
+
+```
+panel → relay   POST /upload  (Bearer token; raw body; X-MC-Name, X-MC-Caption?, X-MC-Batch "n/N"?, X-MC-Batch-Id?)
+relay           streams to a private temp file (0600, UPLOAD_TMP), checks size + extension allow-list + magic bytes
+relay → host    {type:"upload", id, key, name, mime, size, sha256, caption?, batch?, batchId?, at}
+host  → relay   GET /upload/<id>   (Bearer token + X-MC-Key: <key>)
+host            verifies size + sha256, saves ~/.mission-control/mia/uploads/<yyyy-MM-dd>/<safe name> (0600, "-2" on a clash),
+                appends uploads.jsonl + a `kind:"upload"` message, queues the [MC] event (section 4)
+host  → relay   {type:"uploadDone", id, ok, path?, detail?}   → relay deletes its copy, answers the POST
+```
+
+- **Types** (extension picks the MIME, bytes must match): PDF; PNG, JPEG,
+  GIF, WebP, HEIC/HEIF, TIFF; DOCX/XLSX/PPTX, DOC/XLS/PPT, ODT/ODS,
+  Pages/Numbers/Keynote, RTF; TXT/MD/CSV/TSV/JSON (valid UTF-8); MP3, M4A,
+  AAC, WAV, AIFF, CAF, FLAC, OGG/Opus, WebM audio. Everything else → 415.
+- **Size**: 50 MB per file (`UPLOAD_MAX_MB`), up to 10 files per send;
+  at most 300 MB waiting on the relay (`UPLOAD_MAX_PENDING_MB`).
+- **Answers**: 200 `{delivered, path}` once the Mac has saved it; 202
+  `{queued}` if the Mac hasn't collected it within 60 s (`UPLOAD_WAIT_MS`);
+  503 when the Mac is offline (nothing is stored); 501 when the Mac app is
+  too old (its snapshot lacks `caps:["upload"]`); 413 / 415 / 400 with a reason.
+- **Retention**: the relay deletes its copy on `uploadDone`, after the TTL
+  (`UPLOAD_TTL_MIN`, default 15) if the Mac never collects it, and on boot.
+  Queued uploads are re-offered whenever the host reconnects. No upload is
+  ever reachable by URL without the one-off key, which only the host sees.
+- **Snapshot**: the host lists `"caps": ["upload"]` at the top level.
+  `/health` carries `uploads: {pending, maxMB, ttlMin}`.
+- **Not possible from a web app on iPadOS**: appearing in the system share
+  sheet (Web Share Target isn't supported by Safari). Share to Files, then
+  pick it from the panel.
 
 ### Push (host → relay → phones)
 

@@ -573,6 +573,7 @@ PANEL = os.path.join(D, "panel.jsonl")
 EVENTS = os.path.join(D, "events.jsonl")
 SCHED = os.path.join(D, "schedule.json")
 STATE = os.path.join(D, "state.json")
+UPLOADS = os.path.join(D, "uploads.jsonl")
 STATUSES = ["queued", "asking", "running", "checking", "done", "failed", "cancelled"]
 DEFAULT_SCHEDULE = {
     "heartbeats": [
@@ -1122,6 +1123,36 @@ def cmd_inbox(args):
         print("%s  %-9s %s%s" % (e.get("at", ""), e.get("kind", ""), e.get("text", ""), mark))
 
 
+def human_size(n):
+    n = int(n or 0)
+    if n < 1024:
+        return "%d B" % n
+    if n < 1024 * 1024:
+        return "%.0f KB" % (n / 1024.0)
+    return "%.1f MB" % (n / 1048576.0)
+
+
+def cmd_uploads(args):
+    pos, o = parse(args, {"-n": True, "--json": False})
+    try:
+        n = int(o.get("-n", 20))
+    except ValueError:
+        die("-n must be a number")
+    recs = read_jsonl(UPLOADS)[-n:] if n > 0 else []
+    if o.get("--json"):
+        print(json.dumps(recs, indent=2, ensure_ascii=False))
+        return
+    if not recs:
+        print("(no uploads)")
+    for r in recs:
+        p = r.get("path", "")
+        gone = "" if p and os.path.exists(p) else "  [file moved or deleted]"
+        note = (" — note: %s" % " ".join(r["caption"].split())) if r.get("caption") else ""
+        batch = (" (%s)" % r["batch"].replace("/", " of ")) if r.get("batch") else ""
+        print("%s  %8s  %-28s %s%s%s%s" % (r.get("at", ""), human_size(r.get("size")),
+                                          r.get("mime", ""), p, batch, note, gone))
+
+
 def open_questions():
     msgs = read_jsonl(MSGS)
     answered = set(m.get("questionId") for m in msgs if m.get("kind") == "answer")
@@ -1268,6 +1299,7 @@ HELP = """mia — Mia's line to Daniel and the Mission Control task list.
   mia panel search "<text>"                         open search with this text
   mia panel scroll-to "<heading>"                   scroll the open doc to a heading
   mia inbox [-n 50]                                 recent system events
+  mia uploads [-n 20] [--json]                      files Daniel sent from the panel (newest last)
   mia status                                        tasks, open questions, reminders
   mia help
 
@@ -1283,7 +1315,7 @@ def main(argv):
     table = {"say": cmd_say, "notify": cmd_notify, "ask": cmd_ask, "task": cmd_task,
              "dispatch": cmd_dispatch, "tell": cmd_tell, "remind": cmd_remind,
              "heartbeat": cmd_heartbeat, "inbox": cmd_inbox, "status": cmd_status,
-             "panel": cmd_panel}
+             "panel": cmd_panel, "uploads": cmd_uploads}
     if cmd not in table:
         die("unknown command: %s (try: mia help)" % cmd)
     table[cmd](rest)
@@ -1328,6 +1360,7 @@ mia heartbeat list                                recurring prompts Mia gets
 mia heartbeat set <id> (--every <min>|--at HH:MM) [--label <l>] [--prompt <p>]
 mia heartbeat enable|disable|remove <id>
 mia inbox [-n 50]                                 recent events delivered to Mia
+mia uploads [-n 20] [--json]                      files Daniel sent from the panel
 mia status                                        tasks, open questions, reminders
 ```
 
@@ -1339,6 +1372,18 @@ Control task <id>"): never ask Daniel anything. If blocked, run
 `mia task note <id> "BLOCKED: …"` and stop. When finished, write your report to
 `~/.mission-control/mia/briefs/<id>.report.md`, run `mia task note <id> "DONE"`,
 and end your turn.
+
+**Files from Daniel**: the panel's upload button saves them to
+`~/.mission-control/mia/uploads/<yyyy-MM-dd>/<name>` and Mia gets one event per file:
+
+```
+[MC] Daniel uploaded a file: <path> (<mime>, <size>) — note: <his note>
+[MC] Daniel uploaded a file (2 of 3): <path> (<mime>, <size>) — note: <his note>
+```
+
+The note is optional ("summarise this", "file this for Oblivion"). Files sent
+together are numbered and share the note. `mia uploads` lists recent ones
+(`--json` for id, path, mime, size, sha256, caption).
 
 **If you are Mia**: never sleep or poll — end your turn and wait for `[MC]`.
 """#

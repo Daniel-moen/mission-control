@@ -48,6 +48,9 @@ final class MiaManager: ObservableObject {
     private let statePath: String
     private let lockPath: String
     private let mcpPath: String
+    private let uploadsIndexPath: String
+    /// Files from the panel (MiaUploads.swift); RemoteBridge feeds it offers.
+    private(set) lazy var uploads = MiaUploads(root: dir)
 
     private var timer: Timer?
     private var cancellables = Set<AnyCancellable>()
@@ -96,6 +99,7 @@ final class MiaManager: ObservableObject {
         statePath = d + "/state.json"
         lockPath = d + "/.lock"
         mcpPath = d + "/mcp.json"
+        uploadsIndexPath = d + "/uploads.jsonl"
 
         ensureLayout()
         // Only what lands from now on is news; history was already notified.
@@ -683,6 +687,30 @@ final class MiaManager: ObservableObject {
         return Outcome(ok: true, detail: "Sent to Mia" + offNote)
     }
 
+    /// A file from the panel landed on disk (MiaUploads): index it for
+    /// `mia uploads`, show it in the thread, and tell Mia.
+    func recordUpload(_ s: MiaUploads.Saved) {
+        guard !s.duplicate else { return }
+        let o = s.offer
+        let name = (s.path as NSString).lastPathComponent
+        let caption = o.caption.trimmingCharacters(in: .whitespacesAndNewlines)
+        var rec: [String: Any] = ["id": o.id, "at": Self.iso(Date()), "path": s.path, "name": name,
+                                  "originalName": o.name, "mime": o.mime, "size": o.size, "sha256": o.sha256]
+        var msg: [String: Any] = ["from": "daniel", "kind": "upload",
+                                  "text": caption.isEmpty ? "Uploaded \(name)" : "Uploaded \(name) — \(caption)",
+                                  "caption": caption, "uploadId": o.id,
+                                  "file": ["name": name, "path": s.path, "mime": o.mime, "size": o.size]]
+        if !caption.isEmpty { rec["caption"] = caption }
+        if !o.batch.isEmpty {
+            rec["batch"] = o.batch; rec["batchId"] = o.batchId
+            msg["batch"] = o.batch; msg["batchId"] = o.batchId
+        }
+        withLock { appendJSONL(uploadsIndexPath, rec) }
+        appendMessage(msg)
+        enqueue(kind: "upload", line: MiaUploads.eventLine(path: s.path, mime: o.mime, size: o.size,
+                                                           caption: caption, batch: o.batch))
+    }
+
     func answer(questionId: String, text raw: String) -> Outcome {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return Outcome(ok: false, detail: "Answer is empty") }
@@ -1117,6 +1145,7 @@ THE PANEL ON HIS SCREEN
 
 HOW EVENTS REACH YOU
 - Messages starting with `[MC]` come from Mission Control: Daniel's chat and answers, new tasks, executor results, reminders, heartbeats. Handle them and end your turn.
+- `[MC] Daniel uploaded a file: <path> (<type>, <size>) — note: <his note>` means he sent you a document from the panel; it is saved at that path (under ~/.mission-control/mia/uploads/). Read it and do what the note says; with no note, say in one line what it is and ask what he wants. Files sent together are numbered `(2 of 3)` and share the note — act once you have them all. `mia uploads` lists recent ones.
 - On startup or after `[MC] You were restarted`, run `mia status` and `mia inbox` to catch up.
 
 DO IT YOURSELF, OR DISPATCH

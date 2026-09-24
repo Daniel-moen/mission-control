@@ -46,6 +46,11 @@
 // Wake word: GET /wake/model.tar.gz serves the small Vosk model the panel
 // runs in the browser to hear "Hey Mia". Detection is entirely on-device.
 //
+// Uploads (upload.js): POST /upload hands Mia a file from the panel. The relay
+// validates it, offers it to the Mac ({type:"upload"}), the Mac pulls the bytes
+// with a one-off key and answers {type:"uploadDone"} — which is consumed here,
+// not fanned out — and the relay's temp copy is deleted. Nothing is public.
+//
 // Auth: every WebSocket connection must present the shared MC_TOKEN.
 
 'use strict';
@@ -60,6 +65,7 @@ const { createPush } = require('./push');
 const { createStt } = require('./stt');
 const { createRealtime } = require('./realtime');
 const { createTts } = require('./tts');
+const { createUpload } = require('./upload');
 
 const PORT = process.env.PORT || 8080;
 const TOKEN = process.env.MC_TOKEN || '';
@@ -80,11 +86,21 @@ const push = createPush({ tokenOk });
 const stt = createStt({ tokenOk });
 const realtime = createRealtime({ tokenOk });
 const tts = createTts({ tokenOk });
+// The Mac says it can take files by listing "upload" in its snapshot's caps;
+// an older app gets a clear refusal instead of a silent queue.
+let hostCaps = [];
+const upload = createUpload({
+  tokenOk,
+  sendToHost: (obj) => sendTo(host, obj),
+  hostOnline: () => host !== null,
+  hostCanUpload: () => hostCaps.includes('upload'),
+});
 // A redeploy sends SIGTERM: write the realtime tally (open calls included)
 // and any pending TTS tally before going, so the next process can settle them.
 process.on('SIGTERM', () => {
   realtime.close();
   tts.close();
+  upload.close();
   process.exit(0);
 });
 
@@ -131,7 +147,7 @@ const server = http.createServer((req, res) => {
 
   if (pathname === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, host: host !== null, viewers: viewers.size, pollers: pollers.size, pushSubscriptions: push.count(), stt: stt.info().provider, realtime: realtime.info(), tts: tts.info() }));
+    res.end(JSON.stringify({ ok: true, host: host !== null, viewers: viewers.size, pollers: pollers.size, pushSubscriptions: push.count(), stt: stt.info().provider, realtime: realtime.info(), tts: tts.info(), uploads: upload.info() }));
     return;
   }
 
@@ -179,6 +195,16 @@ const server = http.createServer((req, res) => {
   if (pathname === '/tts') {
     tts.handle(req, res, url).catch((err) => {
       console.error('tts error:', err);
+      if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'internal error' }));
+    });
+    return;
+  }
+
+  // Files for Mia from the panel (token-auth) — see upload.js.
+  if (pathname === '/upload' || pathname.startsWith('/upload/')) {
+    upload.handle(req, res, url).catch((err) => {
+      console.error('upload error:', err);
       if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: 'internal error' }));
     });
@@ -443,6 +469,7 @@ wss.on('connection', (ws) => {
     tellHostViewerCount();
     tellViewersHostState();
     sendTo(ws, { type: 'pushKey', key: push.publicKey });
+    upload.onHostConnect(); // re-offer anything the last connection didn't collect
 
     ws.on('message', (data) => {
       const text = data.toString();
@@ -464,7 +491,13 @@ wss.on('connection', (ws) => {
         routePanel(frame);
         return;
       }
+      if (frame.type === 'uploadDone') {
+        // The Mac saved (or refused) an upload — relay-local, never fanned out.
+        upload.onHostFrame(frame);
+        return;
+      }
       if (frame.type === 'snapshot') {
+        hostCaps = Array.isArray(frame.caps) ? frame.caps : [];
         lastSnapshot = text;
         lastSnapshotAt = Date.now();
         snapshotSeq += 1;
@@ -476,6 +509,7 @@ wss.on('connection', (ws) => {
     ws.on('close', () => {
       if (host === ws) {
         host = null;
+        hostCaps = [];
         console.log('host disconnected');
         tellViewersHostState();
       }

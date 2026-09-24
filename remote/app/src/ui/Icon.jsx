@@ -7,7 +7,7 @@ import {
   Terminal, Trash2, TriangleAlert, Tv, User, Users, X, Zap, Microscope, FileText,
   Sparkle, Bell, BellRing, BellOff, Ban, RotateCcw, ListTodo, MessageSquare,
   Download, Share, FileCode2, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen,
-  Ear, EarOff,
+  Ear, EarOff, Paperclip, File, FileImage, FileAudio, FileSpreadsheet, Presentation,
 } from 'lucide-react';
 
 // Semantic name → lucide glyph. Views ask for meaning ("launch", "needs you"),
@@ -86,6 +86,13 @@ const MAP = {
   paneRightOpen: PanelRightOpen,
   ear: Ear,
   earOff: EarOff,
+  // uploads to Mia
+  attach: Paperclip,
+  file: File,
+  fileImage: FileImage,
+  fileAudio: FileAudio,
+  fileSheet: FileSpreadsheet,
+  fileSlides: Presentation,
 };
 
 export default function Icon({ name, size = 18, strokeWidth = 1.75, ...rest }) {

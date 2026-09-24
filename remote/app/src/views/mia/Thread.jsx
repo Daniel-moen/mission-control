@@ -7,6 +7,10 @@ import Button from '../../ui/Button.jsx';
 import EmptyState from '../../ui/EmptyState.jsx';
 import MicField from '../agent/MicField.jsx';
 import Answer from './Answer.jsx';
+import Progress from '../../ui/Progress.jsx';
+import {
+  pickFiles, stageFiles, unstage, sendStaged, retryUpload, dismissUpload, fmtSize, fileIcon, MAX_BYTES,
+} from '../../lib/upload.js';
 
 // The Mia ↔ Daniel conversation (messages.jsonl), rendered as rows of ink on
 // glass — a name, a time, the words. No bubbles: who is speaking is carried by
@@ -45,6 +49,61 @@ function TaskChip({ id, onTask }) {
   );
 }
 
+// A file Daniel sent Mia: icon, name, type · size, and while it's in flight a
+// progress rule. `upload` is the local row (lib/upload.js) until the Mac has it.
+const STATUS_LINE = {
+  waiting: 'Waiting…',
+  uploading: 'Uploading',
+  delivering: 'Handing to the Mac…',
+  done: 'Saved on the Mac',
+  queued: 'Waiting for the Mac to collect it',
+};
+function kindOf(name = '', mime = '') {
+  const e = (/\.([a-z0-9]+)$/i.exec(name) || [])[1];
+  if (e) return e.toUpperCase();
+  return (mime.split('/')[1] || 'file').toUpperCase();
+}
+function FileCard({ file, upload }) {
+  const name = file?.name || upload?.name || 'file';
+  const mime = file?.mime || upload?.mime || '';
+  const size = file?.size ?? upload?.size;
+  const busy = upload && (upload.status === 'uploading' || upload.status === 'delivering' || upload.status === 'waiting');
+  const failed = upload?.status === 'error';
+  const pct = upload && upload.size ? upload.loaded / upload.size : 0;
+  return (
+    <div
+      className={`flex w-full max-w-[420px] items-center gap-3 rounded-xl2 border px-3 py-2.5 ${failed ? 'border-crit/40 bg-crit/[0.06]' : 'border-glass-line bg-white/[0.04]'}`}
+      title={file?.path || name}
+    >
+      <span className="grid h-9 w-9 flex-none place-items-center rounded-xl bg-white/[0.06] text-ink2">
+        <Icon name={fileIcon(name, mime)} size={18} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[13.5px] font-medium text-ink">{name}</span>
+        <span className={`block truncate text-[11.5px] ${failed ? 'text-crit' : 'text-ink3'}`}>
+          {failed
+            ? upload.error
+            : [kindOf(name, mime), fmtSize(size), upload ? `${STATUS_LINE[upload.status] || ''}${upload.status === 'uploading' ? ` ${Math.round(pct * 100)}%` : ''}` : 'Saved on the Mac']
+                .filter(Boolean)
+                .join(' · ')}
+        </span>
+        {busy && <Progress value={upload.status === 'delivering' ? 1 : pct} className="mt-1.5" tone={upload.status === 'delivering' ? 'neutral' : 'accent'} />}
+      </span>
+      {failed && (
+        <span className="flex flex-none gap-1">
+          <button onClick={() => retryUpload(upload.id)} aria-label="Retry upload" className="grid h-8 w-8 place-items-center rounded-lg text-ink2 hover:text-ink">
+            <Icon name="retry" size={15} />
+          </button>
+          <button onClick={() => dismissUpload(upload.id)} aria-label="Dismiss" className="grid h-8 w-8 place-items-center rounded-lg text-ink3 hover:text-ink2">
+            <Icon name="close" size={15} />
+          </button>
+        </span>
+      )}
+      {upload?.status === 'done' && <Icon name="check" size={16} className="flex-none text-ok" />}
+    </div>
+  );
+}
+
 function EventRow({ m }) {
   return (
     <div className="flex items-baseline gap-2 py-1 pl-0.5 text-[12px] leading-snug text-ink3">
@@ -55,8 +114,9 @@ function EventRow({ m }) {
   );
 }
 
-function MessageRow({ m, head, mia, onTask, pending }) {
+function MessageRow({ m, head, mia, onTask, pending, upload, showCaption = true }) {
   const fromMia = m.from === 'mia';
+  const isFile = m.kind === 'upload';
   const isQ = m.kind === 'question';
   const isNotify = m.kind === 'notify';
   const open = isQ && m.questionId && mia.openIds.has(m.questionId);
@@ -88,16 +148,25 @@ function MessageRow({ m, head, mia, onTask, pending }) {
             {isNotify ? (m.urgent ? 'Urgent' : 'Update') : open ? 'Question' : 'Asked'}
           </div>
         )}
-        <div className={`whitespace-pre-wrap break-words text-[14.5px] leading-relaxed ${pending ? 'text-ink3' : fromMia ? 'text-ink' : 'text-ink2'}`}>
-          {said.voice && (
-            <Icon name="mic" size={12} className="mr-1.5 inline-block align-[-1px] text-ink3" aria-label="Spoken" />
-          )}
-          {said.text}
-        </div>
-        {(m.taskId || pending) && (
+        {isFile ? (
+          <>
+            <FileCard file={m.file} upload={upload} />
+            {showCaption && m.caption && (
+              <div className="mt-1.5 whitespace-pre-wrap break-words text-[14.5px] leading-relaxed text-ink2">{m.caption}</div>
+            )}
+          </>
+        ) : (
+          <div className={`whitespace-pre-wrap break-words text-[14.5px] leading-relaxed ${pending ? 'text-ink3' : fromMia ? 'text-ink' : 'text-ink2'}`}>
+            {said.voice && (
+              <Icon name="mic" size={12} className="mr-1.5 inline-block align-[-1px] text-ink3" aria-label="Spoken" />
+            )}
+            {said.text}
+          </div>
+        )}
+        {(m.taskId || (pending && !isFile)) && (
           <div className="mt-1 flex items-center gap-2">
             <TaskChip id={m.taskId} onTask={onTask} />
-            {pending && <span className="text-[11px] text-ink3">Sending…</span>}
+            {pending && !isFile && <span className="text-[11px] text-ink3">Sending…</span>}
           </div>
         )}
         {isQ &&
@@ -137,6 +206,9 @@ function usePageVisible() {
 export default function Thread({ mia, active = true, onTask }) {
   const local = useMC((s) => s.miaLocal);
   const link = useMC((s) => s.link);
+  const staged = useMC((s) => s.miaStage);
+  const uploads = useMC((s) => s.uploads);
+  const [dragging, setDragging] = useState(false);
   const pageVisible = usePageVisible();
 
   const openIds = useMemo(
@@ -151,7 +223,7 @@ export default function Thread({ mia, active = true, onTask }) {
     const out = [];
     let prev = null;
     let prevDay = '';
-    const push = (m, key, pending = false) => {
+    const push = (m, key, pending = false, extra = {}) => {
       const ms = toMs(m.at);
       const day = dayLabel(ms);
       if (day && day !== prevDay) {
@@ -165,16 +237,26 @@ export default function Thread({ mia, active = true, onTask }) {
         return;
       }
       const head = !prev || prev.from !== m.from || ms - toMs(prev.at) > 10 * 60 * 1000;
-      out.push({ type: 'msg', key, m, head, pending });
+      out.push({ type: 'msg', key, m, head, pending, ...extra });
       prev = m;
     };
+    // A batch's note shows once, under its last file.
+    const lastCaption = (m) => !m.batch || m.batch.split('/')[0] === m.batch.split('/')[1];
+    const landed = new Set();
     mia.messages.forEach((m, i) => {
       if (m.kind === 'answer' && m.questionId && asked.has(m.questionId)) return;
-      push(m, m.id || `i${i}`);
+      if (m.kind === 'upload' && m.uploadId) landed.add(m.uploadId);
+      push(m, m.id || `i${i}`, false, m.kind === 'upload' ? { showCaption: lastCaption(m) } : {});
     });
     for (const p of local.sent) push({ from: 'daniel', kind: 'chat', text: p.text, at: p.at }, p.id, true);
+    // Uploads in flight (or just done) that the thread doesn't show yet.
+    for (const u of uploads) {
+      if (u.relayId && landed.has(u.relayId)) continue;
+      const m = { from: 'daniel', kind: 'upload', at: u.at, caption: u.caption, batch: u.batch };
+      push(m, u.id, true, { upload: u, showCaption: lastCaption(m) });
+    }
     return out;
-  }, [mia.messages, local.sent]);
+  }, [mia.messages, local.sent, uploads]);
 
   // ---- auto-scroll ---------------------------------------------------------
   // Follow new messages only while you're at the bottom; scrolled up reading
@@ -211,8 +293,36 @@ export default function Thread({ mia, active = true, onTask }) {
 
   const ctx = { block: mia, local, openIds };
 
+  // Drag files from Files/Finder onto the thread, or paste an image.
+  const hasFiles = (e) => Array.from(e.dataTransfer?.types || []).includes('Files');
+  const dropProps = {
+    onDragEnter: (e) => { if (hasFiles(e)) { e.preventDefault(); setDragging(true); } },
+    onDragOver: (e) => { if (hasFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } },
+    onDragLeave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragging(false); },
+    onDrop: (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      setDragging(false);
+      stageFiles(e.dataTransfer.files);
+    },
+    onPaste: (e) => {
+      const list = e.clipboardData?.files;
+      if (list && list.length) {
+        e.preventDefault();
+        stageFiles(list);
+      }
+    },
+  };
+
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col">
+    <div className="relative flex min-h-0 flex-1 flex-col" {...dropProps}>
+      {dragging && (
+        <div className="pointer-events-none absolute inset-2 z-20 grid place-items-center rounded-xl3 border-2 border-dashed border-glass-line2 bg-black/40">
+          <span className="flex items-center gap-2 text-[14px] font-medium text-ink">
+            <Icon name="attach" size={17} /> Drop to send to Mia
+          </span>
+        </div>
+      )}
       {!mia.enabled && (
         <div className="mx-4 mb-2 flex flex-none items-center gap-3 rounded-xl3 border border-glass-line bg-white/[0.04] px-3.5 py-2.5 sm:mx-5">
           <span className="h-2 w-2 flex-none rounded-full bg-ink3" />
@@ -253,7 +363,7 @@ export default function Thread({ mia, active = true, onTask }) {
               ) : r.type === 'event' ? (
                 <EventRow key={r.key} m={r.m} />
               ) : (
-                <MessageRow key={r.key} m={r.m} head={r.head} mia={ctx} onTask={onTask} pending={r.pending} />
+                <MessageRow key={r.key} m={r.m} head={r.head} mia={ctx} onTask={onTask} pending={r.pending} upload={r.upload} showCaption={r.showCaption} />
               ),
             )}
           </div>
@@ -279,9 +389,39 @@ export default function Thread({ mia, active = true, onTask }) {
 
       <div className="flex-none border-t border-glass-line px-4 pb-4 pt-3 sm:px-5">
         <div className="mx-auto max-w-[720px]">
+          {staged.length > 0 && (
+            <div className="mb-2.5 flex flex-wrap gap-2" aria-label="Files to send">
+              {staged.map((x) => (
+                <span key={x.id} className="glass-soft flex max-w-full items-center gap-2 rounded-xl py-1.5 pl-2.5 pr-1 text-[12.5px] text-ink2">
+                  <Icon name={fileIcon(x.name, x.mime)} size={14} className="flex-none text-ink3" />
+                  <span className="min-w-0 truncate">{x.name}</span>
+                  <span className="tnum flex-none text-ink3">{fmtSize(x.size)}</span>
+                  <button onClick={() => unstage(x.id)} aria-label={`Remove ${x.name}`} className="grid h-7 w-7 flex-none place-items-center rounded-lg text-ink3 hover:text-ink">
+                    <Icon name="close" size={13} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
           <MicField
-            onSend={(t) => miaSend(t)}
-            placeholder={mia.enabled ? 'Message Mia…' : 'Message Mia — she’ll read it when she starts'}
+            onSend={(t) => (staged.length ? sendStaged(t) : miaSend(t))}
+            canSendEmpty={staged.length > 0}
+            leading={
+              <motion.button
+                {...press}
+                onClick={() => pickFiles()}
+                aria-label="Send Mia a file"
+                title={`Send Mia a file — PDF, photo, Office/iWork, text/CSV or audio, up to ${MAX_BYTES / 1024 / 1024} MB each`}
+                className="glass-soft glass-soft-hover grid h-12 w-12 flex-none place-items-center rounded-xl2 text-ink2"
+              >
+                <Icon name="attach" size={20} />
+              </motion.button>
+            }
+            placeholder={
+              staged.length
+                ? 'Add a note (optional)'
+                : mia.enabled ? 'Message Mia…' : 'Message Mia — she’ll read it when she starts'
+            }
           />
         </div>
       </div>

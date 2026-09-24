@@ -13,6 +13,7 @@ import Combine
 ///                  {type:"docSearchResult", q, hits}      library full-text search hits
 ///                  {type:"push", title, body, tag?, url?, urgent?} Web Push for phones (Mia)
 ///                  {type:"panel", id, action, arg?, heading?}  `mia panel` → the most recently active panel
+///                  {type:"uploadDone", id, ok, path?, detail?}  an offered upload was saved (relay deletes its copy)
 ///   relay → host:  {type:"reply", sessionId, text} type into that agent's terminal
 ///                  {type:"broadcast", text}        send to every controllable agent
 ///                  {type:"kill", sessionId}        terminate that agent's process
@@ -28,6 +29,8 @@ import Combine
 ///                  {type:"miaSend|miaAnswer|miaRead|miaTaskAdd|miaTaskCancel|miaTaskSet|
 ///                         miaStart|miaStop|miaSetModel|miaSchedule|miaPushTest", …}  Mia (docs/mia.md §8)
 ///                  {type:"panelResult", id, ok, action, arg, detail}   how a `mia panel` command landed
+///                  {type:"upload", id, key, name, mime, size, sha256, caption?, batch?, batchId?}
+///                                                  a file for Mia; fetch GET /upload/<id> (token + X-MC-Key)
 final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     @Published private(set) var connected = false
     @Published private(set) var viewerCount = 0
@@ -224,6 +227,9 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
         case "panelResult":
             // How a `mia panel` command landed (relay or panel) — docs/mia.md §8.2.
             mia?.panelResult(obj)
+
+        case "upload":
+            receiveUpload(obj)
 
         case "reply":
             guard let sid = obj["sessionId"] as? String,
@@ -504,6 +510,27 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
         var frame: [String: Any] = ["type": "ack", "ok": r.ok, "cmd": type, "detail": r.detail]
         if let id = r.id { frame["id"] = id }
         sendJSON(frame)
+    }
+
+    /// A file for Mia from the panel (docs/mia.md §8.4): pull it from the relay,
+    /// save it, tell Mia, and answer uploadDone so the relay drops its copy.
+    private func receiveUpload(_ obj: [String: Any]) {
+        let id = (obj["id"] as? String) ?? ""
+        guard let mia, let offer = MiaUploads.offer(from: obj),
+              let relay = MiaUploads.httpOrigin(settings.remoteURL) else {
+            sendJSON(["type": "uploadDone", "id": id, "ok": false, "detail": "the Mac couldn't take the file"])
+            return
+        }
+        let token = settings.remoteToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        mia.uploads.receive(offer, relay: relay, token: token) { [weak self, weak mia] result in
+            switch result {
+            case .success(let saved):
+                mia?.recordUpload(saved)
+                self?.sendJSON(["type": "uploadDone", "id": offer.id, "ok": true, "path": saved.path])
+            case .failure(let e):
+                self?.sendJSON(["type": "uploadDone", "id": offer.id, "ok": false, "detail": e.detail])
+            }
+        }
     }
 
     /// A Web Push request for the relay to fan out to subscribed phones. Not
@@ -919,6 +946,8 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
         return [
             "type": "snapshot",
             "at": Date().timeIntervalSince1970,
+            // Beyond the base protocol: "upload" = this app takes files for Mia.
+            "caps": ["upload"],
             "summary": summary,
             "agents": agents,
             "fleets": fleets,

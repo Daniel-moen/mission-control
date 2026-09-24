@@ -103,6 +103,10 @@ export const useMC = create(() => ({
   // snapshot: messages sent but not yet seen, answers given, read marker.
   miaLocal: { sent: [], answered: {}, readUpTo: '' },
   push: 'idle', // Web Push state for this device — see lib/push.js
+  // Files for Mia (lib/upload.js): picked but not yet sent, and uploads in
+  // flight/just finished — { id, name, size, mime, loaded, status, error, relayId, at }.
+  miaStage: [],
+  uploads: [],
 
   filter: 'all', // dashboard status filter — lives here so the strip chips drive it
   toast: '',
@@ -116,7 +120,7 @@ export const useMC = create(() => ({
 export const getMC = () => useMC.getState();
 const set = (patch) => useMC.setState(patch);
 
-export const PANEL_BUILD = 'v23.9 · 2026-09-24 · durable push, crisper voice';
+export const PANEL_BUILD = 'v23.10 · 2026-09-24 · send Mia files';
 
 // ---- status helpers ---------------------------------------------------------
 // Status semantics: working = green, needs-you = amber, done = quiet neutral,
