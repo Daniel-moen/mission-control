@@ -13,16 +13,63 @@
 // the same cmd arriving in the same instant could in theory be claimed by an API
 // waiter — both callers still see a truthful ack, so the failure mode is benign.
 //
+// Panel HTTP fallback: where a network blocks WebSocket upgrades, the panel
+// polls GET /snapshot, sends its socket frames verbatim through POST /cmd, and
+// reads watched terminals from GET /screens — a buffer the relay assembles from
+// the host's screen frames (full + `keep` deltas) so pollers get coherent text.
+//
 // Auth: same shared secret as the WebSocket — `Authorization: Bearer <MC_TOKEN>`
 // (or ?token= for quick tests).
 
 'use strict';
 
+const zlib = require('zlib');
+
 const MAX_BODY = 2 * 1024 * 1024; // doc bodies travel through here
 const ACK_TIMEOUT_MS = 15000;
 const SCREEN_TIMEOUT_MS = 4500; // host streams screens at 1 Hz once a lease opens
 
-function createApi({ tokenOk, sendToHost, hostOnline, latestSnapshot }) {
+// Legacy plan* spellings the host treats as their doc* equivalents; an ack may
+// come back under either name.
+const DOC_ALIAS = { planGet: 'docGet', planSave: 'docSave', planCreate: 'docCreate', planDelete: 'docDelete' };
+
+function createApi({
+  tokenOk,
+  sendToHost,
+  hostOnline,
+  latestSnapshot,
+  snapshotMeta = () => ({ seq: 0, at: 0 }),
+  allowedTypes = [],
+  notePoller = () => {},
+}) {
+  // ---------------------------------------------------------------------------
+  // Assembled terminal screens for HTTP pollers: sessionId → { seq, text, at }.
+  // Mirrors the panel's ingestScreen(): a `keep` delta applies only on top of
+  // the exact previous frame (seq + 1); anything else is dropped until the
+  // host's next full frame. Pruned to the sessions in the latest snapshot.
+
+  const screens = new Map();
+
+  function ingestScreen(f) {
+    if (!f.sessionId || typeof f.sessionId !== 'string') return;
+    const prev = screens.get(f.sessionId);
+    let text = f.text;
+    if (typeof f.keep === 'number') {
+      if (!prev || f.seq !== prev.seq + 1 || prev.text.length < f.keep) return;
+      text = prev.text.slice(0, f.keep) + (f.text || '');
+    }
+    if (typeof text !== 'string') return;
+    if (prev && typeof f.seq === 'number' && f.seq <= prev.seq && f.seq > prev.seq - 1000) return;
+    screens.set(f.sessionId, { seq: f.seq ?? 0, text, at: Date.now() });
+  }
+
+  function pruneScreens(snap) {
+    if (!Array.isArray(snap.agents)) return;
+    const live = new Set(snap.agents.map((a) => a && a.id));
+    for (const id of screens.keys()) if (!live.has(id)) screens.delete(id);
+  }
+
+
   // ---------------------------------------------------------------------------
   // Waiters: pending HTTP requests, resolved by matching host frames.
 
@@ -43,6 +90,8 @@ function createApi({ tokenOk, sendToHost, hostOnline, latestSnapshot }) {
   // Called by the relay for every parsed host frame (snapshots included).
   function onHostFrame(frame) {
     if (!frame || typeof frame.type !== 'string') return;
+    if (frame.type === 'screen') ingestScreen(frame);
+    else if (frame.type === 'snapshot') pruneScreens(frame);
     for (let i = 0; i < waiters.length; i++) {
       if (waiters[i].match(frame)) {
         const [w] = waiters.splice(i, 1);
@@ -58,9 +107,18 @@ function createApi({ tokenOk, sendToHost, hostOnline, latestSnapshot }) {
   // ---------------------------------------------------------------------------
   // Helpers.
 
+  // Big bodies (the snapshot, screens) are gzipped when the caller accepts it —
+  // the socket path gets permessage-deflate, pollers on cellular deserve the same.
   function json(res, status, obj) {
-    res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-    res.end(JSON.stringify(obj));
+    const headers = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' };
+    let body = Buffer.from(JSON.stringify(obj));
+    if (res.mcGzip && body.length > 1024) {
+      body = zlib.gzipSync(body);
+      headers['content-encoding'] = 'gzip';
+      headers.vary = 'accept-encoding';
+    }
+    res.writeHead(status, headers);
+    res.end(body);
   }
 
   function readBody(req) {
@@ -116,6 +174,23 @@ function createApi({ tokenOk, sendToHost, hostOnline, latestSnapshot }) {
     return json(res, frame.ok ? 200 : 422, rest);
   }
 
+  // POST /cmd: which host frame answers a given viewer frame — the same
+  // per-type matching the dedicated routes above use. null ⇒ no answer exists
+  // (a watch lease, console typing), so the route replies {ok:true} at once.
+  function replyMatcher(msg) {
+    const type = msg.type;
+    const alias = DOC_ALIAS[type] || type;
+    const isAck = (f) => f.type === 'ack' && (f.cmd === type || f.cmd === alias);
+    if (type === 'watch') return null;
+    if (type === 'key' && typeof msg.text === 'string' && msg.text) return null; // acks only on failure
+    if (alias === 'docGet') return (f) => (f.type === 'doc' && f.id === msg.id) || isAck(f);
+    if (type === 'docSearch') {
+      const q = String(msg.q ?? '').trim();
+      return (f) => f.type === 'docSearchResult' && f.q === q;
+    }
+    return isAck;
+  }
+
   // ---------------------------------------------------------------------------
   // The router.
 
@@ -126,7 +201,9 @@ function createApi({ tokenOk, sendToHost, hostOnline, latestSnapshot }) {
     endpoints: {
       'GET  /api/v1': 'this index',
       'GET  /api/v1/status': 'relay + Mac link state',
-      'GET  /api/v1/snapshot': 'the full raw fleet snapshot (heavy)',
+      'GET  /api/v1/snapshot': 'the full raw fleet snapshot (heavy): {ok, hostOnline, seq, ageMs, snapshot}; seq bumps per host snapshot, ageMs = since it arrived; 502 when the relay has none yet. Send X-MC-Client: <id> to count as a viewer (panel fallback).',
+      'POST /api/v1/cmd {type, ...}': 'panel fallback: one viewer→host frame, exactly as sent over /ws (same type allowlist; 400 otherwise). 200 → the host\'s answering frame verbatim (ack / doc / docSearchResult); watch and console typing (key+text) → {ok:true} at once; 502 Mac offline; 504 no answer in 15s',
+      'GET  /api/v1/screens?ids=a,b': 'panel fallback: latest assembled terminal buffer per watched session: {ok, screens:{id:{seq, text}}}; ids the relay has nothing for are omitted. Hold a lease via POST /cmd {type:"watch", sessionId}',
       'GET  /api/v1/agents': 'fleet summary + agents (light: no screens/logs)',
       'GET  /api/v1/agents/:id': 'one agent, full detail incl. last screen',
       'GET  /api/v1/agents/:id/screen': 'live terminal scrollback (opens a watch lease)',
@@ -159,6 +236,9 @@ function createApi({ tokenOk, sendToHost, hostOnline, latestSnapshot }) {
       return json(res, 401, { ok: false, error: 'missing or bad token — send Authorization: Bearer <MC_TOKEN>' });
     }
 
+    res.mcGzip = /\bgzip\b/.test(req.headers['accept-encoding'] || '');
+    const pollerId = String(req.headers['x-mc-client'] || '').slice(0, 64);
+
     const seg = pathname.split('/').filter(Boolean); // ['api','v1',...]
     if (seg[1] !== 'v1') return json(res, 404, { ok: false, error: 'unknown API version — use /api/v1' });
     const route = seg.slice(2); // after /api/v1
@@ -185,9 +265,45 @@ function createApi({ tokenOk, sendToHost, hostOnline, latestSnapshot }) {
     }
 
     if (route[0] === 'snapshot' && m === 'GET') {
+      if (pollerId) notePoller(pollerId);
       const snap = snapshot();
-      if (!snap) return json(res, 502, { ok: false, error: 'no snapshot yet — Mac may be offline' });
-      return json(res, 200, { ok: true, snapshot: snap });
+      if (!snap) return json(res, 502, { ok: false, hostOnline: hostOnline(), error: 'no snapshot yet — Mac may be offline' });
+      const meta = snapshotMeta();
+      return json(res, 200, {
+        ok: true,
+        hostOnline: hostOnline(),
+        seq: meta.seq,
+        ageMs: meta.at ? Math.max(0, Date.now() - meta.at) : null,
+        snapshot: snap,
+      });
+    }
+
+    // ---- panel HTTP fallback ------------------------------------------------
+    if (route[0] === 'cmd' && route.length === 1 && m === 'POST') {
+      if (pollerId) notePoller(pollerId);
+      if (!body || typeof body.type !== 'string' || !allowedTypes.includes(body.type)) {
+        return json(res, 400, { ok: false, error: `type ${JSON.stringify(body && body.type)} is not an allowed command` });
+      }
+      if (!hostOnline()) return json(res, 502, { ok: false, error: 'Mac is offline' });
+      const match = replyMatcher(body);
+      // Register the waiter BEFORE forwarding, so a fast host can't answer first.
+      const pending = match ? waitForFrame(match) : null;
+      sendToHost(body);
+      if (!pending) return json(res, 200, { ok: true });
+      const frame = await pending;
+      if (!frame) return json(res, 504, { ok: false, error: `no answer from the Mac within ${ACK_TIMEOUT_MS / 1000}s` });
+      return json(res, 200, frame);
+    }
+
+    if (route[0] === 'screens' && route.length === 1 && m === 'GET') {
+      if (pollerId) notePoller(pollerId);
+      const ids = String(url.searchParams.get('ids') || '').split(',').map((s) => s.trim()).filter(Boolean).slice(0, 50);
+      const out = {};
+      for (const id of ids) {
+        const s = screens.get(id);
+        if (s) out[id] = { seq: s.seq, text: s.text };
+      }
+      return json(res, 200, { ok: true, screens: out });
     }
 
     // ---- agents ----------------------------------------------------------

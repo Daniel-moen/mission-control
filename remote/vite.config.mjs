@@ -17,6 +17,10 @@ export default defineConfig({
         target: `ws://localhost:${process.env.MC_RELAY || 8899}`,
         ws: true,
       },
+      // The HTTP polling fallback (and the #diag probes) use the REST API.
+      '/api': {
+        target: `http://localhost:${process.env.MC_RELAY || 8899}`,
+      },
       // The Mia tab's push subscription talks to the relay over plain HTTP.
       '/push': {
         target: `http://localhost:${process.env.MC_RELAY || 8899}`,

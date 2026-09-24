@@ -1,5 +1,5 @@
 import { useNow, useLink } from '../lib/hooks.js';
-import { reconnectNow, dataAge } from '../lib/store.js';
+import { useMC, reconnectNow, dataAge } from '../lib/store.js';
 import { motion } from 'motion/react';
 import { fadeIn, press } from '../lib/motion.js';
 import IconButton from '../ui/IconButton.jsx';
@@ -16,6 +16,9 @@ export default function TopBar({ onPalette, onLaunch, onSettings }) {
   const now = useNow();
   const link = useLink();
   const l = LINK[link] || LINK.offline;
+  // On the HTTP fallback the link works the same, it just says how it's riding.
+  const http = useMC((s) => s.transport) === 'poll';
+  const via = http ? `${l.label} · over HTTP (WebSocket blocked on this network)` : l.label;
   const d = new Date(now || Date.now());
   const date = d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
   const p = (n) => String(n).padStart(2, '0');
@@ -39,7 +42,7 @@ export default function TopBar({ onPalette, onLaunch, onSettings }) {
         <motion.button
           {...press}
           onClick={() => link !== 'linked' && reconnectNow()}
-          title={age != null ? `Last data ${age}s ago` : l.label}
+          title={age != null ? `Last data ${age}s ago` : via}
           className="glass-soft glass-soft-hover pill hidden h-9 items-center gap-2 px-3.5 text-[12.5px] font-medium text-ink transition-colors sm:inline-flex"
         >
           <span className="relative flex h-2 w-2 flex-none">
@@ -47,18 +50,20 @@ export default function TopBar({ onPalette, onLaunch, onSettings }) {
             <span className={`relative inline-flex h-2 w-2 rounded-full ${l.dot}`} />
           </span>
           {l.label}
+          {http && <span className="-ml-0.5 text-[10px] font-medium tracking-[0.08em] text-ink3">HTTP</span>}
         </motion.button>
 
         {/* phone: the pill collapses to just the dot */}
         <button
           onClick={() => link !== 'linked' && reconnectNow()}
-          aria-label={l.label}
-          className="glass-soft pill grid h-9 w-9 place-items-center sm:hidden"
+          aria-label={via}
+          className={`glass-soft pill h-9 sm:hidden ${http ? 'inline-flex items-center gap-1.5 px-3' : 'grid w-9 place-items-center'}`}
         >
           <span className="relative flex h-2 w-2">
             {l.ping && <span className={`anim-ping absolute inline-flex h-full w-full rounded-full ${l.dot} opacity-60`} />}
             <span className={`relative inline-flex h-2 w-2 rounded-full ${l.dot}`} />
           </span>
+          {http && <span className="text-[10px] font-medium tracking-[0.08em] text-ink3">HTTP</span>}
         </button>
 
         <IconButton icon="search" label="Search — ⌘K" variant="glass" onClick={onPalette} />

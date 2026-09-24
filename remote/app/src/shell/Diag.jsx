@@ -61,6 +61,9 @@ export default function Diag() {
         <Row k="Token stored" v={s.token ? `yes (${s.token.length} chars)` : 'NO — enter it at the gate first'} />
         <Row k="Needs token" v={s.needsToken} />
         <Row k="Link state" v={s.link} />
+        <Row k="Transport" v={s.transport === 'poll' ? 'HTTP polling (fallback)' : 'WebSocket'} />
+        <Row k="Transport switch" v={d.switchedAt ? `${ago(d.switchedAt)} — ${d.switchReason}` : 'never'} />
+        <Row k="WS fails in a row" v={d.wsFails || 0} />
         <Row k="Socket" v={socketState()} />
         <Row k="Last dial" v={`${ago(d.lastAttemptAt)} → ${d.lastUrl || '—'}`} />
         <Row k="Opens / closes" v={`${d.opens || 0} / ${d.closes || 0}`} />
@@ -68,6 +71,9 @@ export default function Diag() {
         <Row k="Frames received" v={`${d.frames || 0} (last: ${d.lastFrameType || '—'})`} />
         <Row k="Last close" v={d.lastClose ? `code ${d.lastClose.code} ${d.lastClose.reason ? `“${d.lastClose.reason}”` : ''} ${ago(d.lastClose.at)}` : 'none'} />
         <Row k="Last snapshot" v={ago(s.lastSnapshotAt)} />
+        <Row k="Polls" v={d.polls || 0} />
+        <Row k="Last poll" v={d.lastPollAt ? `${d.lastPollStatus} ${ago(d.lastPollAt)}` : 'never'} />
+        <Row k="Last cmd" v={d.lastCmdAt ? `${d.lastCmdStatus} ${ago(d.lastCmdAt)}` : 'never'} />
         <Row k="GET /health" v={health} />
         <Row k="GET /api/v1/status" v={status} />
         <Row k="Browser" v={ua} />

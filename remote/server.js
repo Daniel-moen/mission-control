@@ -22,6 +22,12 @@
 // turned into notifications, never fanned out to viewers, and the host is told
 // the VAPID public key (`pushKey`) on connect.
 //
+// HTTP fallback (api.js: /api/v1/snapshot, /cmd, /screens): some networks
+// block WebSocket upgrades outright, so the panel can fall back to polling the
+// relay over plain HTTPS. Pollers that identify themselves (X-MC-Client) count
+// as viewers toward the host, exactly like a socket viewer, so the Mac keeps
+// capturing screens for them.
+//
 // Auth: every WebSocket connection must present the shared MC_TOKEN.
 
 'use strict';
@@ -94,7 +100,7 @@ const server = http.createServer((req, res) => {
 
   if (pathname === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, host: host !== null, viewers: viewers.size, pushSubscriptions: push.count() }));
+    res.end(JSON.stringify({ ok: true, host: host !== null, viewers: viewers.size, pollers: pollers.size, pushSubscriptions: push.count() }));
     return;
   }
 
@@ -151,13 +157,43 @@ const wss = new WebSocketServer({
 
 let host = null; // the Mac's socket (at most one)
 let lastSnapshot = null; // most recent snapshot JSON string, for late joiners
+let lastSnapshotAt = 0; // when it arrived (ms) — lets pollers judge freshness
+let snapshotSeq = 0; // bumps per host snapshot — lets pollers skip repeats
 const viewers = new Set();
+
+// HTTP pollers (panels on the fallback transport), keyed by their X-MC-Client
+// id → last time they polled. They count as viewers while fresh.
+const pollers = new Map();
+const POLLER_TTL_MS = 10000;
+
+// Viewer→host frame types the relay will forward — shared by the socket path
+// and POST /api/v1/cmd so the two can never drift apart.
+const ALLOWED_VIEWER_TYPES = [
+  'reply', 'broadcast', 'kill', 'launch', 'key', 'watch',
+  'docGet', 'docSave', 'docCreate', 'docDelete', 'docMeta', 'docSearch', 'research',
+  // Legacy plan* aliases: an old cached panel may still send these, and the
+  // host handles them as doc* equivalents.
+  'planGet', 'planSave', 'planCreate', 'planDelete',
+  // Mia, the persistent assistant (docs/mia.md §8).
+  'miaSend', 'miaAnswer', 'miaRead', 'miaTaskAdd', 'miaTaskCancel', 'miaTaskSet',
+  'miaStart', 'miaStop', 'miaSetModel', 'miaSchedule', 'miaPushTest',
+];
 
 const api = createApi({
   tokenOk,
   hostOnline: () => host !== null,
   latestSnapshot: () => lastSnapshot,
+  snapshotMeta: () => ({ seq: snapshotSeq, at: lastSnapshotAt }),
   sendToHost: (obj) => sendTo(host, obj),
+  allowedTypes: ALLOWED_VIEWER_TYPES,
+  notePoller: (id) => {
+    const fresh = !pollers.has(id);
+    pollers.set(id, Date.now());
+    if (fresh) {
+      console.log(`poller connected (${pollers.size})`);
+      tellHostViewerCount();
+    }
+  },
 });
 
 server.on('upgrade', (req, socket, head) => {
@@ -186,8 +222,24 @@ function fanOutToViewers(text) {
 }
 
 function tellHostViewerCount() {
-  sendTo(host, { type: 'viewers', count: viewers.size });
+  sendTo(host, { type: 'viewers', count: viewers.size + pollers.size });
 }
+
+// Expire pollers that stopped polling (tab closed, switched back to the socket).
+setInterval(() => {
+  const cutoff = Date.now() - POLLER_TTL_MS;
+  let changed = false;
+  for (const [id, at] of pollers) {
+    if (at < cutoff) {
+      pollers.delete(id);
+      changed = true;
+    }
+  }
+  if (changed) {
+    console.log(`poller gone (${pollers.size})`);
+    tellHostViewerCount();
+  }
+}, 2500);
 
 function tellViewersHostState() {
   const msg = JSON.stringify({ type: 'hostState', online: host !== null });
@@ -232,7 +284,11 @@ wss.on('connection', (ws) => {
         push.send(frame).catch((err) => console.error('push send error:', err));
         return;
       }
-      if (frame.type === 'snapshot') lastSnapshot = text;
+      if (frame.type === 'snapshot') {
+        lastSnapshot = text;
+        lastSnapshotAt = Date.now();
+        snapshotSeq += 1;
+      }
       api.onHostFrame(frame); // settle any pending REST requests
       fanOutToViewers(text); // snapshots and acks both go to every viewer
     });
@@ -263,17 +319,7 @@ wss.on('connection', (ws) => {
       return;
     }
     if (!msg || typeof msg.type !== 'string') return;
-    const allowed = [
-      'reply', 'broadcast', 'kill', 'launch', 'key', 'watch',
-      'docGet', 'docSave', 'docCreate', 'docDelete', 'docMeta', 'docSearch', 'research',
-      // Legacy plan* aliases: an old cached panel may still send these, and the
-      // host handles them as doc* equivalents.
-      'planGet', 'planSave', 'planCreate', 'planDelete',
-      // Mia, the persistent assistant (docs/mia.md §8).
-      'miaSend', 'miaAnswer', 'miaRead', 'miaTaskAdd', 'miaTaskCancel', 'miaTaskSet',
-      'miaStart', 'miaStop', 'miaSetModel', 'miaSchedule', 'miaPushTest',
-    ];
-    if (!allowed.includes(msg.type)) return;
+    if (!ALLOWED_VIEWER_TYPES.includes(msg.type)) return;
     if (!host) {
       // 'watch' is a ~3s lease heartbeat, not a user action — drop it silently
       // instead of spamming the viewer with offline acks.

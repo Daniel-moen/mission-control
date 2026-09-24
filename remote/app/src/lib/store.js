@@ -26,6 +26,14 @@
 //        miaSetModel/miaSchedule/miaPushTest (docs/mia.md §8). See the command
 //        section at the foot of this file for each frame's shape.
 //
+// Transport: the socket above is the normal path. Where a network blocks
+// WebSocket upgrades (seen on an iPhone: the socket loops connecting → closed
+// and the relay never sees it), the panel falls back to HTTP polling through
+// the relay's REST API — same frames, same MC_TOKEN: GET /api/v1/snapshot
+// every 1.5s, POST /api/v1/cmd per outgoing frame (the answering frame comes
+// back in the response), GET /api/v1/screens for watched terminals. See the
+// "HTTP polling fallback" section below.
+//
 // The document library lives in ~/.mission-control/library on the Mac as plain
 // markdown files (kind: plan | research | note). The snapshot carries only each
 // doc's METADATA (id/title/kind/status/subject/tags/dir/folder/preview/…); a
@@ -53,10 +61,15 @@ const LS_TOKEN = 'mc_token';
 export const useMC = create(() => ({
   token: '',
   link: 'offline', // 'offline' | 'relay' | 'linked'
+  transport: 'ws', // 'ws' | 'poll' — poll = HTTP fallback when WebSockets can't get through
   needsToken: false,
   // Socket diagnostics for the #diag screen — what the panel can't otherwise
   // say out loud when a device won't connect.
-  diag: { opens: 0, closes: 0, errors: 0, frames: 0, lastClose: null, lastFrameType: '', lastAttemptAt: 0, lastUrl: '' },
+  diag: {
+    opens: 0, closes: 0, errors: 0, frames: 0, lastClose: null, lastFrameType: '', lastAttemptAt: 0, lastUrl: '',
+    wsFails: 0, switchReason: '', switchedAt: 0,
+    polls: 0, lastPollStatus: '', lastPollAt: 0, lastCmdStatus: '', lastCmdAt: 0,
+  },
 
   snapshot: null,
   agents: [], // sorted: working → needs-you → exited → done, then by name
@@ -390,7 +403,9 @@ let watchTimer = null;
 
 function sendWatch(sessionId) {
   const l = watchLeases.get(sessionId);
-  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'watch', sessionId, hot: !!l?.hot }));
+  const frame = { type: 'watch', sessionId, hot: !!l?.hot };
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(frame));
+  else if (isPoll()) postCmd(frame, { silent: true });
 }
 function sendAllWatches() {
   for (const id of watchLeases.keys()) sendWatch(id);
@@ -401,6 +416,7 @@ function syncWatchTimer() {
     clearInterval(watchTimer);
     watchTimer = null;
   }
+  syncScreenPoll();
 }
 // Acquire a lease; returns a release function. Refcounted so two views of the
 // same session don't cancel each other.
@@ -584,15 +600,28 @@ export function connect() {
     sock = new WebSocket(url);
   } catch (err) {
     diagPatch({ errors: getMC().diag.errors + 1, lastClose: { code: 0, reason: String(err && err.message || err), at: Date.now() } });
-    scheduleReconnect();
+    wsFailed(`socket threw: ${String(err && err.message || err)}`);
+    if (!isPoll()) scheduleReconnect();
     return;
   }
   ws = sock;
+  let opened = false;
+  // A socket that sits in `connecting` this long is being held by something on
+  // the path — don't wait it out; go to HTTP now. It's left dialing: if it does
+  // open, onopen switches straight back.
+  clearTimeout(connectTimer);
+  connectTimer = setTimeout(() => {
+    if (ws === sock && sock.readyState === 0 && !isPoll()) enterPoll(`stuck connecting > ${WS_CONNECT_TIMEOUT_MS / 1000}s`);
+  }, WS_CONNECT_TIMEOUT_MS);
   ws.onopen = () => {
+    opened = true;
+    clearTimeout(connectTimer);
     retry = 0;
+    wsFails = 0;
+    exitPoll(); // a socket got through — it wins over HTTP immediately
     relayUp = true;
     lastFrameAt = Date.now();
-    diagPatch({ opens: getMC().diag.opens + 1 });
+    diagPatch({ opens: getMC().diag.opens + 1, wsFails: 0 });
     setLink();
     sendAllWatches(); // re-assert leases on every (re)connect
   };
@@ -605,35 +634,27 @@ export function connect() {
       return;
     }
     diagPatch({ frames: getMC().diag.frames + 1, lastFrameType: msg.type || '' });
-    if (msg.type === 'snapshot') {
-      hostOnline = true;
-      set({ lastSnapshotAt: Date.now() });
-      setLink();
-      ingest(msg);
-    } else if (msg.type === 'screen') {
-      ingestScreen(msg);
-    } else if (msg.type === 'doc') {
-      ingestDoc(msg);
-    } else if (msg.type === 'docSearchResult') {
-      set({ search: { q: msg.q || '', hits: Array.isArray(msg.hits) ? msg.hits : [], at: Date.now() } });
-    } else if (msg.type === 'hostState') {
-      hostOnline = msg.online;
-      setLink();
-    } else if (msg.type === 'ack') {
-      handleAck(msg);
-    }
+    handleFrame(msg);
   };
   ws.onclose = (e) => {
     diagPatch({ closes: getMC().diag.closes + 1, lastClose: { code: e.code, reason: e.reason || '', at: Date.now() } });
     if (ws !== sock) return; // an old, replaced socket — ignore
     ws = null;
-    relayUp = false;
-    hostOnline = false;
-    setLink();
+    clearTimeout(connectTimer);
     if (e.code === 4001 || e.code === 1008) {
+      relayUp = false;
+      hostOnline = false;
+      setLink();
       set({ needsToken: true });
       return;
     }
+    if (!opened) wsFailed(`socket closed before open (code ${e.code})`);
+    // On HTTP the link state belongs to the poller; this was only a background
+    // probe, and the poll-mode retry interval dials the next one.
+    if (isPoll()) return;
+    relayUp = false;
+    hostOnline = false;
+    setLink();
     scheduleReconnect();
   };
   ws.onerror = () => {
@@ -652,6 +673,7 @@ export function socketState() {
 function scheduleReconnect() {
   const mc = getMC();
   if (reconnectTimer || mc.needsToken || !mc.token) return;
+  if (isPoll()) return; // poll mode redials on its own slow interval
   const base = Math.min(5000, 600 * Math.pow(2, retry++));
   const delay = base / 2 + Math.random() * (base / 2); // jitter, capped at 5s
   reconnectTimer = setTimeout(() => {
@@ -664,6 +686,7 @@ function scheduleReconnect() {
 export function reconnectNow() {
   const mc = getMC();
   if (!mc.token || mc.needsToken) return;
+  if (isPoll()) pollOnce(); // refresh the HTTP view now; the socket retry below is a free probe
   retry = 0;
   if (ws && ws.readyState === 1) {
     // Socket claims to be open; if the relay has spoken recently, trust it.
@@ -674,6 +697,250 @@ export function reconnectNow() {
     return;
   }
   connect();
+}
+
+// ---- HTTP polling fallback --------------------------------------------------
+// Some networks block the WebSocket upgrade while plain HTTPS to the same host
+// works. After WS_FAILS_TO_POLL sockets in a row die before opening (or one
+// sits in `connecting` past WS_CONNECT_TIMEOUT_MS), the panel switches to
+// `transport: 'poll'`:
+//   • GET /api/v1/snapshot every POLL_MS → the same ingest() the socket uses
+//     (seq-deduped, so an unchanged snapshot isn't counted twice in history);
+//   • send() POSTs /api/v1/cmd and routes the answering frame through
+//     handleFrame() — acks, doc bodies and search results land exactly as if
+//     they'd arrived on the socket;
+//   • watch leases go out via /cmd, and GET /api/v1/screens feeds the leased
+//     sessions' buffers into ingestScreen() while any lease is held.
+// A WebSocket is still tried every WS_RETRY_IN_POLL_MS; the moment one opens,
+// polling stops and the socket takes over (see onopen → exitPoll()).
+const WS_FAILS_TO_POLL = 3;
+const WS_CONNECT_TIMEOUT_MS = 8000;
+const POLL_MS = 1500;
+const SCREEN_POLL_MS = 2000;
+const SCREEN_POLL_HOT_MS = 700; // someone is typing into the console
+const WS_RETRY_IN_POLL_MS = 60000;
+const CMD_TIMEOUT_MS = 20000; // the relay itself gives up at 15s
+// Identifies this tab to the relay so it counts as a viewer (the Mac only
+// captures screens while someone is watching).
+const CLIENT_ID = `p${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+
+let wsFails = 0;
+let connectTimer = null;
+let pollTimer = null;
+let wsRetryTimer = null;
+let pollBusy = false;
+let lastPollSeq = null;
+let screenPollTimer = null;
+let screenPollBusy = false;
+
+function isPoll() {
+  return getMC().transport === 'poll';
+}
+
+async function httpJSON(path, opts = {}, timeoutMs = 10000) {
+  const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = ctl ? setTimeout(() => ctl.abort(), timeoutMs) : null;
+  try {
+    const r = await fetch(path, {
+      cache: 'no-store',
+      ...opts,
+      headers: { Authorization: `Bearer ${getMC().token}`, 'X-MC-Client': CLIENT_ID, ...(opts.headers || {}) },
+      signal: ctl ? ctl.signal : undefined,
+    });
+    let data = null;
+    try {
+      data = await r.json();
+    } catch {
+      /* non-JSON (a proxy's error page) — status alone speaks */
+    }
+    return { status: r.status, data };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function wsFailed(why) {
+  wsFails += 1;
+  diagPatch({ wsFails });
+  if (!isPoll() && wsFails >= WS_FAILS_TO_POLL) enterPoll(`${wsFails} sockets failed — last: ${why}`);
+}
+
+function enterPoll(why) {
+  if (isPoll()) return;
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  set({ transport: 'poll' });
+  diagPatch({ switchReason: why, switchedAt: Date.now() });
+  lastPollSeq = null;
+  clearInterval(pollTimer);
+  pollTimer = setInterval(pollOnce, POLL_MS);
+  clearInterval(wsRetryTimer);
+  wsRetryTimer = setInterval(() => {
+    if (!ws || ws.readyState !== 1) connect();
+  }, WS_RETRY_IN_POLL_MS);
+  pollOnce();
+  sendAllWatches();
+  syncScreenPoll();
+}
+
+function exitPoll() {
+  if (!isPoll()) return;
+  clearInterval(pollTimer);
+  clearInterval(wsRetryTimer);
+  pollTimer = wsRetryTimer = null;
+  set({ transport: 'ws' });
+  diagPatch({ switchReason: 'socket opened — back on WebSocket', switchedAt: Date.now() });
+  syncScreenPoll();
+}
+
+async function pollOnce() {
+  const mc = getMC();
+  if (!isPoll() || pollBusy || !mc.token || mc.needsToken) return;
+  pollBusy = true;
+  let status = '';
+  try {
+    const { status: st, data } = await httpJSON('/api/v1/snapshot');
+    if (!isPoll()) return; // the socket took over mid-flight
+    status = String(st);
+    if (st === 401) {
+      relayUp = false;
+      hostOnline = false;
+      set({ needsToken: true });
+    } else if (st === 200 && data && data.snapshot) {
+      relayUp = true;
+      hostOnline = !!data.hostOnline;
+      if (data.seq !== lastPollSeq) {
+        lastPollSeq = data.seq;
+        // Freshness is when the relay got it from the Mac, not when we polled.
+        const age = typeof data.ageMs === 'number' ? data.ageMs : 0;
+        set({ lastSnapshotAt: Date.now() - age });
+        ingest(data.snapshot);
+      }
+    } else if (st === 502) {
+      relayUp = true;
+      hostOnline = false;
+    } else {
+      relayUp = false;
+      hostOnline = false;
+    }
+  } catch (err) {
+    status = `error: ${(err && err.message) || err}`;
+    relayUp = false;
+    hostOnline = false;
+  } finally {
+    pollBusy = false;
+    if (status) {
+      diagPatch({ polls: getMC().diag.polls + 1, lastPollStatus: status, lastPollAt: Date.now() });
+      setLink();
+    }
+  }
+}
+
+function syncScreenPoll() {
+  const want = isPoll() && watchLeases.size > 0;
+  if (want && !screenPollTimer) {
+    screenPollTimer = setTimeout(pollScreens, 0);
+  } else if (!want && screenPollTimer) {
+    clearTimeout(screenPollTimer);
+    screenPollTimer = null;
+  }
+}
+
+async function pollScreens() {
+  screenPollTimer = null;
+  if (!isPoll() || !watchLeases.size) return;
+  if (!screenPollBusy && !getMC().needsToken) {
+    screenPollBusy = true;
+    try {
+      const ids = [...watchLeases.keys()].map(encodeURIComponent).join(',');
+      const { status, data } = await httpJSON(`/api/v1/screens?ids=${ids}`);
+      if (status === 200 && data && data.screens && isPoll()) {
+        for (const [sessionId, f] of Object.entries(data.screens)) {
+          if (watchLeases.has(sessionId)) ingestScreen({ sessionId, seq: f.seq, text: f.text }); // full frames
+        }
+      }
+    } catch {
+      /* the snapshot poll reports link trouble; screens just try again */
+    } finally {
+      screenPollBusy = false;
+    }
+  }
+  if (!isPoll() || !watchLeases.size || screenPollTimer) return;
+  const hot = [...watchLeases.values()].some((l) => l.hot > 0);
+  screenPollTimer = setTimeout(pollScreens, hot ? SCREEN_POLL_HOT_MS : SCREEN_POLL_MS);
+}
+
+// Outgoing frames in poll mode. Keystrokes go through one ordered queue (each
+// is its own HTTP request, and typed characters must not overtake each other
+// or the Enter that follows them); runs of literal typing are merged.
+const keyQueue = [];
+let keyBusy = false;
+
+function postCmd(obj, { silent = false } = {}) {
+  if (obj.type === 'key') {
+    keyQueue.push(obj);
+    drainKeys();
+    return;
+  }
+  runCmd(obj, silent);
+}
+
+async function drainKeys() {
+  if (keyBusy) return;
+  keyBusy = true;
+  try {
+    while (keyQueue.length) {
+      let f = keyQueue.shift();
+      if (f.text) {
+        while (keyQueue.length && keyQueue[0].text && keyQueue[0].sessionId === f.sessionId) {
+          f = { ...f, text: f.text + keyQueue.shift().text };
+        }
+      }
+      await runCmd(f, false);
+    }
+  } finally {
+    keyBusy = false;
+  }
+}
+
+async function runCmd(obj, silent) {
+  let label = '';
+  try {
+    const { status, data } = await httpJSON(
+      '/api/v1/cmd',
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(obj) },
+      CMD_TIMEOUT_MS,
+    );
+    label = `${obj.type} → ${status}`;
+    if (status === 200 && data) {
+      if (data.type) handleFrame(data); // the host's answer, exactly as the socket would deliver it
+      return;
+    }
+    if (status === 401) {
+      set({ needsToken: true });
+      return;
+    }
+    if (status === 502) {
+      hostOnline = false;
+      setLink();
+    }
+    if (!silent) cmdFailed(obj, status === 502 ? 'Your Mac is offline' : status === 504 ? 'No answer from your Mac' : 'Not connected');
+  } catch (err) {
+    label = `${obj.type} → error: ${(err && err.message) || err}`;
+    if (!silent) cmdFailed(obj, 'Not connected');
+  } finally {
+    diagPatch({ lastCmdStatus: label, lastCmdAt: Date.now() });
+  }
+}
+
+function cmdFailed(obj, text) {
+  // Same rate limit as a failing key ack: typing can fail once per keystroke.
+  if (obj.type === 'key') {
+    if (Date.now() - lastKeyFailAt < 4000) return;
+    lastKeyFailAt = Date.now();
+  }
+  if (obj.type === 'miaSend') setMiaLocal((l) => ({ sent: l.sent.slice(1) })); // undo the optimistic echo
+  toast(text);
 }
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
@@ -807,6 +1074,28 @@ function ingest(s) {
   set(patch);
 }
 
+// One host frame, from either transport: the socket's onmessage, or the frame
+// a POST /api/v1/cmd returned in poll mode.
+function handleFrame(msg) {
+  if (msg.type === 'snapshot') {
+    hostOnline = true;
+    set({ lastSnapshotAt: Date.now() });
+    setLink();
+    ingest(msg);
+  } else if (msg.type === 'screen') {
+    ingestScreen(msg);
+  } else if (msg.type === 'doc') {
+    ingestDoc(msg);
+  } else if (msg.type === 'docSearchResult') {
+    set({ search: { q: msg.q || '', hits: Array.isArray(msg.hits) ? msg.hits : [], at: Date.now() } });
+  } else if (msg.type === 'hostState') {
+    hostOnline = msg.online;
+    setLink();
+  } else if (msg.type === 'ack') {
+    handleAck(msg);
+  }
+}
+
 function ingestDoc(msg) {
   if (!msg.id || typeof msg.content !== 'string') return;
   const doc = {
@@ -867,6 +1156,18 @@ function handleAck(msg) {
 
 // ---- commands ---------------------------------------------------------------
 function send(obj) {
+  if (isPoll()) {
+    if (!relayUp) {
+      toast('Not connected');
+      return false;
+    }
+    if (!hostOnline) {
+      toast('Your Mac is offline');
+      return false;
+    }
+    postCmd(obj); // the answer (ack/doc/…) arrives through handleFrame
+    return true;
+  }
   if (!ws || ws.readyState !== 1) {
     toast('Not connected');
     return false;
@@ -1164,8 +1465,10 @@ export function miaRead(upTo) {
   if (!upTo) return false;
   const mc = getMC();
   if (mc.miaLocal.readUpTo === upTo || mc.mia?.readUpTo === upTo) return false;
-  if (!ws || ws.readyState !== 1 || !hostOnline) return false;
-  ws.send(JSON.stringify({ type: 'miaRead', upTo }));
+  if (!hostOnline) return false;
+  if (isPoll()) postCmd({ type: 'miaRead', upTo }, { silent: true });
+  else if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'miaRead', upTo }));
+  else return false;
   setMiaLocal(() => ({ readUpTo: upTo }));
   return true;
 }

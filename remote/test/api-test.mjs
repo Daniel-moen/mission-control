@@ -5,7 +5,8 @@
 //
 // Asserts auth, agent listing/detail/loose-matching, live screen reads, reply/
 // key/kill/broadcast/launch acks, the full doc CRUD + search cycle, and the
-// one-shot research flow (active → done), and Mia (/api/v1/mia*).
+// one-shot research flow (active → done), Mia (/api/v1/mia*), and the panel's
+// HTTP fallback transport (/snapshot, /cmd, /screens) with and without a host.
 
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -42,12 +43,13 @@ function boot(cmd, args, name) {
   return p;
 }
 
-async function api(method, route, body, { token = TOKEN } = {}) {
+async function api(method, route, body, { token = TOKEN, headers = {} } = {}) {
   const res = await fetch(`${BASE}${route}`, {
     method,
     headers: {
       ...(token ? { authorization: `Bearer ${token}` } : {}),
       ...(body ? { 'content-type': 'application/json' } : {}),
+      ...headers,
     },
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -58,7 +60,19 @@ async function api(method, route, body, { token = TOKEN } = {}) {
 
 async function main() {
   boot('node', ['server.js'], 'relay');
-  boot('node', ['test/fake-host.mjs'], 'host');
+
+  // Before any host: the fallback routes must say "Mac offline", not hang.
+  for (let i = 0; i < 50; i++) {
+    try { if ((await fetch(`http://localhost:${PORT}/health`)).ok) break; } catch { /* not yet */ }
+    await sleep(100);
+  }
+  console.log('fallback, no host');
+  const noSnap = await api('GET', '/snapshot');
+  ok(noSnap.status === 502 && noSnap.data.hostOnline === false, 'snapshot is a 502 with hostOnline:false before the Mac connects');
+  ok((await api('POST', '/cmd', { type: 'broadcast', text: 'hi' })).status === 502, 'cmd is a 502 while the Mac is offline');
+  ok((await api('POST', '/cmd', { type: 'bogus' })).status === 400, 'disallowed type is a 400 even offline');
+
+  const host = boot('node', ['test/fake-host.mjs'], 'host');
 
   // Wait for the relay to be up AND the fake host to be linked + snapshotting.
   let up = false;
@@ -171,9 +185,63 @@ async function main() {
   ok(miaAfter.messages.some((m) => m.from === 'daniel' && m.text === 'Anything in my inbox?'), 'message shows up in the thread');
   ok((await api('GET', '/mia', null, { token: '' })).status === 401, 'mia routes need the token');
 
+  console.log('fallback transport');
+  const snapR = await api('GET', '/snapshot', null, { headers: { 'x-mc-client': 'api-test' } });
+  ok(snapR.status === 200 && snapR.data.hostOnline === true && snapR.data.snapshot.type === 'snapshot', 'snapshot carries hostOnline + the raw snapshot');
+  ok(typeof snapR.data.seq === 'number' && snapR.data.seq > 0 && typeof snapR.data.ageMs === 'number', 'snapshot carries seq and ageMs');
+  const health = await (await fetch(`http://localhost:${PORT}/health`)).json();
+  ok(health.pollers === 1, 'an X-MC-Client poller is counted as a viewer');
+  const gz = await fetch(`${BASE}/snapshot`, { headers: { authorization: `Bearer ${TOKEN}`, 'accept-encoding': 'gzip' } });
+  ok(gz.headers.get('content-encoding') === 'gzip' && (await gz.json()).ok, 'snapshot is gzipped when accepted');
+
+  const cmdReply = await api('POST', '/cmd', { type: 'reply', sessionId: 'webapp-ask', text: 'via cmd' });
+  ok(cmdReply.status === 200 && cmdReply.data.type === 'ack' && cmdReply.data.cmd === 'reply' && cmdReply.data.ok, 'cmd reply returns the host ack frame verbatim');
+  const cmdDoc = await api('POST', '/cmd', { type: 'docGet', id: docId });
+  ok(cmdDoc.status === 200 && cmdDoc.data.type === 'doc' && cmdDoc.data.id === docId, 'cmd docGet returns the doc frame');
+  const cmdMissing = await api('POST', '/cmd', { type: 'docGet', id: 'missing.md' });
+  ok(cmdMissing.status === 200 && cmdMissing.data.type === 'ack' && cmdMissing.data.ok === false, 'cmd docGet of a missing doc returns the failing ack');
+  const cmdSearch = await api('POST', '/cmd', { type: 'docSearch', q: ' zephyrite ' });
+  ok(cmdSearch.status === 200 && cmdSearch.data.type === 'docSearchResult' && cmdSearch.data.hits.length === 1, 'cmd docSearch returns docSearchResult');
+  const cmdMeta = await api('POST', '/cmd', { type: 'docMeta', id: docId, tags: ['x'] });
+  ok(cmdMeta.status === 200 && cmdMeta.data.cmd === 'docMeta', 'cmd docMeta returns its ack');
+  const cmdLegacy = await api('POST', '/cmd', { type: 'planGet', id: docId });
+  ok(cmdLegacy.status === 200 && cmdLegacy.data.type === 'doc', 'legacy planGet resolves with the doc frame');
+  ok((await api('POST', '/cmd', { type: 'bogus' })).status === 400, 'cmd with a disallowed type is a 400');
+  ok((await api('POST', '/cmd', { nope: 1 })).status === 400, 'cmd without a type is a 400');
+  ok((await api('POST', '/cmd', { type: 'push', title: 'x' })).status === 400, 'host-only types cannot be injected');
+
+  const t0 = Date.now();
+  const cmdWatch = await api('POST', '/cmd', { type: 'watch', sessionId: 'acme-worker-1' });
+  ok(cmdWatch.status === 200 && cmdWatch.data.ok === true && Date.now() - t0 < 1000, 'cmd watch returns {ok:true} immediately');
+  await sleep(100); // the lease is open on the host before we type into it
+  const cmdTyping = await api('POST', '/cmd', { type: 'key', sessionId: 'acme-worker-1', text: 'abc' });
+  ok(cmdTyping.status === 200 && cmdTyping.data.ok === true && !cmdTyping.data.type, 'console typing returns {ok:true} at once');
+  let scr = null;
+  for (let i = 0; i < 12 && !scr; i++) {
+    await sleep(500);
+    const r = await api('GET', '/screens?ids=acme-worker-1,nope');
+    if (r.data.screens['acme-worker-1']) scr = r.data;
+  }
+  ok(scr && scr.screens['acme-worker-1'].text.includes('scrollback line') && typeof scr.screens['acme-worker-1'].seq === 'number', 'screens returns the streamed buffer after a watch');
+  ok(scr && !('nope' in scr.screens), 'screens omits unknown ids');
+  ok(scr && scr.screens['acme-worker-1'].text.includes('❯ abc'), 'typed text reaches the assembled screen');
+  // Let several delta frames land, then check the assembled buffer is coherent:
+  // it must equal the latest full render (scrollback + input line), not a torn mix.
+  await api('POST', '/cmd', { type: 'watch', sessionId: 'acme-worker-1' });
+  await sleep(3500);
+  const later = (await api('GET', '/screens?ids=acme-worker-1')).data.screens['acme-worker-1'];
+  ok(later && later.seq > scr.screens['acme-worker-1'].seq, 'screens advance as the host streams (deltas applied)');
+  ok(later && later.text.split('\n').length >= 100 && /❯ abc█$/.test(later.text), 'assembled buffer stays coherent across deltas');
+
   console.log('errors');
   ok((await api('GET', '/nope')).status === 404, 'unknown route is a 404');
   ok((await api('POST', '/launch', {})).status === 422 || (await api('POST', '/launch', {})).data.ok === false, 'empty launch is rejected by the host');
+
+  console.log('fallback, host gone');
+  host.kill();
+  await sleep(500);
+  const gone = await api('GET', '/snapshot');
+  ok(gone.status === 200 && gone.data.hostOnline === false && gone.data.snapshot, 'last-known snapshot is served with hostOnline:false after the Mac leaves');
 
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exitCode = failed ? 1 : 0;
