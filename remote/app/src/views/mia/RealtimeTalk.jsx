@@ -68,7 +68,7 @@ function injectText(m) {
   const opts = Array.isArray(m.options) ? m.options.filter(Boolean) : [];
   if (m.kind === 'question' && m.questionId)
     t += `\n(This is a question you need Daniel to answer, question id ${m.questionId}.${opts.length ? ` Options: ${opts.join(' | ')}.` : ''} Ask it in your own words${opts.length ? ' and offer the options' : ''}; when he answers, call answer_question.)`;
-  else t += '\n(Tell Daniel now, in first person, as your own finding.)';
+  else t += '\n(Tell Daniel now, in first person, as your own finding: the key point only, in one sentence of about 15 words, then stop.)';
   return t;
 }
 

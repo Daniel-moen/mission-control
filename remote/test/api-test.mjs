@@ -346,7 +346,7 @@ async function main() {
     ok(/Never reveal how you work inside/.test(sess.instructions || '') && !/Mia says/.test(JSON.stringify(sess)), 'session: one assistant — no hand-off talk, no "Mia says"');
     ok(/like Jarvis/.test(sess.instructions || '') && /One or two short sentences/.test(sess.instructions || '') && /Never repeat his request/.test(sess.instructions || '') && /Never read a list aloud/.test(sess.instructions || '') && /lead with the answer/.test(sess.instructions || ''), 'session: Jarvis-brief persona (short, no filler, no echo, no lists, answer first)');
     ok(sess.max_output_tokens === 300, 'session: output capped at 300 tokens per response');
-    ok(/at most about 30 words/.test(sess.instructions || '') && /Finish each sentence/.test(sess.instructions || ''), 'session: mini gets the firmer length rule (short, ends at a sentence)');
+    ok(/at most about 20 words/.test(sess.instructions || '') && /Finish each sentence/.test(sess.instructions || ''), 'session: mini gets the firmer length rule (short, ends at a sentence)');
     ok(/never call send_to_mia for them/.test(sess.instructions || '') && /Can you hear me/.test(sess.instructions || '') && /Not for greetings or small talk/.test((sess.tools || []).find((t) => t.name === 'send_to_mia')?.description || ''), 'session: greetings and small talk are answered directly, not sent on');
     ok((sess.tools || []).every((t) => !/to Mia|Mia's|\bagent|Claude|relay/i.test(t.description)), 'session: tool descriptions don\'t leak the architecture');
     ok(cfg.expires_after?.seconds <= 600, 'the client secret is short-lived');
@@ -354,7 +354,7 @@ async function main() {
     const prem = await (await fetch(`${RT}/session`, { method: 'POST', headers: { ...bearer, 'content-type': 'application/json' }, body: JSON.stringify({ quality: 'premium', transcript: true }) })).json();
     const pcfg = JSON.parse(openaiSeen.filter((x) => x.url === '/v1/realtime/client_secrets').pop().body).session;
     ok(prem.ok && prem.model === 'gpt-realtime-2.1' && pcfg.model === 'gpt-realtime-2.1' && pcfg.audio.input.transcription?.model === 'gpt-4o-mini-transcribe' && prem.transcript === true, 'Premium + transcript: gpt-realtime-2.1 with input transcription');
-    ok(!/at most about 30 words/.test(pcfg.instructions) && /never call send_to_mia for them/.test(pcfg.instructions), 'Premium keeps the shared persona (small-talk rule, no mini length rule)');
+    ok(!/at most about 20 words/.test(pcfg.instructions) && /never call send_to_mia for them/.test(pcfg.instructions), 'Premium keeps the shared persona (small-talk rule, no mini length rule)');
 
     const sdp = (id, body = 'v=0\r\nfake-offer\r\n') => fetch(`http://localhost:${PORT}/realtime/calls/${id}`, { method: 'POST', headers: { ...bearer, 'content-type': 'application/sdp' }, body });
     ok((await fetch(`http://localhost:${PORT}/realtime/calls/${s.id}`, { method: 'POST', body: 'x' })).status === 401, 'the SDP route needs the token');

@@ -94,10 +94,11 @@ Ending: when Daniel says he is done ("Okay Mia, I'm done", "I'm done now", "that
 If Daniel interrupts you, stop and listen. If you did not catch something, say so in a few words.`;
 
 // The mini model talks more and runs into max_output_tokens mid-sentence, so
-// it gets a firmer length rule on top of the shared persona.
+// it gets a firmer length rule on top of the shared persona. Spoken output is
+// ~9 tokens a word (audio + transcript): 300 tokens ≈ 30 words, so aim for 20.
 const MINI_INSTRUCTIONS = `${INSTRUCTIONS}
 
-Length: every reply is one or two short sentences, at most about 30 words, even when delivering a result. Finish each sentence; stop right after a full stop rather than starting another thought. If there is more, end with a short offer ("Want the rest?").`;
+Length: every reply is one or two short sentences, at most about 20 words in total. A result is one sentence of about 15 words with its single most important point, not every item. Finish each sentence and stop at the full stop; never start another thought. If more is worth hearing, end with "Want the rest?" and nothing else.`;
 
 function instructionsFor(m) {
   return /mini/.test(m) ? MINI_INSTRUCTIONS : INSTRUCTIONS;
