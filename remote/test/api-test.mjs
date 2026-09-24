@@ -8,7 +8,8 @@
 // one-shot research flow (active → done), Mia (/api/v1/mia*), and the panel's
 // HTTP fallback transport (/snapshot, /cmd, /screens) with and without a host.
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -16,6 +17,7 @@ import os from 'node:os';
 import fs from 'node:fs';
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
 const PORT = 8897;
 const TOKEN = 'test';
 const BASE = `http://localhost:${PORT}/api/v1`;
@@ -232,6 +234,33 @@ async function main() {
   const later = (await api('GET', '/screens?ids=acme-worker-1')).data.screens['acme-worker-1'];
   ok(later && later.seq > scr.screens['acme-worker-1'].seq, 'screens advance as the host streams (deltas applied)');
   ok(later && later.text.split('\n').length >= 100 && /❯ abc█$/.test(later.text), 'assembled buffer stays coherent across deltas');
+
+  console.log('stt (talk mode)');
+  {
+    const STT = `http://localhost:${PORT}/stt`;
+    ok((await fetch(STT)).status === 401, 'stt needs the token');
+    const info = await (await fetch(STT, { headers: { authorization: `Bearer ${TOKEN}` } })).json();
+    ok(info.ok === true && 'provider' in info, 'GET /stt reports the provider');
+    const health = await (await fetch(`http://localhost:${PORT}/health`)).json();
+    ok('stt' in health, '/health says whether talk mode can transcribe');
+    const { clean } = require('../stt.js');
+    ok(clean(' [BLANK_AUDIO] ') === '' && clean(' Thank you.') === '' && clean('(music) Call Sam at 3.') === 'Call Sam at 3.', 'whisper filler and silence hallucinations are dropped');
+    const post = (body, type = 'audio/wav') =>
+      fetch(STT, { method: 'POST', headers: { authorization: `Bearer ${TOKEN}`, 'content-type': type }, body });
+    if (!info.provider) {
+      ok((await post(Buffer.alloc(4000))).status === 503, 'without a transcriber POST /stt is a 503 (talk mode shows why)');
+      console.log('    (set WHISPER_MODEL=<ggml model> with whisper-cli on PATH to exercise real transcription)');
+    } else {
+      ok((await post(Buffer.alloc(4000), 'audio/wav')).status === (info.provider === 'whisper' ? 415 : 502), 'non-WAV body is refused before whisper runs');
+      ok((await post(Buffer.alloc(10))).status === 400, 'an empty recording is a 400');
+      const wav = path.join(TMP, 'say.wav');
+      const said = spawnSync('say', ['-o', wav, '--data-format=LEI16@16000', 'Remind me to call the dentist tomorrow at three.']);
+      if (said.status === 0) {
+        const r = await (await post(fs.readFileSync(wav))).json();
+        ok(r.ok && /dentist/i.test(r.text), `a spoken WAV comes back as text (${r.ms}ms: "${r.text}")`);
+      }
+    }
+  }
 
   console.log('errors');
   ok((await api('GET', '/nope')).status === 404, 'unknown route is a 404');

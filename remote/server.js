@@ -28,6 +28,10 @@
 // as viewers toward the host, exactly like a socket viewer, so the Mac keeps
 // capturing screens for them.
 //
+// Talk mode (stt.js): POST /stt turns a recorded utterance into text — a
+// whisper.cpp binary baked into the image, or OpenAI if OPENAI_API_KEY is set.
+// The text goes to Mia as a normal miaSend; nothing about it touches the host.
+//
 // Auth: every WebSocket connection must present the shared MC_TOKEN.
 
 'use strict';
@@ -39,6 +43,7 @@ const path = require('path');
 const { WebSocketServer } = require('ws');
 const { createApi } = require('./api');
 const { createPush } = require('./push');
+const { createStt } = require('./stt');
 
 const PORT = process.env.PORT || 8080;
 const TOKEN = process.env.MC_TOKEN || '';
@@ -56,6 +61,7 @@ function tokenOk(candidate) {
 }
 
 const push = createPush({ tokenOk });
+const stt = createStt({ tokenOk });
 
 // ---------------------------------------------------------------------------
 // HTTP: serve the built SPA + a health check.
@@ -100,7 +106,7 @@ const server = http.createServer((req, res) => {
 
   if (pathname === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, host: host !== null, viewers: viewers.size, pollers: pollers.size, pushSubscriptions: push.count() }));
+    res.end(JSON.stringify({ ok: true, host: host !== null, viewers: viewers.size, pollers: pollers.size, pushSubscriptions: push.count(), stt: stt.info().provider }));
     return;
   }
 
@@ -118,6 +124,16 @@ const server = http.createServer((req, res) => {
   if (pathname.startsWith('/push/')) {
     push.handle(req, res, url).catch((err) => {
       console.error('push error:', err);
+      if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'internal error' }));
+    });
+    return;
+  }
+
+  // Speech-to-text for the Mia view's talk mode (token-auth) — see stt.js.
+  if (pathname === '/stt') {
+    stt.handle(req, res, url).catch((err) => {
+      console.error('stt error:', err);
       if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: 'internal error' }));
     });

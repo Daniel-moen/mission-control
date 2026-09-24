@@ -113,7 +113,7 @@ export const useMC = create(() => ({
 export const getMC = () => useMC.getState();
 const set = (patch) => useMC.setState(patch);
 
-export const PANEL_BUILD = 'v23.2 · 2026-09-24 · slim bar, folding panes, downloads';
+export const PANEL_BUILD = 'v23.3 · 2026-09-24 · talk to Mia';
 
 // ---- status helpers ---------------------------------------------------------
 // Status semantics: working = green, needs-you = amber, done = quiet neutral,
@@ -1485,6 +1485,15 @@ function handleMiaAck(msg) {
   // The thread itself shows a sent message or an answer — no toast for those.
   const t = MIA_ACK_OK[msg.cmd];
   if (t) toast(msg.cmd === 'miaPushTest' && msg.detail ? msg.detail : t);
+}
+
+// Talk mode (views/mia/Talk.jsx) prefixes what Daniel said aloud, so Mia sees
+// "[MC] Daniel: (voice) …" and answers short and speakable. The thread shows
+// the words with a mic mark instead of the tag.
+export const VOICE_TAG = '(voice) ';
+export function voiceText(text) {
+  const t = String(text || '');
+  return t.startsWith(VOICE_TAG) ? { text: t.slice(VOICE_TAG.length), voice: true } : { text: t, voice: false };
 }
 
 export function miaSend(text) {

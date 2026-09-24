@@ -466,6 +466,12 @@ function handleMia(type, msg) {
       const text = String(msg.text ?? '').trim();
       if (!text) return ack(false, 'Message is empty');
       miaMessage({ from: 'daniel', kind: 'chat', text });
+      // Talk mode: a spoken message gets a short spoken-style reply, so the
+      // panel's listen → send → speak loop can be exercised end to end.
+      if (text.startsWith('(voice) ')) {
+        const said = text.slice(8);
+        setTimeout(() => miaMessage({ from: 'mia', kind: 'chat', text: `Got it. You said: ${said}` }), 1200);
+      }
       return ack(true, 'Sent to Mia');
     }
     case 'miaAnswer': {

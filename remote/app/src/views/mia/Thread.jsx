@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { useMC, miaSend, miaRead, miaAnswerFor, miaStart } from '../../lib/store.js';
+import { useMC, miaSend, miaRead, miaAnswerFor, miaStart, voiceText } from '../../lib/store.js';
 import { spring, press } from '../../lib/motion.js';
 import Icon from '../../ui/Icon.jsx';
 import Button from '../../ui/Button.jsx';
@@ -61,6 +61,7 @@ function MessageRow({ m, head, mia, onTask, pending }) {
   const isNotify = m.kind === 'notify';
   const open = isQ && m.questionId && mia.openIds.has(m.questionId);
   const answer = isQ && !open ? miaAnswerFor(mia.block, m.questionId, mia.local) : null;
+  const said = voiceText(m.text);
 
   const rule = isNotify
     ? m.urgent
@@ -88,7 +89,10 @@ function MessageRow({ m, head, mia, onTask, pending }) {
           </div>
         )}
         <div className={`whitespace-pre-wrap break-words text-[14.5px] leading-relaxed ${pending ? 'text-ink3' : fromMia ? 'text-ink' : 'text-ink2'}`}>
-          {m.text}
+          {said.voice && (
+            <Icon name="mic" size={12} className="mr-1.5 inline-block align-[-1px] text-ink3" aria-label="Spoken" />
+          )}
+          {said.text}
         </div>
         {(m.taskId || pending) && (
           <div className="mt-1 flex items-center gap-2">
@@ -107,7 +111,7 @@ function MessageRow({ m, head, mia, onTask, pending }) {
               {answer != null ? (
                 <span className="min-w-0 break-words">
                   <span className="text-ink3">You answered · </span>
-                  {answer}
+                  {voiceText(answer).text}
                 </span>
               ) : (
                 <span className="text-ink3">Closed</span>

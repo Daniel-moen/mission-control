@@ -16,6 +16,8 @@ import Segmented from '../../ui/Segmented.jsx';
 import EmptyState from '../../ui/EmptyState.jsx';
 import Thread from './Thread.jsx';
 import Tasks from './Tasks.jsx';
+import Talk from './Talk.jsx';
+import { primeTalk, talkSupported } from '../../lib/voice.js';
 
 // MIA — the assistant's window (docs/mia.md §9). Chromeless like Library: the
 // header row is ours (presence, model, start/stop, notifications, close). Two
@@ -161,6 +163,7 @@ export default function Mia({ onOpenAgent, onClose }) {
   const wide = width >= WIDE;
 
   const [tab, setTab] = useState('thread');
+  const [talking, setTalking] = useState(false);
   const [highlight, setHighlight] = useState(null); // { id, n } — n re-fires the same id
 
   const openQ = miaOpenQuestions(mia, local).length;
@@ -176,6 +179,23 @@ export default function Mia({ onOpenAgent, onClose }) {
     if (!wide) setTab('tasks');
     else if (tasksFolded) toggleTasks();
   };
+
+  // Talk: the tap itself unlocks speech and asks for the mic (iOS only allows
+  // both inside a gesture); the Talk view picks the session up when it mounts.
+  const talkButton =
+    talkSupported && mia && !talking ? (
+      <Button
+        size="sm"
+        variant="primary"
+        icon="mic"
+        onClick={() => {
+          primeTalk();
+          setTalking(true);
+        }}
+      >
+        Talk
+      </Button>
+    ) : null;
 
   const controls = (
     <>
@@ -195,8 +215,9 @@ export default function Mia({ onOpenAgent, onClose }) {
           </h2>
           <Presence mia={mia} link={link} />
           <span className="flex-1" />
-          {wide && <div className="flex flex-wrap items-center justify-end gap-2">{controls}</div>}
-          {wide && mia && (
+          {talkButton}
+          {wide && !talking && <div className="flex flex-wrap items-center justify-end gap-2">{controls}</div>}
+          {wide && mia && !talking && (
             <IconButton
               icon={tasksFolded ? 'paneRightOpen' : 'paneRightClose'}
               label={tasksFolded ? 'Show tasks' : 'Hide tasks'}
@@ -207,7 +228,7 @@ export default function Mia({ onOpenAgent, onClose }) {
           )}
           {onClose && <IconButton icon="close" label="Close" size="sm" variant="glass" onClick={onClose} />}
         </div>
-        {!wide && <div className="noscroll -mx-4 flex items-center gap-2 overflow-x-auto px-4 sm:-mx-5 sm:px-5">{controls}</div>}
+        {!wide && !talking && <div className="noscroll -mx-4 flex items-center gap-2 overflow-x-auto px-4 sm:-mx-5 sm:px-5">{controls}</div>}
       </header>
 
       {!snapshot ? (
@@ -223,6 +244,10 @@ export default function Mia({ onOpenAgent, onClose }) {
             </Button>
           }
         />
+      ) : talking ? (
+        <div className="flex min-h-0 flex-1 flex-col border-t border-glass-line">
+          <Talk mia={mia} onExit={() => setTalking(false)} />
+        </div>
       ) : wide ? (
         <div className="flex min-h-0 flex-1 border-t border-glass-line">
           <div className="flex min-h-0 min-w-0 flex-1 flex-col pt-3">
