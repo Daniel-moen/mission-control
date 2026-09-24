@@ -313,7 +313,9 @@ async function main() {
     ok(sess.type === 'realtime' && sess.model === 'gpt-realtime-2.1' && sess.audio?.output?.voice === 'marin', 'session: realtime model + voice');
     ok(sess.audio?.input?.turn_detection?.type === 'server_vad' && sess.audio.input.turn_detection.interrupt_response === true, 'session: server VAD with barge-in');
     ok(['send_to_mia', 'get_status', 'answer_question', 'end_session'].every((n) => (sess.tools || []).some((t) => t.name === n)), 'session: the four relay tools');
-    ok(/do not answer questions or do work yourself/i.test(sess.instructions || ''), 'session: persona only relays, never answers');
+    ok(/you do not answer from memory/i.test(sess.instructions || '') && /call send_to_mia/.test(sess.instructions || ''), 'session: persona routes everything substantive, never answers itself');
+    ok(/Never reveal how you work inside/.test(sess.instructions || '') && !/Mia says/.test(JSON.stringify(sess)), 'session: one assistant — no hand-off talk, no "Mia says"');
+    ok((sess.tools || []).every((t) => !/to Mia|Mia's|\bagent|Claude|relay/i.test(t.description)), 'session: tool descriptions don\'t leak the architecture');
     ok(cfg.expires_after?.seconds <= 600, 'the client secret is short-lived');
 
     const rep = async (body) => fetch(`${RT}/usage`, { method: 'POST', headers: { ...bearer, 'content-type': 'application/json' }, body: JSON.stringify(body) });

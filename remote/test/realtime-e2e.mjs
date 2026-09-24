@@ -10,7 +10,7 @@
 // client events (tool outputs, Mia's injected replies) recorded.
 //
 // Covers: Talk tap → mint → SDP POST with the ephemeral secret; the live
-// indicator; send_to_mia → the fake Mia's reply injected back as "Mia says";
+// indicator; send_to_mia → the fake Mia's reply injected back as a "Result:";
 // get_status; answer_question; end_session → standby + usage on the relay;
 // the idle auto-end; ending on app background; fallback to Basic when the
 // relay can't mint; the Settings voice section. Plus the iPad Home Screen
@@ -169,7 +169,7 @@ async function main() {
   ok(out1 && JSON.parse(out1.item.output).ok === true, 'send_to_mia returns ok to the model');
   ok(s.sent.some((e) => e.type === 'response.create'), 'and asks for the follow-up response');
   await page.getByText('Remind me to call Sam at three.').waitFor();
-  ok(await page.getByText('To Mia: Remind me to call Sam at 3').isVisible(), 'transcript shows what Daniel said and what went to Mia');
+  ok(await page.getByText('Working on: Remind me to call Sam at 3').isVisible(), 'transcript shows what Daniel said and what went to Mia');
   // The model's short confirmation plays, then finishes.
   await emit({ type: 'response.created' });
   await emit({ type: 'output_audio_buffer.started' });
@@ -178,10 +178,13 @@ async function main() {
   await emit({ type: 'response.done', response: { output: [{ type: 'message' }] } });
   await emit({ type: 'output_audio_buffer.stopped' });
   // The fake host's Mia answers "(voice)" messages after ~1.2 s.
-  const inj = await until(async () => (await rt()).sent.find((e) => e.type === 'conversation.item.create' && e.item.role === 'system' && /Mia says: Got it\. You said: Remind me to call Sam at 3/.test(e.item.content[0].text)), 6000, 'inject');
-  ok(!!inj, 'Mia\'s reply is fed into the call as a "Mia says" system item');
+  const inj = await until(async () => (await rt()).sent.find((e) => e.type === 'conversation.item.create' && e.item.role === 'system' && /^Result: Got it\. You said: Remind me to call Sam at 3/.test(e.item.content[0].text)), 6000, 'inject');
+  ok(!!inj, 'Mia\'s reply is fed into the call as a "Result:" system item');
   s = await rt();
   ok(s.sent[s.sent.length - 1].type === 'response.create', '…followed by response.create so the voice reads it out');
+
+  const said = JSON.stringify((await rt()).sent);
+  ok(!/Mia says|pass(ing)? (it|that) on|hand(ing|ed)? (it |this )?(off|over)|ask(ing)? Mia|other agent/i.test(said), 'nothing the voice is fed mentions a hand-off (one assistant)');
 
   console.log('get_status / answer_question');
   await emit({ type: 'response.done', response: { output: [{ type: 'function_call', name: 'get_status', call_id: 'c2', arguments: '{}' }] } });

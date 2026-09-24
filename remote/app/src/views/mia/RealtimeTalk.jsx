@@ -15,8 +15,9 @@ import { LABEL, HINT, isMiaMsg, micError, spokenFor, Orb, Line } from './TalkPar
 //   answer_question(id, option) → answers a pending `mia ask`
 //   end_session()               → Daniel said he's done
 // The realtime model only converses and relays — Mia does the work. Her
-// replies (say / notify / ask) are fed back into the call as "Mia says: …"
-// system items, so the voice reads them out and offers ask-options aloud.
+// replies (say / notify / ask) are fed back into the call as "Result: …"
+// system items, so the voice reads them out and offers ask-options aloud. To
+// Daniel it is one assistant: nothing the voice hears mentions a hand-off.
 //
 // Cost safety: the call ends after ~60 s of quiet (3 min while waiting on a
 // reply from Mia), when the app goes to the background, and at 15 minutes.
@@ -43,14 +44,16 @@ function fmt(s) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
-// What the voice reads for a Mia message: her words, plus the question id and
-// options for an ask so answer_question can be called.
+// What the voice gets for a Mia message: her words as a "Result:" of its own
+// work (the voice and Mia are one assistant to Daniel — the persona never
+// mentions a hand-off), plus the question id and options for an ask so
+// answer_question can be called.
 function injectText(m) {
-  let t = `Mia says: ${speakable(m.text)}`;
+  let t = `Result: ${speakable(m.text)}`;
   const opts = Array.isArray(m.options) ? m.options.filter(Boolean) : [];
   if (m.kind === 'question' && m.questionId)
-    t += `\n(This is a question for Daniel, question id ${m.questionId}.${opts.length ? ` Options: ${opts.join(' | ')}.` : ''} Ask it${opts.length ? ' and offer the options' : ''}; when he answers, call answer_question.)`;
-  else t += '\n(Read this to Daniel now.)';
+    t += `\n(This is a question you need Daniel to answer, question id ${m.questionId}.${opts.length ? ` Options: ${opts.join(' | ')}.` : ''} Ask it in your own words${opts.length ? ' and offer the options' : ''}; when he answers, call answer_question.)`;
+  else t += '\n(Tell Daniel now, in first person, as your own finding.)';
   return t;
 }
 
@@ -59,13 +62,13 @@ function injectText(m) {
 function toolStatus() {
   const mc = getMC();
   const mia = mc.mia;
-  if (!mia) return { ok: false, error: 'Mia is not reporting — the Mac may be offline.' };
+  if (!mia) return { ok: false, error: 'Can\'t see the task list right now — the Mac may be offline.' };
   const live = ['queued', 'asking', 'running', 'checking'];
   const tasks = mia.tasks || [];
   const byTime = (a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
   return {
     ok: true,
-    mia: mc.link !== 'linked' ? 'Mac offline' : mia.online ? 'online' : 'offline',
+    reachable: mc.link === 'linked' && mia.online,
     active: tasks.filter((t) => live.includes(t.status)).sort(byTime).slice(0, 12).map((t) => ({ id: t.id, title: t.title, status: t.status })),
     recentlyFinished: tasks
       .filter((t) => !live.includes(t.status))
@@ -196,10 +199,10 @@ export default function RealtimeTalk({ mia, onExit, onFallback, switcher }) {
         if (!text) return { ok: false, error: 'Nothing to send.' };
         const ok = miaSend(VOICE_TAG + text);
         if (ok && c) c.awaiting = Date.now();
-        addNote(ok ? `To Mia: ${text}` : `Not sent (Mac offline): ${text}`);
+        addNote(ok ? `Working on: ${text}` : `Couldn’t start (Mac offline): ${text}`);
         return ok
-          ? { ok: true, status: 'Sent. Mia is on it; her reply will arrive as a "Mia says:" message. Do not answer it yourself.' }
-          : { ok: false, error: 'Not sent — the Mac is not reachable.' };
+          ? { ok: true, status: 'Started. The outcome will arrive as a "Result:" message. Tell Daniel briefly, in first person, that you are on it. Do not answer it yourself.' }
+          : { ok: false, error: 'Could not start — Daniel\'s Mac is not reachable right now.' };
       }
       case 'get_status':
         return toolStatus();
