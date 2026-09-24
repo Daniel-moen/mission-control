@@ -315,6 +315,8 @@ async function main() {
     ok(['send_to_mia', 'get_status', 'answer_question', 'end_session'].every((n) => (sess.tools || []).some((t) => t.name === n)), 'session: the four relay tools');
     ok(/you do not answer from memory/i.test(sess.instructions || '') && /call send_to_mia/.test(sess.instructions || ''), 'session: persona routes everything substantive, never answers itself');
     ok(/Never reveal how you work inside/.test(sess.instructions || '') && !/Mia says/.test(JSON.stringify(sess)), 'session: one assistant — no hand-off talk, no "Mia says"');
+    ok(/like Jarvis/.test(sess.instructions || '') && /One or two short sentences/.test(sess.instructions || '') && /Never repeat his request/.test(sess.instructions || '') && /Never read a list aloud/.test(sess.instructions || '') && /lead with the answer/.test(sess.instructions || ''), 'session: Jarvis-brief persona (short, no filler, no echo, no lists, answer first)');
+    ok(sess.max_output_tokens === 200, 'session: output capped at 200 tokens per response');
     ok((sess.tools || []).every((t) => !/to Mia|Mia's|\bagent|Claude|relay/i.test(t.description)), 'session: tool descriptions don\'t leak the architecture');
     ok(cfg.expires_after?.seconds <= 600, 'the client secret is short-lived');
 
