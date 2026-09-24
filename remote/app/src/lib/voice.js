@@ -33,6 +33,20 @@ export const ttsSupported = typeof window !== 'undefined' && 'speechSynthesis' i
 
 // ---- mic + VAD ---------------------------------------------------------------
 
+export const MIC_CONSTRAINTS = {
+  audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+};
+export const getMic = () => navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
+export const newAudioContext = () => new (window.AudioContext || window.webkitAudioContext)();
+
+// Safari 17+: tell iOS we both play and record, so speech output isn't ducked
+// to the earpiece-level volume a capture-only session gets.
+export function playAndRecord(on = true) {
+  try {
+    if (navigator.audioSession) navigator.audioSession.type = on ? 'play-and-record' : 'auto';
+  } catch {}
+}
+
 const WORKLET = `
 class Tap extends AudioWorkletProcessor {
   constructor() { super(); this.buf = new Float32Array(1024); this.n = 0; }
@@ -58,28 +72,23 @@ registerProcessor('mc-tap', Tap);
 //                            switched, call came in) or came back
 // Returns a controller: { setMode('listen'|'guard'|'mute'), setPause(ms),
 // resume(), close() }. 'guard' = listen for barge-in only (Mia is speaking).
-export async function openMic(handlers = {}) {
+// `media` = { ctx, stream } already opened inside the tap (primeTalk, or the
+// realtime view handing over after a failure); the controller then owns them.
+export async function openMic(handlers = {}, media = {}) {
   let h = handlers;
   const onLevel = (l) => h.onLevel && h.onLevel(l);
   const onSpeechStart = () => h.onSpeechStart && h.onSpeechStart();
   const onUtterance = (wav, ms) => h.onUtterance && h.onUtterance(wav, ms);
   const onState = (st) => h.onState && h.onState(st);
   const pauseMs = handlers.pauseMs || PAUSES.normal;
-  const AC = window.AudioContext || window.webkitAudioContext;
-  // Safari 17+: tell iOS we both play and record, so speech output isn't
-  // ducked to the earpiece-level volume a capture-only session gets.
-  try {
-    if (navigator.audioSession) navigator.audioSession.type = 'play-and-record';
-  } catch {}
-  const ctx = new AC();
+  playAndRecord();
+  const ctx = media.ctx && media.ctx.state !== 'closed' ? media.ctx : newAudioContext();
   // Kick the context while we're still inside the gesture, before any await.
   const resumed = ctx.resume().catch(() => {});
 
   let stream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
-    });
+    stream = await (media.stream || getMic());
   } catch (e) {
     ctx.close().catch(() => {});
     throw e;
@@ -234,28 +243,55 @@ export async function openMic(handlers = {}) {
       } catch {}
       stream.getTracks().forEach((t) => t.stop());
       ctx.close().catch(() => {});
-      try {
-        if (navigator.audioSession) navigator.audioSession.type = 'auto';
-      } catch {}
+      playAndRecord(false);
     },
   };
 }
 
 // The tap that opens talk mode lives in the Mia header, but the session is
 // owned by the Talk view that mounts a moment later — after the gesture has
-// ended. So the tap does the gesture-bound work here (speech unlock, audio
-// context, mic request) and Talk adopts the result.
+// ended. So the tap does all the gesture-bound work here and Talk adopts it:
+// speech unlock, an AudioContext, ONE mic request (a second getUserMedia on
+// iOS mutes the first stream's track), and an <audio> element blessed by a
+// play() inside the tap, which the realtime view later points at OpenAI's
+// WebRTC audio. Either engine (realtime or basic) can take the same media.
 let primed = null;
 export function primeTalk() {
   unlockSpeech();
   if (!talkSupported) return;
-  primed = openMic({});
-  primed.catch(() => {});
+  playAndRecord();
+  if (primed) releaseMedia(primed);
+  const ctx = newAudioContext();
+  ctx.resume().catch(() => {});
+  const stream = getMic();
+  stream.catch(() => {});
+  primed = { ctx, stream, audio: blessedAudio() };
 }
 export function takePrimed() {
   const p = primed;
   primed = null;
   return p;
+}
+export function releaseMedia(m) {
+  if (!m) return;
+  Promise.resolve(m.stream)
+    .then((s) => s?.getTracks().forEach((t) => t.stop()))
+    .catch(() => {});
+  m.ctx?.close?.().catch(() => {});
+}
+
+let silentUrl = '';
+export function blessedAudio(el) {
+  const a = el || new Audio();
+  a.autoplay = true;
+  a.playsInline = true;
+  a.setAttribute('playsinline', '');
+  try {
+    if (!silentUrl) silentUrl = URL.createObjectURL(encodeWav([new Float32Array(1600)], 16000));
+    a.src = silentUrl;
+    a.play().catch(() => {});
+  } catch {}
+  return a;
 }
 
 // Float32 chunks at `rate` → 16 kHz mono 16-bit PCM WAV.

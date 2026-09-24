@@ -354,7 +354,7 @@ export default function CarMode({ onClose }) {
   );
 
   return (
-    <div className="fixed inset-0 z-[78] flex flex-col">
+    <div className="to-screen-bottom fixed inset-0 z-[78] flex flex-col">
       {/* The photo, dimmed hard: at speed, contrast beats scenery. */}
       <ModeBackdrop extra={0.35} />
 

@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "start": "node server.js",
     "test:wire": "node test/wire-test.mjs",
-    "test:api": "node test/api-test.mjs"
+    "test:api": "node test/api-test.mjs",
+    "test:realtime": "node test/realtime-e2e.mjs"
   },
   "engines": {
     "node": ">=20"

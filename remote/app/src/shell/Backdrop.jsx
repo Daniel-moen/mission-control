@@ -72,7 +72,7 @@ export default function Backdrop() {
   }, [override.url, override.file]);
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden" aria-hidden="true">
+    <div className="to-screen-bottom pointer-events-none fixed inset-0 z-0 overflow-hidden" aria-hidden="true">
       <AnimatePresence>
         {src && (
           <motion.img

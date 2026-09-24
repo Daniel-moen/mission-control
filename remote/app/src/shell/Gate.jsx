@@ -13,7 +13,7 @@ export default function Gate() {
 
   return (
     <div
-      className="fixed inset-0 z-[100] grid place-items-center px-6"
+      className="to-screen-bottom fixed inset-0 z-[100] grid place-items-center px-6"
       style={{ paddingTop: 'var(--sat)', paddingBottom: 'var(--sab)' }}
     >
       <motion.div

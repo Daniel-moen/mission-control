@@ -183,7 +183,7 @@ export default function TvMode({ onClose }) {
 
   return (
     <div
-      className={`fixed inset-0 z-[75] overflow-hidden ${showUi ? '' : 'cursor-none [&_*]:cursor-none'}`}
+      className={`to-screen-bottom fixed inset-0 z-[75] overflow-hidden ${showUi ? '' : 'cursor-none [&_*]:cursor-none'}`}
       onPointerMove={poke}
       role="presentation"
     >

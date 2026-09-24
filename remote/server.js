@@ -29,8 +29,13 @@
 // capturing screens for them.
 //
 // Talk mode (stt.js): POST /stt turns a recorded utterance into text — a
-// whisper.cpp binary baked into the image, or OpenAI if OPENAI_API_KEY is set.
+// whisper.cpp binary baked into the image (local only — never OpenAI).
 // The text goes to Mia as a normal miaSend; nothing about it touches the host.
+//
+// Realtime voice (realtime.js): POST /realtime/session mints an ephemeral
+// OpenAI Realtime client secret so the panel can speak to OpenAI over WebRTC
+// directly; OPENAI_API_KEY never leaves this process. /realtime/usage keeps a
+// per-day minutes tally, shown on /health and in the panel's Settings.
 //
 // Auth: every WebSocket connection must present the shared MC_TOKEN.
 
@@ -44,6 +49,7 @@ const { WebSocketServer } = require('ws');
 const { createApi } = require('./api');
 const { createPush } = require('./push');
 const { createStt } = require('./stt');
+const { createRealtime } = require('./realtime');
 
 const PORT = process.env.PORT || 8080;
 const TOKEN = process.env.MC_TOKEN || '';
@@ -62,6 +68,7 @@ function tokenOk(candidate) {
 
 const push = createPush({ tokenOk });
 const stt = createStt({ tokenOk });
+const realtime = createRealtime({ tokenOk });
 
 // ---------------------------------------------------------------------------
 // HTTP: serve the built SPA + a health check.
@@ -106,7 +113,7 @@ const server = http.createServer((req, res) => {
 
   if (pathname === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, host: host !== null, viewers: viewers.size, pollers: pollers.size, pushSubscriptions: push.count(), stt: stt.info().provider }));
+    res.end(JSON.stringify({ ok: true, host: host !== null, viewers: viewers.size, pollers: pollers.size, pushSubscriptions: push.count(), stt: stt.info().provider, realtime: realtime.info() }));
     return;
   }
 
@@ -134,6 +141,16 @@ const server = http.createServer((req, res) => {
   if (pathname === '/stt') {
     stt.handle(req, res, url).catch((err) => {
       console.error('stt error:', err);
+      if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'internal error' }));
+    });
+    return;
+  }
+
+  // Ephemeral OpenAI Realtime sessions + usage tally (token-auth) — see realtime.js.
+  if (pathname === '/realtime' || pathname.startsWith('/realtime/')) {
+    realtime.handle(req, res, url).catch((err) => {
+      console.error('realtime error:', err);
       if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: 'internal error' }));
     });

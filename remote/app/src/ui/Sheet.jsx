@@ -83,7 +83,7 @@ export default function Sheet({ open, onClose, title, size = 'md', footer, child
           {...fadeIn}
           // The scrim blurs the scene, not just dims it — otherwise the huge
           // Home headline stays legible straight through the sheet's glass.
-          className="fixed inset-0 z-[90] flex justify-center bg-overlay backdrop-blur-lg sm:items-center sm:p-6"
+          className="to-screen-bottom fixed inset-0 z-[90] flex justify-center bg-overlay backdrop-blur-lg sm:items-center sm:p-6"
           style={{ alignItems: wide ? undefined : 'flex-end' }}
           onClick={onClose}
         >

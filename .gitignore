@@ -45,3 +45,4 @@ remote/dist/
 # Claude Code session files
 .claude/settings.local.json
 remote/push-subscriptions.json
+remote/realtime-usage.json

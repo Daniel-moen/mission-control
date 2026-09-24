@@ -33,10 +33,39 @@ function ok(cond, label) {
   else { failed += 1; console.error(`  ✗ ${label}`); }
 }
 
-function boot(cmd, args, name) {
+// A stand-in for OpenAI's realtime client_secrets endpoint: records what the
+// relay asked for so the session config can be asserted. The relay never
+// talks to the real OpenAI in this test.
+const OPENAI_PORT = 8896;
+const openaiSeen = [];
+const http = require('node:http');
+const mockOpenAI = http.createServer((req, res) => {
+  let body = '';
+  req.on('data', (c) => { body += c; });
+  req.on('end', () => {
+    openaiSeen.push({ url: req.url, auth: req.headers.authorization, body });
+    if (req.url === '/v1/realtime/client_secrets' && req.method === 'POST') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ value: 'ek_mock_123', expires_at: Math.floor(Date.now() / 1000) + 120, session: {} }));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+});
+
+function boot(cmd, args, name, extraEnv = {}) {
   const p = spawn(cmd, args, {
     cwd: path.join(DIR, '..'),
-    env: { ...process.env, MC_TOKEN: TOKEN, PORT: String(PORT), PUSH_STORE: path.join(TMP, 'push-subscriptions.json') },
+    env: {
+      ...process.env,
+      MC_TOKEN: TOKEN,
+      PORT: String(PORT),
+      PUSH_STORE: path.join(TMP, 'push-subscriptions.json'),
+      REALTIME_STORE: path.join(TMP, 'realtime-usage.json'),
+      OPENAI_API_KEY: '',
+      ...extraEnv,
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   p.stdout.on('data', (d) => process.env.API_TEST_VERBOSE && console.log(`[${name}]`, d.toString().trim()));
@@ -61,7 +90,8 @@ async function api(method, route, body, { token = TOKEN, headers = {} } = {}) {
 }
 
 async function main() {
-  boot('node', ['server.js'], 'relay');
+  await new Promise((r) => mockOpenAI.listen(OPENAI_PORT, r));
+  boot('node', ['server.js'], 'relay', { OPENAI_API_KEY: 'sk-test-relay-only', OPENAI_BASE_URL: `http://localhost:${OPENAI_PORT}` });
 
   // Before any host: the fallback routes must say "Mac offline", not hang.
   for (let i = 0; i < 50; i++) {
@@ -262,6 +292,54 @@ async function main() {
     }
   }
 
+  console.log('realtime voice');
+  {
+    const RT = `http://localhost:${PORT}/realtime`;
+    const bearer = { authorization: `Bearer ${TOKEN}` };
+    ok((await fetch(`${RT}/session`, { method: 'POST' })).status === 401, 'minting a realtime session needs the token (401 without)');
+    ok((await fetch(`${RT}/session`, { method: 'POST', headers: { authorization: 'Bearer nope' } })).status === 401, 'a wrong token is a 401 too');
+    ok((await fetch(RT)).status === 401, 'GET /realtime needs the token');
+    const info = await (await fetch(RT, { headers: bearer })).json();
+    ok(info.ok && info.available === true && info.model === 'gpt-realtime-2.1' && info.voice === 'marin', 'GET /realtime reports model + voice when the key is set');
+    ok(info.limits.idleSeconds === 60 && info.limits.maxSeconds === 900, 'limits: 60 s quiet, 15 min cap');
+
+    const s = await (await fetch(`${RT}/session`, { method: 'POST', headers: bearer })).json();
+    ok(s.ok && s.value === 'ek_mock_123' && s.id && s.callsUrl === `http://localhost:${OPENAI_PORT}/v1/realtime/calls`, 'POST /realtime/session returns the ephemeral secret + calls URL');
+    ok(!JSON.stringify(s).includes('sk-test-relay-only'), 'the OpenAI key never appears in the response');
+    const minted = openaiSeen.find((x) => x.url === '/v1/realtime/client_secrets');
+    ok(minted && minted.auth === 'Bearer sk-test-relay-only', 'the relay mints with its own key');
+    const cfg = minted ? JSON.parse(minted.body) : {};
+    const sess = cfg.session || {};
+    ok(sess.type === 'realtime' && sess.model === 'gpt-realtime-2.1' && sess.audio?.output?.voice === 'marin', 'session: realtime model + voice');
+    ok(sess.audio?.input?.turn_detection?.type === 'server_vad' && sess.audio.input.turn_detection.interrupt_response === true, 'session: server VAD with barge-in');
+    ok(['send_to_mia', 'get_status', 'answer_question', 'end_session'].every((n) => (sess.tools || []).some((t) => t.name === n)), 'session: the four relay tools');
+    ok(/do not answer questions or do work yourself/i.test(sess.instructions || ''), 'session: persona only relays, never answers');
+    ok(cfg.expires_after?.seconds <= 600, 'the client secret is short-lived');
+
+    const rep = async (body) => fetch(`${RT}/usage`, { method: 'POST', headers: { ...bearer, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    ok((await rep({ id: 'rt_bogus', seconds: 10 })).status === 404, 'usage for an unknown session is refused');
+    await rep({ id: s.id, seconds: 90, usage: { audioIn: 1000, audioOut: 2000 } });
+    const r2 = await (await rep({ id: s.id, seconds: 90, usage: { audioIn: 1000, audioOut: 2000 } })).json();
+    ok(r2.ok && r2.today.minutes === 1.5 && r2.today.sessions === 1, 'usage: running totals, a repeat report is not double-counted');
+    ok(Math.abs(r2.today.usd - (1000 * 32 + 2000 * 64) / 1e6) < 0.001, 'usage: token cost estimate');
+    await rep({ id: s.id, seconds: 99999 });
+    const capped = await (await fetch(RT, { headers: bearer })).json();
+    ok(capped.today.minutes <= 15.5, 'usage: one session can\'t log past the 15-minute cap');
+    const health = await (await fetch(`http://localhost:${PORT}/health`)).json();
+    ok(health.realtime && health.realtime.available === true && typeof health.realtime.today.minutes === 'number', '/health shows realtime minutes used today');
+    ok(health.stt !== 'openai', '/stt never switches to OpenAI, even with OPENAI_API_KEY set');
+    await sleep(700);
+    const saved = JSON.parse(fs.readFileSync(path.join(TMP, 'realtime-usage.json'), 'utf8'));
+    ok(Object.values(saved.days)[0]?.sessions === 1, 'usage is persisted per day');
+
+    const { createRealtime } = require('../realtime.js');
+    const noKey = createRealtime({ tokenOk: (t) => t === TOKEN, env: { REALTIME_STORE: path.join(TMP, 'rt2.json') }, log: { log() {}, warn() {}, error() {} } });
+    const fakeRes = () => { const r = { status: 0, body: '' }; r.writeHead = (st) => { r.status = st; }; r.end = (b) => { r.body = b; }; r.headersSent = false; return r; };
+    const res503 = fakeRes();
+    await noKey.handle({ method: 'POST', headers: { authorization: `Bearer ${TOKEN}` } }, res503, new URL('http://x/realtime/session'));
+    ok(res503.status === 503 && noKey.info().available === false, 'without OPENAI_API_KEY minting is a 503 (the panel falls back to basic)');
+  }
+
   console.log('errors');
   ok((await api('GET', '/nope')).status === 404, 'unknown route is a 404');
   ok((await api('POST', '/launch', {})).status === 422 || (await api('POST', '/launch', {})).data.ok === false, 'empty launch is rejected by the host');
@@ -280,5 +358,6 @@ main()
   .catch((err) => { console.error(err); process.exitCode = 1; })
   .finally(() => {
     for (const p of procs) p.kill();
+    mockOpenAI.close();
     fs.rmSync(TMP, { recursive: true, force: true });
   });

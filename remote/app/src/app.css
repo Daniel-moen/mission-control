@@ -81,6 +81,15 @@
   --sab: env(safe-area-inset-bottom);
   --sal: env(safe-area-inset-left);
   --sar: env(safe-area-inset-right);
+  /* Standalone viewport shortfall (lib/viewport.js); 0 everywhere else. */
+  --vgap: 0px;
+}
+
+/* Full-screen fixed layers reach the real bottom edge of an iPad Home Screen
+   app even when its viewport comes up short (lib/viewport.js). Unlayered, so
+   it beats the `bottom-0` / `inset-0` utilities it sits beside. */
+.to-screen-bottom {
+  bottom: calc(0px - var(--vgap));
 }
 
 * {

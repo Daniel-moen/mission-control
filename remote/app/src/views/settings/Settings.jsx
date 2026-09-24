@@ -6,6 +6,9 @@ import Sheet from '../../ui/Sheet.jsx';
 import Button from '../../ui/Button.jsx';
 import Icon from '../../ui/Icon.jsx';
 import { spring } from '../../lib/motion.js';
+import { useLocalStorage } from '../../lib/hooks.js';
+import { realtimeInfo } from '../../lib/realtime.js';
+import Segmented from '../../ui/Segmented.jsx';
 
 // Settings — the device's own page: what it is connected to, the two ambient
 // modes, the backdrop photograph, and how a bot gets the same access.
@@ -57,6 +60,56 @@ function Row({ label, hint, children, last = false }) {
       </div>
       <div className="flex-none">{children}</div>
     </div>
+  );
+}
+
+// Talk mode's engine (views/mia/Talk.jsx reads the same key) and the relay's
+// running tally of realtime minutes.
+function VoiceSection() {
+  const token = useMC((s) => s.token);
+  const [engine, setEngine] = useLocalStorage('mc.talk.engine', 'realtime');
+  const [info, setInfo] = useState(undefined);
+  useEffect(() => {
+    let dead = false;
+    realtimeInfo(token).then((i) => !dead && setInfo(i));
+    return () => {
+      dead = true;
+    };
+  }, [token]);
+  const today = info?.today;
+  const usage = today ? `${today.minutes} min today · ${today.sessions} session${today.sessions === 1 ? '' : 's'} · ≈ $${today.usd.toFixed(2)}` : '';
+  const hint =
+    info === undefined
+      ? 'Checking the relay…'
+      : !info
+        ? 'Couldn’t reach the relay.'
+        : !info.available
+          ? 'Realtime needs OPENAI_API_KEY on the relay — Basic is used until then.'
+          : `Realtime: natural voice (${info.voice}), hands jobs to Mia. Basic: free, on-device voice + whisper on the relay. Realtime falls back to Basic by itself.`;
+  return (
+    <Section title="Voice">
+      <Row label="Talk engine" hint={hint} last={!info?.available}>
+        <Segmented
+          value={engine}
+          onChange={setEngine}
+          options={[
+            { value: 'realtime', label: 'Realtime' },
+            { value: 'basic', label: 'Basic' },
+          ]}
+        />
+      </Row>
+      {info?.available && (
+        <Row
+          label="Realtime usage"
+          hint={`Ends after ${info.limits.idleSeconds}s of quiet, when the app is closed, or at ${Math.round(info.limits.maxSeconds / 60)} min. Daily cap ${info.limits.dailyMinutes} min.`}
+          last
+        >
+          <span className="tnum font-mono text-[12.5px] text-ink" data-rt-usage>
+            {usage}
+          </span>
+        </Row>
+      )}
+    </Section>
   );
 }
 
@@ -146,6 +199,8 @@ export default function Settings({ onClose }) {
             </div>
           ))}
         </Section>
+
+        <VoiceSection />
 
         <Section title="Modes">
           <Row label="TV mode" hint="Ambient fleet display for a big screen — or open #tv directly">

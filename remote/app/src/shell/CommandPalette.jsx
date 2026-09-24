@@ -129,7 +129,7 @@ export default function CommandPalette({ open, onClose, onOpenAgent, onNav, onLa
           {...fadeIn}
           // Blur the scene behind, so the palette's own glass has something
           // soft to sample instead of legible page text.
-          className="fixed inset-0 z-[92] flex items-start justify-center bg-overlay px-4 pt-[12vh] backdrop-blur-lg"
+          className="to-screen-bottom fixed inset-0 z-[92] flex items-start justify-center bg-overlay px-4 pt-[12vh] backdrop-blur-lg"
           onClick={onClose}
         >
           <motion.div

@@ -6,12 +6,13 @@
 // isn't used for this because it is unreliable on iPad in standalone Home
 // Screen mode — a plain fetch of a WAV works everywhere.
 //
-// Providers, picked at boot (STT_PROVIDER forces one):
-//   whisper — whisper.cpp's `whisper-cli` running here on the relay, with a
-//             ggml model baked into the Docker image. Free, no key, no third
-//             party. WHISPER_BIN / WHISPER_MODEL / WHISPER_THREADS / WHISPER_LANG.
-//   openai  — OpenAI's transcription API, used only if OPENAI_API_KEY is set in
-//             the Railway env (never sent to the client). OPENAI_STT_MODEL.
+// Provider: whisper.cpp's `whisper-cli` running here on the relay, with a ggml
+// model baked into the Docker image. Free, no key, no third party.
+// WHISPER_BIN / WHISPER_MODEL / WHISPER_THREADS / WHISPER_LANG.
+//
+// Deliberately local only. The OpenAI transcription path from 0011 is gone:
+// OPENAI_API_KEY is for the realtime voice session (realtime.js) and nothing
+// else, and this basic voice is the fallback for when that session fails.
 //
 // HTTP (token auth, same as /api):
 //   GET  /stt  → { ok, provider, model }             provider null = unavailable
@@ -60,18 +61,11 @@ function createStt({ tokenOk, env = process.env, log = console } = {}) {
   const whisperBin = which(env.WHISPER_BIN || 'whisper-cli');
   const whisperModel = env.WHISPER_MODEL || '';
   const whisperOk = !!(whisperBin && whisperModel && fs.existsSync(whisperModel));
-  const openaiKey = env.OPENAI_API_KEY || '';
-  const openaiModel = env.OPENAI_STT_MODEL || 'gpt-4o-mini-transcribe';
+  const provider = whisperOk ? 'whisper' : null;
 
-  let provider = null;
-  const forced = (env.STT_PROVIDER || '').toLowerCase();
-  if (forced === 'openai' && openaiKey) provider = 'openai';
-  else if (forced === 'whisper' && whisperOk) provider = 'whisper';
-  else if (!forced || forced === 'auto') provider = openaiKey ? 'openai' : whisperOk ? 'whisper' : null;
-
-  const model = provider === 'openai' ? openaiModel : provider === 'whisper' ? path.basename(whisperModel) : null;
+  const model = provider ? path.basename(whisperModel) : null;
   if (provider) log.log(`stt: ${provider} (${model})`);
-  else log.warn('stt: no transcriber — set WHISPER_MODEL (+ whisper-cli on PATH) or OPENAI_API_KEY. Talk mode will be unavailable.');
+  else log.warn('stt: no transcriber — set WHISPER_MODEL (+ whisper-cli on PATH). Basic talk mode will be unavailable.');
 
   // One transcription at a time: whisper uses every thread it's given, and two
   // overlapping runs are slower than two in a row.
@@ -104,29 +98,6 @@ function createStt({ tokenOk, env = process.env, log = console } = {}) {
         else reject(new Error(`whisper-cli exited ${code}: ${err.trim().split('\n').slice(-2).join(' ')}`));
       });
     });
-  }
-
-  async function runOpenAI(audio, type) {
-    const form = new FormData();
-    const ext = /mp4|m4a|aac/.test(type) ? 'm4a' : /webm/.test(type) ? 'webm' : 'wav';
-    form.append('file', new Blob([audio], { type: type || 'audio/wav' }), `speech.${ext}`);
-    form.append('model', openaiModel);
-    form.append('response_format', 'json');
-    const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
-    try {
-      const r = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-        method: 'POST',
-        headers: { authorization: `Bearer ${openaiKey}` },
-        body: form,
-        signal: ctl.signal,
-      });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(`openai ${r.status}: ${data?.error?.message || 'error'}`);
-      return data.text || '';
-    } finally {
-      clearTimeout(timer);
-    }
   }
 
   function json(res, status, obj) {
@@ -173,13 +144,13 @@ function createStt({ tokenOk, env = process.env, log = console } = {}) {
     }
     const type = String(req.headers['content-type'] || 'audio/wav').toLowerCase();
     if (audio.length < 1000) return json(res, 400, { ok: false, error: 'Recording is empty' });
-    if (provider === 'whisper' && !(type.includes('wav') && audio.subarray(0, 4).toString() === 'RIFF')) {
+    if (!(type.includes('wav') && audio.subarray(0, 4).toString() === 'RIFF')) {
       return json(res, 415, { ok: false, error: 'Send 16 kHz mono WAV' });
     }
 
     const t0 = Date.now();
     try {
-      const raw = await serial(() => (provider === 'openai' ? runOpenAI(audio, type) : runWhisper(audio)));
+      const raw = await serial(() => runWhisper(audio));
       const ms = Date.now() - t0;
       const text = clean(raw);
       log.log(`stt: ${(audio.length / 32000).toFixed(1)}s audio → ${text.length} chars in ${ms}ms`);

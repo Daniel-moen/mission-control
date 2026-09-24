@@ -22,7 +22,7 @@ export default function Dock({ active = 'home', badges = {}, onSelect, onMic, on
       <div
         // Above the phone's full-screen windows (z-50) so navigation never
         // disappears, and so a window's blur doesn't sample the dock.
-        className="pointer-events-none fixed inset-x-0 bottom-0 z-[60] flex justify-center px-3"
+        className="to-screen-bottom pointer-events-none fixed inset-x-0 bottom-0 z-[60] flex justify-center px-3"
         style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 14px)' }}
       >
         <motion.nav

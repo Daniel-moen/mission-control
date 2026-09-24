@@ -390,7 +390,7 @@ export default function Launch({ attachDoc = null, onClose }) {
           {launching && (
             <motion.div
               {...fadeIn}
-              className="fixed inset-0 z-[110] flex flex-col items-center justify-center gap-6 bg-overlay backdrop-blur-xl"
+              className="to-screen-bottom fixed inset-0 z-[110] flex flex-col items-center justify-center gap-6 bg-overlay backdrop-blur-xl"
             >
               <span className="anim-spin h-14 w-14 rounded-full border-2 border-white/15 border-t-accent" />
               <AnimatePresence mode="wait">

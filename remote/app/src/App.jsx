@@ -341,7 +341,7 @@ export default function App() {
   if (carOn) return <CarMode onClose={() => (location.hash = '')} />;
 
   return (
-    <div className="relative flex h-dvh flex-col overflow-hidden">
+    <div className="relative flex flex-col overflow-hidden" style={{ height: 'calc(100dvh + var(--vgap))' }}>
       <Backdrop />
       {/* A phone window covers the bar, and its icons would ghost through the glass. */}
       {(desktop || !phoneKind) && (

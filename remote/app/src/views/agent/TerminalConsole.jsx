@@ -235,7 +235,7 @@ export default function TerminalConsole({ agentId = null, onSelect, onClose }) {
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={spring.smooth}
-      className="fixed inset-0 z-[80] flex flex-col bg-[#08080a]/[0.97] backdrop-blur-xl"
+      className="to-screen-bottom fixed inset-0 z-[80] flex flex-col bg-[#08080a]/[0.97] backdrop-blur-xl"
     >
       {/* header: which terminal, and how fresh the mirror is */}
       <header

@@ -172,7 +172,7 @@ export default function Window({ title, subtitle, actions, onClose, size = 'cent
       onDragEnd={(_, info) => {
         if (info.offset.y > 120 || info.velocity.y > 700) onClose?.();
       }}
-      className={`glass-strong fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden rounded-b-none ${className}`}
+      className={`to-screen-bottom glass-strong fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden rounded-b-none ${className}`}
       // Leave room for the floating dock, which stays above every window.
       style={{ paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'calc(env(safe-area-inset-bottom) + 84px)' }}
     >
