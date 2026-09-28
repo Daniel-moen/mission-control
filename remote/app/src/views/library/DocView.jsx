@@ -219,7 +219,7 @@ export default function DocView({ docId, startEditing = false, onClose, onLaunch
 
       {/* Below 1024 this window is a full-screen sheet with the dock floating
           over it — content must clear the dock. */}
-      <div className="noscroll min-h-0 flex-1 overflow-y-auto pb-24 lg:pb-0">
+      <div className="noscroll min-h-0 flex-1 overflow-y-auto pb-24 lg:pb-0" data-reader="doc" data-doc-id={docId}>
         <AnimatePresence mode="wait" initial={false}>
           {editing ? (
             <motion.div key="editor" {...fadeIn} className="mx-auto flex h-full max-w-[860px] flex-col px-4 pb-4 sm:px-6">
@@ -237,7 +237,7 @@ export default function DocView({ docId, startEditing = false, onClose, onLaunch
             </motion.div>
           ) : doc ? (
             <motion.div key="reader" {...fadeUp}>
-              <div className="mx-auto max-w-[860px] px-5 sm:px-8">
+              <div className="mx-auto max-w-[1600px] px-5 sm:px-8">
                 {isActive && (
                   <div className="mb-4 flex items-center gap-3 rounded-xl2 border border-accent/30 bg-accent/[0.08] px-3.5 py-2.5">
                     <span className="relative flex h-2 w-2 flex-none">
@@ -254,7 +254,7 @@ export default function DocView({ docId, startEditing = false, onClose, onLaunch
                 )}
 
                 {/* metadata bar: calm, muted, never competing with the document */}
-                <div className="mb-6 grid grid-cols-2 gap-2.5 rounded-xl3 border border-glass-line bg-white/[0.04] p-3 sm:grid-cols-4">
+                <div className="mb-6 grid max-w-[860px] grid-cols-2 gap-2.5 rounded-xl3 border border-glass-line bg-white/[0.04] p-3 sm:grid-cols-4">
                   <Field label="Kind">
                     <Select
                       options={KIND_OPTIONS}
@@ -301,13 +301,15 @@ export default function DocView({ docId, startEditing = false, onClose, onLaunch
                 </div>
               </div>
 
-              {/* Sanitized in md.js — docs quote arbitrary repo content. */}
+              {/* Sanitized in md.js — docs quote arbitrary repo content. Full
+                  width: prose caps itself near 80ch, tables and code don't. */}
               <article
-                className="md mx-auto max-w-[860px] px-5 pb-10 sm:px-8"
+                className="md mx-auto max-w-[1600px] px-5 pb-10 sm:px-8"
+                data-doc-id={docId}
                 dangerouslySetInnerHTML={{ __html: html }}
               />
 
-              <div className="mx-auto max-w-[860px] px-5 pb-10 sm:px-8">
+              <div className="mx-auto max-w-[1600px] px-5 pb-10 sm:px-8">
                 <motion.button
                   {...press}
                   onClick={armDelete}

@@ -326,6 +326,17 @@ gap widens above 50 seats, where Globex's flat-rate plan undercuts Acme.
 - Heavy reliance on annual prepay masks churn in the monthly cohort.
 - No published usage limits invites bill shock, a recurring support theme.
 
+## Seat pricing by competitor
+| Vendor | Plan | Price per seat | Minimum seats | SSO | Audit logs | Notes from the sales call |
+|---|---|---|---|---|---|---|
+| Acme | Starter | $19 | 3 | No | No | The rep pushed annual prepay hard and offered 15% off without being asked, which suggests the list price is mostly an anchor. |
+| Acme | Team | $49 | 3 | Yes | Yes | SSO only on Team and above; SCIM costs extra on top of the seat price. |
+| Globex | Flat | $1,900 flat | 1 | Yes | Yes | Flat rate up to 100 seats, which is where Globex undercuts Acme most clearly. |
+| Initech | Pro | $39 | 5 | Yes | No | Audit logs are on the roadmap for next quarter, according to their public changelog. |
+
+## Option 3: tell the safety model this work is allowed (narrower)
+Only for the three recurring lookups; everything else still asks first.
+
 ## Sources
 - Acme public pricing page — https://example.com/acme/pricing
 - Globex plan comparison — https://example.com/globex/plans

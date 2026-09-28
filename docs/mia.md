@@ -168,7 +168,12 @@ mia panel open-agent <name|session-id>                 open an agent's window
 mia panel view <home|fleet|library|mia|insights|settings>
 mia panel open-url <https-url>                         open a link on the iPad (Zoom/Meet/Teams…)
 mia panel search "<text>"                              open search pre-filled
-mia panel scroll-to "<heading>"                        scroll the open doc to a heading
+mia panel scroll-to "<heading or text>"                scroll the open doc/page to it (forgiving match)
+mia panel highlight "<text>"                           scroll to text and mark it for a few seconds
+mia panel scroll <down|up|top|bottom>                  about one screen per step
+mia panel show-url <https-url>                         page in a viewer over the panel (card if it can't be framed)
+mia panel show-doc <library-id|title> [--at "<text>"]  a Library doc in that viewer
+mia panel close                                        close the viewer (or the open doc)
 mia task list [--status <s>]                           id<TAB>status<TAB>priority<TAB>title per line
 mia task show <id>                                     the task JSON
 mia task add "<title>" [--detail <text>|--stdin] [--dir <d>] [--priority n]
@@ -243,7 +248,10 @@ THE PANEL ON HIS SCREEN
 - `mia panel view <home|fleet|library|mia|insights|settings>` switches the view.
 - `mia panel open-url <https-url>` opens a link on his iPad, e.g. a Zoom, Meet or Teams join link.
 - `mia panel search "<text>"` opens search with that text.
-- `mia panel scroll-to "<heading>"` scrolls the open doc to a heading.
+- `mia panel scroll-to "<text>"` scrolls what's open (doc or shown page) to a heading or any text, forgiving about case, punctuation and partial words, and flashes it. `mia panel highlight "<text>"` does the same with a longer-lasting mark.
+- `mia panel scroll down|up|top|bottom` moves about one screen per step, to walk him through a page.
+- `mia panel show-url <https-url>` opens a page in a viewer over the panel (he taps back to close). Sites that forbid framing (Property24, most big sites) show as a card with title, photos and an Open button instead; the panel tells you which with `[MC] Panel: show-url … — framed|card …`.
+- `mia panel show-doc <library-id|title words> [--at "<text>"]` shows a Library doc in that viewer, over whatever he is looking at. `mia panel close` closes the viewer.
 
 HOW EVENTS REACH YOU
 - Messages starting with `[MC]` come from Mission Control: Daniel's chat and answers, new tasks, executor results, reminders, heartbeats. Handle them and end your turn.
@@ -414,7 +422,14 @@ itself. Failures reach Mia as `[MC] Panel: … didn't work — <reason>`.
 | `view` | home, fleet, library, mia, insights, settings | switches view (settings = the sheet) |
 | `open-url` | `https://…` only | `window.open`; in the Home Screen app falls back to navigating (iOS hands meeting links to their apps); in a browser tab offers the link in the top-bar pill |
 | `search` | text | opens ⌘K search pre-filled |
-| `scroll-to` | heading text | scrolls the open doc to it |
+| `scroll-to` | heading or any text | scrolls to it and flashes it: headings (exact, prefix, substring, the heading inside a longer ask), then the smallest paragraph / list item / table row holding the text, then fuzzy (word prefixes, one-letter typos; `tell` says where it went). Case, accents, emoji and punctuation are ignored |
+| `highlight` | text | as scroll-to, with a 6 s accent mark |
+| `scroll` | up, down, top, bottom | ~85% of a screen per step; `tell` when already at the end |
+| `show-url` | `https://…` only | asks the relay `GET /api/v1/preview?url=` (preview.js: X-Frame-Options / CSP frame-ancestors, Open Graph card, same-host gallery; public https only, 8 s, 1.5 MB). Frameable → sandboxed iframe in the viewer (no top navigation; falls back to the card if it never loads). Otherwise a card: photo, title, summary, gallery, Open button. Always `tell`: `framed — …` or `card — <why> …` |
+| `show-doc` | library id or title words; `heading` optional | the doc in the viewer over the current view |
+| `close` | — | closes the viewer, else the open doc |
+
+Targets: the viewer (`[data-reader="viewer"]`) when open, else the open doc by id (`[data-reader="doc"][data-doc-id]` — an old doc window can still be animating out), else the largest visible scroller. Waits count only time the page is visible, so a command sent to a panel in the background lands when he comes back instead of failing with "no document is open". A panelDone with `tell: true` is a success Mia still hears (`[MC] Panel: <action> <arg> — <detail>`).
 
 Navigation only; nothing edits, sends or deletes. The allow-list is checked in
 the CLI, MiaManager, the relay and the panel.

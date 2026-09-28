@@ -12,6 +12,9 @@
 //
 // Covers: open-doc (by id, with --at heading, and by title words), view,
 // open-task, open-agent, search, open-url, scroll-to, a miss reported back;
+// forgiving scroll-to (prefix, punctuation, fuzzy, any text), highlight,
+// scroll up/down/top/bottom, show-doc / show-url (card + framed) / close,
+// wide tables at iPad and phone width;
 // talk mode persisting as the top-bar pill across views at iPad portrait and
 // landscape (one mic for the whole session, never over the dock or a control,
 // expand back, stop); announcements (chime + speech after a tap, the locked
@@ -158,7 +161,7 @@ async function pillCovers(page) {
   });
 }
 
-async function newPage(browser, { viewport, standalone = true }) {
+async function newPage(browser, { viewport, standalone = true, live = 'visible' }) {
   const ctx = await browser.newContext({ viewport, hasTouch: true });
   await ctx.addInitScript(INIT);
   if (standalone) await ctx.addInitScript(() => Object.defineProperty(navigator, 'standalone', { get: () => true }));
@@ -167,7 +170,7 @@ async function newPage(browser, { viewport, standalone = true }) {
   page.on('pageerror', (e) => page.errors.push(e.message));
   await page.goto(`${BASE}/?token=${TOKEN}`);
   // Linked: the top bar's link pill reads "Live" once snapshots flow.
-  await page.waitForSelector('[aria-label="Live"]', { timeout: 15000 }).catch(async (e) => {
+  await page.waitForSelector('[aria-label="Live"]', { timeout: 15000, state: live }).catch(async (e) => {
     console.error('page text:', (await page.evaluate(() => document.body.innerText)).slice(0, 400));
     throw e;
   });
@@ -215,11 +218,139 @@ async function main() {
     r = await resultFor(id);
     ok(r.ok, 'scroll-to a heading in the open doc');
 
+    // ---- forgiving scroll-to / highlight / scroll (task 0065) ----
+    const inView = (sel, text) =>
+      page.evaluate(
+        ([sel, text]) => {
+          const el = [...document.querySelectorAll(sel)].find((x) => x.textContent.includes(text));
+          if (!el) return null;
+          const b = el.getBoundingClientRect();
+          return { inView: b.top >= 0 && b.bottom <= innerHeight + 4, flash: el.classList.contains('mia-flash'), mark: el.classList.contains('mia-mark') };
+        },
+        [sel, text],
+      );
+    id = mia('panel', 'open-doc', RESEARCH, '--at', 'Option 3: tell the safety model this work is allowed (narrower)');
+    r = await resultFor(id);
+    await sleep(700);
+    ok(r.ok && (await inView('article.md h2', 'Option 3'))?.inView, `open-doc --at the full "Option 3: …" heading lands (${r.detail})`);
+    await page.evaluate(() => document.querySelector('[data-reader="doc"]').scrollTo({ top: 0 }));
+    id = mia('panel', 'scroll-to', 'option 3');
+    r = await resultFor(id);
+    await sleep(700);
+    ok(r.ok && (await inView('article.md h2', 'Option 3'))?.inView, 'scroll-to "option 3" (prefix, any case) lands on the heading');
+    await page.evaluate(() => document.querySelector('[data-reader="doc"]').scrollTo({ top: 0 }));
+    id = mia('panel', 'scroll-to', '⚠️ Option-3 — Tell the SAFETY model!');
+    r = await resultFor(id);
+    ok(r.ok, 'scroll-to ignores emoji and punctuation');
+    id = mia('panel', 'scroll-to', 'tell the safty modle allowed');
+    r = await resultFor(id);
+    ok(r.ok && r.tell === true && /closest/.test(r.detail), `a typo falls back to fuzzy and tells Mia where it went (${r.detail})`);
+    id = mia('panel', 'scroll-to', 'undercuts Acme most clearly');
+    r = await resultFor(id);
+    await sleep(700);
+    const row = await inView('article.md tr', 'undercuts Acme most clearly');
+    ok(r.ok && row?.inView && row.flash, 'scroll-to any text: a table row scrolls into view and flashes');
+    id = mia('panel', 'highlight', 'bill shock');
+    r = await resultFor(id);
+    await sleep(700);
+    const li = await inView('article.md li', 'bill shock');
+    ok(r.ok && li?.inView && li.mark, 'highlight marks the list item holding the text');
+    id = mia('panel', 'scroll-to', 'nothing like this exists zqx');
+    r = await resultFor(id);
+    ok(r.ok === false && /nothing matching/.test(r.detail), 'a real miss still fails with the reason');
+    const pos = () => page.evaluate(() => {
+      const el = document.querySelector('[data-reader="doc"]');
+      return { top: el.scrollTop, max: el.scrollHeight - el.clientHeight, h: el.clientHeight };
+    });
+    r = await resultFor(mia('panel', 'scroll', 'top'));
+    await sleep(700);
+    ok(r.ok && (await pos()).top === 0, 'scroll top');
+    r = await resultFor(mia('panel', 'scroll', 'down'));
+    await sleep(700);
+    let p0 = await pos();
+    ok(r.ok && p0.top > p0.h * 0.5 || p0.top === p0.max, `scroll down moves about a screen (${p0.top}px of ${p0.max})`);
+    r = await resultFor(mia('panel', 'scroll', 'bottom'));
+    await sleep(700);
+    p0 = await pos();
+    ok(r.ok && Math.abs(p0.top - p0.max) < 3, 'scroll bottom');
+    r = await resultFor(mia('panel', 'scroll', 'down'));
+    ok(r.ok && r.tell && /already at the bottom/.test(r.detail), 'scroll down at the bottom tells Mia');
+    r = await resultFor(mia('panel', 'scroll', 'up'));
+    ok(r.ok, 'scroll up');
+    const layout = await page.evaluate(() => {
+      const art = document.querySelector('article.md');
+      const p = art.querySelector(':scope > p');
+      const wrap = art.querySelector('.md-table');
+      const nw = [...art.querySelectorAll('td.nw')];
+      return {
+        art: art.getBoundingClientRect().width,
+        pMax: getComputedStyle(p).maxWidth,
+        wrapped: !!wrap,
+        tableFull: wrap && wrap.querySelector('table').getBoundingClientRect().width >= wrap.clientWidth - 2,
+        nwSingleLine: nw.length > 0 && nw.every((c) => {
+          const rg = document.createRange();
+          rg.selectNodeContents(c);
+          return new Set([...rg.getClientRects()].map((x) => Math.round(x.top))).size === 1;
+        }),
+      };
+    });
+    ok(layout.art > 860 || layout.art >= 700, `doc article uses the window's width (${Math.round(layout.art)}px)`);
+    ok(/ch$|px$/.test(layout.pMax) && layout.pMax !== 'none', `paragraphs keep a reading measure (${layout.pMax})`);
+    ok(layout.wrapped && layout.tableFull, 'tables sit in a scroll wrapper and fill its width');
+    ok(layout.nwSingleLine, 'short table cells stay on one line');
+
+    // Hidden panel (iPad asleep): open-doc --at waits for it to come back.
+    await page.evaluate(() => window.__setHidden(true));
+    id = mia('panel', 'open-doc', 'acme pricing', '--at', 'Seat pricing');
+    await sleep(1500);
+    await page.evaluate(() => window.__setHidden(false));
+    r = await resultFor(id);
+    ok(r.ok, `open-doc --at on a panel that was in the background still lands (${r.detail})`);
+
+    // ---- show-doc / show-url / close ----
+    id = mia('panel', 'show-doc', 'acme pricing', '--at', 'Competitive position');
+    r = await resultFor(id);
+    await sleep(700);
+    ok(r.ok && (await inView('[data-reader="viewer"] h2', 'Competitive position'))?.inView, `show-doc opens the doc in the viewer at the heading (${r.detail})`);
+    r = await resultFor(mia('panel', 'scroll', 'bottom'));
+    ok(r.ok && /page Mia is showing/.test(r.detail), 'scroll acts on the viewer while it is open');
+    r = await resultFor(mia('panel', 'close'));
+    await sleep(600);
+    ok(r.ok && !(await page.locator('[data-reader="viewer"]').count()), 'close shuts the viewer');
+    ok((await hash(page)) === `doc/${RESEARCH}`, '…and the doc underneath is still there');
+
+    id = mia('panel', 'show-url', 'https://127.0.0.1:9/listing/123');
+    r = await resultFor(id);
+    await sleep(600);
+    ok(r.ok && r.tell && /^card — /.test(r.detail), `show-url a page the relay can't frame → card, and Mia hears which (${r.detail})`);
+    ok(await page.getByRole('button', { name: /Open on 127\.0\.0\.1/ }).isVisible(), 'the card offers Open');
+    await page.getByRole('button', { name: /Open on 127\.0\.0\.1/ }).click();
+    ok((await page.evaluate(() => window.__opened)).includes('https://127.0.0.1:9/listing/123'), '…which opens the link on the device');
+    await page.keyboard.press('Escape');
+    ok(await until(async () => !(await page.locator('[data-reader="viewer"]').count()), 3000, 'viewer gone').catch(() => false), 'Escape closes the viewer');
+
+    const net = await (await fetch(`${BASE}/api/v1/preview?url=${encodeURIComponent('https://example.com/')}`, { headers: { authorization: `Bearer ${TOKEN}` } })).json();
+    if (net.frameable) {
+      id = mia('panel', 'show-url', 'https://example.com/');
+      r = await resultFor(id);
+      await sleep(800);
+      ok(r.ok && /^framed/.test(r.detail) && (await page.locator('[data-viewer-frame] iframe').count()) === 1, 'show-url a site that allows framing → framed in the viewer');
+      r = await resultFor(mia('panel', 'scroll', 'down'));
+      ok(r.ok === false && /framed site/.test(r.detail), "scroll on a framed site says it can't reach inside");
+      await resultFor(mia('panel', 'close'));
+    } else {
+      console.log(`  - skipped the framed show-url check (no network: ${net.why})`);
+    }
+    const gh = await (await fetch(`${BASE}/api/v1/preview?url=${encodeURIComponent('https://github.com/')}`, { headers: { authorization: `Bearer ${TOKEN}` } })).json();
+    ok(gh.frameable === false && (/framing/.test(gh.why) || !gh.status), `preview: a site that forbids framing is reported (${gh.why})`);
+    const unauth = await fetch(`${BASE}/api/v1/preview?url=https://example.com/`);
+    ok(unauth.status === 401, 'preview needs the token');
+
     id = mia('panel', 'open-task', '1');
     r = await resultFor(id);
     ok(r.ok && (await hash(page)) === 'mia', 'open-task opens Mia');
-    await sleep(600);
-    ok(await page.getByText('Add dark mode to settings').first().isVisible(), '…with the task on her board');
+    const onBoard = await until(() => page.getByText('Add dark mode to settings').first().isVisible(), 4000, 'task').catch(() => false);
+    ok(onBoard, '…with the task on her board');
 
     const agents = (await (await fetch(`${BASE}/api/v1/agents`, { headers: { authorization: `Bearer ${TOKEN}` } })).json()).agents;
     const ag = agents.find((a) => a.name) || agents[0];
@@ -247,6 +378,39 @@ async function main() {
     await sleep(400);
     ok(r.ok && (await page.getByText('Announcements').isVisible()), 'view settings opens Settings (with the Announcements section)');
     ok(await page.getByText('Quiet hours').isVisible(), 'quiet hours are configurable');
+    ok(!page.errors.length, `no page errors (${page.errors.join(' | ')})`);
+    await page.context().close();
+  }
+
+  // ---- 1b. phone width: wide tables scroll, the page never does ---------------------
+  console.log('mia panel — phone 390×844');
+  {
+    const page = await newPage(browser, { viewport: { width: 390, height: 844 }, live: 'attached' });
+    await page.mouse.click(200, 300);
+    let r = await resultFor(mia('panel', 'open-doc', RESEARCH, '--at', 'Seat pricing'));
+    await sleep(800);
+    const t = await page.evaluate(() => {
+      const wrap = document.querySelector('article.md .md-table');
+      const first = wrap.querySelector('tbody td');
+      return {
+        scrolls: wrap.scrollWidth > wrap.clientWidth + 20,
+        page: document.documentElement.scrollWidth <= innerWidth + 1,
+        sticky: getComputedStyle(first).position,
+        minCell: Math.min(...[...wrap.querySelectorAll('td')].map((c) => c.getBoundingClientRect().width)),
+      };
+    });
+    ok(r.ok && t.scrolls, 'a wide table scrolls sideways inside its wrapper');
+    ok(t.page, 'the page itself never scrolls sideways');
+    ok(t.sticky === 'sticky', 'the short first column stays put');
+    ok(t.minCell > 40, `no column is squashed to a sliver (${Math.round(t.minCell)}px)`);
+    r = await resultFor(mia('panel', 'show-url', 'https://127.0.0.1:9/p'));
+    await sleep(600);
+    const vw = await page.evaluate(() => {
+      const v = document.querySelector('[data-reader="viewer"]');
+      const b = v && v.getBoundingClientRect();
+      return b && { w: b.width, x: b.left };
+    });
+    ok(r.ok && vw && vw.x <= 2 && vw.w >= 386, `the viewer covers the phone screen (${JSON.stringify(vw)})`);
     ok(!page.errors.length, `no page errors (${page.errors.join(' | ')})`);
     await page.context().close();
   }

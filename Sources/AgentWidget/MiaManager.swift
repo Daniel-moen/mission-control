@@ -411,7 +411,8 @@ final class MiaManager: ObservableObject {
     /// Actions the panel will carry out (docs/mia.md §8.2) — navigation only.
     /// The CLI, the relay and the panel each check the same list.
     static let panelActions: Set<String> = ["open-doc", "open-task", "open-agent", "view",
-                                            "open-url", "search", "scroll-to"]
+                                            "open-url", "search", "scroll-to", "scroll",
+                                            "highlight", "show-url", "show-doc", "close"]
 
     /// `mia panel …` lines → {type:"panel"} frames. A command older than a
     /// minute is dropped: opening a doc long after she asked would surprise him.
@@ -439,13 +440,17 @@ final class MiaManager: ObservableObject {
     }
 
     /// The relay's (or the panel's) answer to a panel command. Success is
-    /// silent — Daniel sees it happen — so only failures reach Mia.
+    /// silent — Daniel sees it happen — so only failures reach Mia, plus the
+    /// successes the panel flags `tell` (show-url fell back to a card, a scroll
+    /// landed on a fuzzy match): she needs to know what he's actually seeing.
     func panelResult(_ obj: [String: Any]) {
-        guard (obj["ok"] as? Bool) != true else { return }
+        let ok = (obj["ok"] as? Bool) == true
+        guard !ok || (obj["tell"] as? Bool) == true else { return }
         let action = obj["action"] as? String ?? "panel command"
         let arg = (obj["arg"] as? String).map { " \($0)" } ?? ""
-        let detail = obj["detail"] as? String ?? "failed"
-        enqueue(kind: "system", line: "[MC] Panel: \(action)\(arg) didn't work — \(detail)")
+        let detail = obj["detail"] as? String ?? (ok ? "done" : "failed")
+        enqueue(kind: "system", line: ok ? "[MC] Panel: \(action)\(arg) — \(detail)"
+                                         : "[MC] Panel: \(action)\(arg) didn't work — \(detail)")
     }
 
     // MARK: dispatch/ → executors
@@ -1169,7 +1174,10 @@ THE PANEL ON HIS SCREEN
 - `mia panel view <home|fleet|library|mia|insights|settings>` switches the view.
 - `mia panel open-url <https-url>` opens a link on his iPad, e.g. a Zoom, Meet or Teams join link.
 - `mia panel search "<text>"` opens search with that text.
-- `mia panel scroll-to "<heading>"` scrolls the open doc to a heading.
+- `mia panel scroll-to "<text>"` scrolls what's open (doc or shown page) to a heading or any text, forgiving about case, punctuation and partial words, and flashes it. `mia panel highlight "<text>"` does the same with a longer-lasting mark.
+- `mia panel scroll down|up|top|bottom` moves about one screen per step, to walk him through a page.
+- `mia panel show-url <https-url>` opens a page in a viewer over the panel (he taps back to close). Sites that forbid framing (Property24, most big sites) show as a card with title, photos and an Open button instead; the panel tells you which with `[MC] Panel: show-url … — framed|card …`.
+- `mia panel show-doc <library-id|title words> [--at "<text>"]` shows a Library doc in that viewer, over whatever he is looking at. `mia panel close` closes the viewer.
 
 HOW EVENTS REACH YOU
 - Messages starting with `[MC]` come from Mission Control: Daniel's chat and answers, new tasks, executor results, reminders, heartbeats. Handle them and end your turn.

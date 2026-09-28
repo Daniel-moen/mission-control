@@ -291,7 +291,9 @@ const ALLOWED_VIEWER_TYPES = [
 // most recently active one (visible beats hidden, then the latest tap/key,
 // then the newest connection). Navigation only — anything off the allow-list
 // is dropped here as well as on the Mac and in the panel.
-const PANEL_ACTIONS = ['open-doc', 'open-task', 'open-agent', 'view', 'open-url', 'search', 'scroll-to'];
+const PANEL_ACTIONS = ['open-doc', 'open-task', 'open-agent', 'view', 'open-url', 'search', 'scroll-to',
+  'scroll', 'highlight', 'show-url', 'show-doc', 'close'];
+const PANEL_SCROLLS = ['up', 'down', 'top', 'bottom'];
 const PANEL_VIEWS = ['home', 'fleet', 'library', 'mia', 'insights', 'settings'];
 const pollerPresence = new Map(); // poller id → { activeAt, visible }
 const pollerInbox = new Map(); // poller id → panel frames waiting for its next poll
@@ -305,8 +307,9 @@ function cleanPanelFrame(f) {
   const heading = s(f.heading, 200);
   if (heading) out.heading = heading;
   if (f.action === 'view' && !PANEL_VIEWS.includes(out.arg)) return null;
-  if (f.action === 'open-url' && !/^https:\/\/[^\s]+$/i.test(out.arg)) return null;
-  if (f.action !== 'view' && f.action !== 'open-url' && !out.arg) return null;
+  if ((f.action === 'open-url' || f.action === 'show-url') && !/^https:\/\/[^\s]+$/i.test(out.arg)) return null;
+  if (f.action === 'scroll' && !PANEL_SCROLLS.includes(out.arg)) return null;
+  if (f.action !== 'view' && f.action !== 'close' && !out.arg) return null;
   return out;
 }
 
@@ -360,6 +363,9 @@ function panelDone(msg) {
     action: PANEL_ACTIONS.includes(msg.action) ? msg.action : '',
     arg: String(msg.arg || '').slice(0, 200),
     detail: String(msg.detail || '').slice(0, 300),
+    // Success Mia should still hear about (show-url fell back to a card, a
+    // fuzzy match landed somewhere other than what she asked for).
+    tell: msg.tell === true,
   });
 }
 

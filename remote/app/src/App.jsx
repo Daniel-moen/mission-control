@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence } from 'motion/react';
-import { useMC, miaBadge, onPanelCommand } from './lib/store.js';
+import { useMC, miaBadge, onPanelCommand, closeViewer } from './lib/store.js';
 import { runPanelCommand } from './lib/panelCommands.js';
 import { useMedia } from './lib/hooks.js';
 
@@ -14,6 +14,7 @@ import Diag from './shell/Diag.jsx';
 import CommandPalette from './shell/CommandPalette.jsx';
 import Toast from './ui/Toast.jsx';
 import TalkHost from './shell/TalkHost.jsx';
+import Viewer from './shell/Viewer.jsx';
 import { startTalk } from './lib/talkSession.js';
 
 import Home from './views/home/Home.jsx';
@@ -217,8 +218,15 @@ export default function App() {
   // `mia panel …` frames (lib/panelCommands.js does the resolving and the
   // toast); these are the only doors it may open.
   const panelApi = useRef(null);
+  const openDocRef = useRef(null);
+  openDocRef.current = openDoc;
   panelApi.current = {
+    // Read through a ref: a command that awaits (open-doc --at) must see the
+    // doc that's open now, not the one open when it arrived.
+    docId: () => openDocRef.current?.id || null,
+    closeDoc: () => setOpenDoc(null),
     view: (v) => {
+      closeViewer();
       if (tvOn || carOn) location.hash = '';
       setPalette(false);
       setComposer(null);
@@ -228,6 +236,7 @@ export default function App() {
       } else nav(v);
     },
     openDoc: (id) => {
+      closeViewer();
       if (tvOn || carOn) location.hash = '';
       setPalette(false);
       setComposer(null);
@@ -237,6 +246,7 @@ export default function App() {
       setOpenDoc({ id, edit: false });
     },
     openAgent: (id) => {
+      closeViewer();
       if (tvOn || carOn) location.hash = '';
       setPalette(false);
       setComposer(null);
@@ -276,6 +286,7 @@ export default function App() {
         // One handler, one close — the topmost overlay and nothing else.
         if (tvOn || carOn) location.hash = '';
         else if (palette) setPalette(false);
+        else if (useMC.getState().viewer) closeViewer();
         else if (console_) setConsole(null);
         else if (composer) setComposer(null);
         else if (sheet) closeLaunch();
@@ -495,6 +506,7 @@ export default function App() {
         onSettings={() => setSheet('settings')}
         onOpenDoc={(id) => setOpenDoc({ id, edit: false })}
       />
+      <Viewer />
       {talkHost}
       <Toast />
     </div>

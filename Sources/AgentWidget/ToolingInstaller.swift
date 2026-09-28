@@ -1209,6 +1209,7 @@ def cmd_status(args):
 # open or the target isn't found, an [MC] event says so.
 
 PANEL_VIEWS = ["home", "fleet", "library", "mia", "insights", "settings"]
+PANEL_SCROLLS = ["down", "up", "top", "bottom"]
 
 
 def panel_cmd(action, **fields):
@@ -1231,7 +1232,8 @@ def one_arg(pos, usage, limit=200):
 
 def cmd_panel(args):
     if not args or args[0] in ("help", "-h", "--help"):
-        die("panel needs: open-doc|open-task|open-agent|view|open-url|search|scroll-to (see mia help)")
+        die("panel needs: open-doc|open-task|open-agent|view|open-url|search|scroll-to|scroll|highlight|"
+            "show-url|show-doc|close (see mia help)")
     sub, rest = args[0], args[1:]
     if sub == "open-doc":
         pos, o = parse(rest, {"--at": True})
@@ -1262,7 +1264,29 @@ def cmd_panel(args):
         panel_cmd("search", arg=one_arg(pos, 'search "<text>"'))
     elif sub == "scroll-to":
         pos, o = parse(rest, {})
-        panel_cmd("scroll-to", arg=one_arg(pos, 'scroll-to "<heading>"'))
+        panel_cmd("scroll-to", arg=one_arg(pos, 'scroll-to "<heading or text>"'))
+    elif sub == "highlight":
+        pos, o = parse(rest, {})
+        panel_cmd("highlight", arg=one_arg(pos, 'highlight "<text>"'))
+    elif sub == "scroll":
+        pos, o = parse(rest, {})
+        if len(pos) != 1 or pos[0] not in PANEL_SCROLLS:
+            die("usage: mia panel scroll <%s>" % "|".join(PANEL_SCROLLS))
+        panel_cmd("scroll", arg=pos[0])
+    elif sub == "show-url":
+        pos, o = parse(rest, {})
+        url = one_arg(pos, "show-url <https-url>", 2000)
+        if not re.match(r"^https://[^\s/$.?#][^\s]*$", url, re.I):
+            die("show-url takes an https:// link only")
+        panel_cmd("show-url", arg=url)
+    elif sub == "show-doc":
+        pos, o = parse(rest, {"--at": True})
+        heading = o.get("--at")
+        panel_cmd("show-doc", arg=one_arg(pos, "show-doc <library-id|title> [--at <text>]"),
+                  heading=heading.strip() if heading else None)
+    elif sub == "close":
+        pos, o = parse(rest, {})
+        panel_cmd("close", arg="")
     else:
         die("unknown panel command: %s (try: mia help)" % sub)
 
@@ -1290,14 +1314,21 @@ HELP = """mia — Mia's line to Daniel and the Mission Control task list.
   mia heartbeat set <id> (--every <min>|--at HH:MM) [--label <l>] [--prompt <p>]
                                                     add or change a recurring prompt
   mia heartbeat enable|disable|remove <id>
-  mia panel open-doc <library-id|title> [--at "<heading>"]
+  mia panel open-doc <library-id|title> [--at "<heading or text>"]
                                                     open a Library doc on Daniel's panel
   mia panel open-task <id>                          show a task on Mia's board
   mia panel open-agent <name|session-id>            open an agent's window
   mia panel view <home|fleet|library|mia|insights|settings>
   mia panel open-url <https-url>                    open a link on the iPad (Zoom/Meet/Teams…)
   mia panel search "<text>"                         open search with this text
-  mia panel scroll-to "<heading>"                   scroll the open doc to a heading
+  mia panel scroll-to "<heading or text>"           scroll the open doc/page to it (forgiving match)
+  mia panel highlight "<text>"                      scroll to text and mark it for a few seconds
+  mia panel scroll <down|up|top|bottom>             about one screen per step
+  mia panel show-url <https-url>                    show a web page in a viewer over the panel
+                                                    (a card with photos + Open if the site blocks framing)
+  mia panel show-doc <library-id|title> [--at "<text>"]
+                                                    show a Library doc in that viewer
+  mia panel close                                   close the viewer
   mia inbox [-n 50]                                 recent system events
   mia uploads [-n 20] [--json]                      files Daniel sent from the panel (newest last)
   mia status                                        tasks, open questions, reminders
@@ -1345,8 +1376,8 @@ never seen by Daniel — only what goes through `mia`.
 mia say    "<text>" [--task <id>] [--speak]       chat message to Daniel (no push)
 mia notify "<text>" [--task <id>] [--urgent] [--speak]   message + push + Mac banner
 mia ask    "<question>" [--options "A|B|C"] [--task <id>] [--speak]   prints the question id
-mia panel open-doc|open-task|open-agent|view|open-url|search|scroll-to …
-                                                  act on Daniel's panel (Mia only; see mia help)
+mia panel open-doc|open-task|open-agent|view|open-url|search|scroll-to|scroll|
+          highlight|show-url|show-doc|close …     act on Daniel's panel (Mia only; see mia help)
 mia task list [--status <s>]                      id<TAB>status<TAB>priority<TAB>title
 mia task show <id>
 mia task add "<title>" [--detail <text>|--stdin] [--dir <d>] [--priority n]
@@ -1384,6 +1415,28 @@ and end your turn.
 The note is optional ("summarise this", "file this for Oblivion"). Files sent
 together are numbered and share the note. `mia uploads` lists recent ones
 (`--json` for id, path, mime, size, sha256, caption).
+
+**Showing Daniel things (Mia only)** — he mostly reads the panel on his iPad
+or phone:
+
+```
+mia panel open-doc <id|title> [--at "<heading or text>"]   open a Library doc
+mia panel scroll-to "<heading or text>"   jump to it and flash it (forgiving:
+                                          case, emoji, punctuation, prefix,
+                                          any paragraph/list item/table row,
+                                          then fuzzy — you're told if fuzzy)
+mia panel highlight "<text>"              same, with a longer-lasting mark
+mia panel scroll down|up|top|bottom       about one screen per step
+mia panel show-url <https-url>            page in a viewer over the panel
+mia panel show-doc <id|title> [--at "…"]  a Library doc in that viewer
+mia panel close                           close the viewer (or the open doc)
+```
+
+`show-url` answers with `[MC] Panel: show-url … — framed …` (the page is inside
+the panel; he scrolls it himself, `scroll` can't reach into another site) or
+`— card …` (the site forbids framing, e.g. Property24: he sees its title,
+photos, summary and an Open button). Scroll commands act on the viewer while
+it's open, else the open doc, else the main view.
 
 **If you are Mia**: never sleep or poll — end your turn and wait for `[MC]`.
 """#

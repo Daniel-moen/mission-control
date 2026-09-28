@@ -1,4 +1,4 @@
-import { getMC, toast, agentName } from './store.js';
+import { getMC, toast, agentName, docGet, linkPreview, showViewer, closeViewer } from './store.js';
 import { offerLink } from './announce.js';
 
 // `mia panel …` — what the panel does with a {type:'panel'} frame from Mia
@@ -44,29 +44,221 @@ export function resolveAgent(arg, agents = getMC().agents || []) {
   return pool.sort((x, y) => (y.status === 'exited' ? -1 : 0) - (x.status === 'exited' ? -1 : 0))[0] || null;
 }
 
-// Scroll the open doc to a heading; waits for the body to render (a doc Mia
-// just opened is still loading).
-export function scrollToHeading(text, timeoutMs = 8000) {
-  const want = norm(text);
+// ---- finding things on the page ------------------------------------------
+// Mia names what to show in her own words: a heading copied with its
+// punctuation, "Option 3", a phrase from a paragraph, a name in a table. So
+// matching folds case, accents, emoji and punctuation away, then tries, in
+// order: headings (exact, prefix, substring, the heading inside a longer ask),
+// then the smallest paragraph / list item / table row containing the text,
+// then a fuzzy word match (prefixes and one-letter typos), headings first.
+
+export const fold = (s) =>
+  String(s || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+
+const BLOCKS = 'p,li,tr,blockquote,pre,dt,dd,figcaption,td';
+const textOf = (el) =>
+  el.tagName === 'TR' ? [...el.cells].map((c) => c.textContent).join(' ') : el.textContent;
+
+function near(a, b) {
+  // one edit apart (typo), for words long enough to mean something
+  if (Math.abs(a.length - b.length) > 1 || Math.min(a.length, b.length) < 5) return false;
+  let i = 0;
+  let j = 0;
+  let edits = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      i++;
+      j++;
+      continue;
+    }
+    if (++edits > 1) return false;
+    if (a.length > b.length) i++;
+    else if (b.length > a.length) j++;
+    else {
+      i++;
+      j++;
+    }
+  }
+  return edits + (a.length - i) + (b.length - j) <= 1;
+}
+const wordHit = (q, words) =>
+  words.some((w) => w === q || (q.length >= 3 && w.startsWith(q)) || (w.length >= 4 && q.startsWith(w)) || near(q, w));
+
+function fuzzyScore(qw, text) {
+  const words = text.split(' ');
+  const hit = qw.filter((q) => wordHit(q, words)).length;
+  return hit / qw.length;
+}
+
+export function findTarget(root, query) {
+  const q = fold(query);
+  if (!root || !q) return null;
+  const heads = [...root.querySelectorAll('h1,h2,h3,h4,h5,h6')].map((el) => ({ el, t: fold(el.textContent) })).filter((h) => h.t);
+  const tests = [
+    (t) => t === q,
+    (t) => t.startsWith(q),
+    (t) => t.includes(q),
+    (t) => t.length >= 4 && q.startsWith(t) && t.length >= q.length * 0.5,
+  ];
+  for (const test of tests) {
+    const h = heads.find((x) => test(x.t));
+    if (h) return { el: h.el, how: 'heading' };
+  }
+  // Any text: the innermost block holding it (a list item, not its list).
+  const blocks = [...root.querySelectorAll(BLOCKS)].map((el) => ({ el, t: fold(textOf(el)) }));
+  const holding = blocks.filter((b) => b.t.includes(q));
+  const inner = holding.filter((b) => !holding.some((o) => o !== b && b.el.contains(o.el) && o.el.tagName !== 'TD'));
+  if (inner.length) {
+    const el = inner[0].el.tagName === 'TD' ? inner[0].el.closest('tr') || inner[0].el : inner[0].el;
+    return { el, how: 'text' };
+  }
+  // Fuzzy: most of the words (prefixes / typos allowed), headings first.
+  const qw = q.split(' ');
+  let best = null;
+  for (const [pool, min, bias] of [
+    [heads, qw.length <= 2 ? 1 : 0.6, 0.05],
+    [blocks.filter((b) => b.el.tagName !== 'TD'), qw.length <= 2 ? 1 : 0.75, 0],
+  ]) {
+    for (const x of pool) {
+      const sc = fuzzyScore(qw, x.t);
+      if (sc >= min && (!best || sc + bias > best.sc)) best = { el: x.el, sc: sc + bias };
+    }
+  }
+  return best ? { el: best.el, how: 'fuzzy' } : null;
+}
+
+// ---- what's on screen -----------------------------------------------------
+// The thing Mia is talking about, topmost first: the viewer she opened over
+// the panel, else the doc that's open (by id — an old doc window can still be
+// animating out, and a stale one must never be searched), else the biggest
+// scrolling area in view (the Mia thread, the Library list…).
+
+const esc = (s) => (window.CSS && CSS.escape ? CSS.escape(s) : String(s).replace(/["\\]/g, '\\$&'));
+
+function biggestScroller() {
+  let best = null;
+  let area = 0;
+  for (const el of document.querySelectorAll('main div, body > div div')) {
+    if (el.scrollHeight <= el.clientHeight + 8) continue;
+    const oy = getComputedStyle(el).overflowY;
+    if (oy !== 'auto' && oy !== 'scroll') continue;
+    const r = el.getBoundingClientRect();
+    const a = Math.max(0, Math.min(r.right, innerWidth) - Math.max(r.left, 0)) * Math.max(0, Math.min(r.bottom, innerHeight) - Math.max(r.top, 0));
+    if (a > area) {
+      area = a;
+      best = el;
+    }
+  }
+  return best;
+}
+
+function onScreen(nav) {
+  const viewer = [...document.querySelectorAll('[data-reader="viewer"]')].pop();
+  if (viewer) return { scroller: viewer, root: viewer, what: 'the page Mia is showing' };
+  if (document.querySelector('[data-viewer-frame]')) return { frame: true };
+  const id = nav?.docId?.();
+  if (id) {
+    const sc = [...document.querySelectorAll(`[data-reader="doc"][data-doc-id="${esc(id)}"]`)].pop();
+    // root stays null until the body renders, so callers wait for it.
+    if (sc) return { scroller: sc, root: sc.querySelector('article.md'), what: 'the open doc' };
+  }
+  const sc = biggestScroller();
+  return sc ? { scroller: sc, root: sc, what: 'the view' } : null;
+}
+
+// Wait for fn() to return something, counting only time the page is visible:
+// a panel in the background (iPad asleep, another app) doesn't render, and
+// the doc Mia opened lands when he comes back — not a false "no document".
+function waitFor(fn, visibleMs, capMs = 10 * 60 * 1000) {
   return new Promise((resolve) => {
     const t0 = Date.now();
-    const look = () => {
-      const art = document.querySelector('article.md');
-      const hs = art ? [...art.querySelectorAll('h1,h2,h3,h4,h5,h6')] : [];
-      const h = hs.find((x) => norm(x.textContent) === want) || hs.find((x) => norm(x.textContent).includes(want));
-      if (h) {
-        h.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        h.classList.add('mia-flash');
-        setTimeout(() => h.classList.remove('mia-flash'), 2400);
-        return resolve({ ok: true, detail: h.textContent.trim() });
-      }
-      if (Date.now() - t0 > timeoutMs) {
-        return resolve({ ok: false, detail: art ? `no heading matching "${text}" in the open doc` : 'no document is open' });
-      }
-      setTimeout(look, 250);
+    let seen = 0;
+    let last = Date.now();
+    const tick = () => {
+      const now = Date.now();
+      if (document.visibilityState !== 'hidden') seen += now - last;
+      last = now;
+      let v = null;
+      try {
+        v = fn();
+      } catch {}
+      if (v) return resolve(v);
+      if (seen > visibleMs || now - t0 > capMs) return resolve(null);
+      setTimeout(tick, 150);
     };
-    look();
+    tick();
   });
+}
+
+function reveal(scroller, el, { mark = false, block = 'start' } = {}) {
+  const sr = scroller.getBoundingClientRect();
+  const er = el.getBoundingClientRect();
+  const off = er.top - sr.top + scroller.scrollTop;
+  const top = block === 'center' ? off - Math.max(16, (scroller.clientHeight - er.height) / 2) : off - 16;
+  scroller.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+  const wrap = el.closest('.md-table');
+  if (wrap) wrap.scrollTo({ left: 0, behavior: 'smooth' });
+  const cls = mark ? 'mia-mark' : 'mia-flash';
+  el.classList.add(cls);
+  setTimeout(() => el.classList.remove(cls), mark ? 6000 : 2400);
+}
+
+const clip = (s, n = 70) => {
+  const t = String(s || '').replace(/\s+/g, ' ').trim();
+  return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+};
+
+// Scroll whatever is on screen to `text` (docs/mia.md §8.2 scroll-to /
+// highlight / open-doc --at). A doc Mia just opened is still loading, so
+// this waits for its body, then keeps looking briefly while it settles.
+export async function scrollToText(text, nav, { mark = false, docId = null, where = null, visibleMs = 15000 } = {}) {
+  const pick = () => {
+    if (where) {
+      const w = where();
+      return w && { scroller: w, root: w.querySelector('article.md') || w, what: 'the page' };
+    }
+    return onScreen(docId ? { docId: () => docId } : nav);
+  };
+  const ready = await waitFor(() => {
+    const s = pick();
+    if (s?.frame) return s;
+    return s && s.root && s.root.textContent.trim().length > 0 ? s : null;
+  }, visibleMs);
+  if (!ready) return { ok: false, detail: docId ? `the doc didn't finish loading on the panel` : 'nothing is open to scroll' };
+  if (ready.frame) return { ok: false, detail: "the page is a framed site; the panel can't scroll inside it (Daniel can swipe)" };
+  const hit = await waitFor(() => {
+    const s = pick();
+    const t = s && !s.frame ? findTarget(s.root, text) : null;
+    return t && { s, t };
+  }, 2500);
+  if (!hit) return { ok: false, detail: `nothing matching "${clip(text, 80)}" in ${ready.what}` };
+  reveal(hit.s.scroller, hit.t.el, { mark, block: hit.t.how === 'heading' ? 'start' : 'center' });
+  const found = clip(textOf(hit.t.el));
+  return hit.t.how === 'fuzzy'
+    ? { ok: true, tell: true, detail: `no exact match; went to the closest: “${found}”` }
+    : { ok: true, detail: found };
+}
+
+export function scrollPage(dir, nav) {
+  const s = onScreen(nav);
+  if (!s) return { ok: false, detail: 'nothing on screen scrolls' };
+  if (s.frame) return { ok: false, detail: "the page is a framed site; the panel can't scroll inside it (Daniel can swipe)" };
+  const el = s.scroller;
+  const max = el.scrollHeight - el.clientHeight;
+  const step = Math.round(el.clientHeight * 0.85);
+  const from = el.scrollTop;
+  const to = dir === 'top' ? 0 : dir === 'bottom' ? max : Math.max(0, Math.min(max, from + (dir === 'up' ? -step : step)));
+  if (Math.abs(to - from) < 2) {
+    return { ok: true, tell: true, detail: `already at the ${dir === 'up' || dir === 'top' ? 'top' : 'bottom'} of ${s.what}` };
+  }
+  el.scrollTo({ top: to, behavior: 'smooth' });
+  const pct = max > 0 ? Math.round((to / max) * 100) : 100;
+  return { ok: true, detail: `${s.what}: ${pct}% down` };
 }
 
 // Opening a link on the device. window.open hands https links to Safari and
@@ -106,10 +298,65 @@ export async function runPanelCommand(cmd, nav) {
       nav.openDoc(d.id);
       toast(`Mia opened “${d.title || d.id}”`);
       if (cmd.heading) {
-        const r = await scrollToHeading(cmd.heading);
-        return r.ok ? { ok: true, detail: d.id } : { ok: false, detail: `opened ${d.id}, but ${r.detail}` };
+        const r = await scrollToText(cmd.heading, nav, { docId: d.id });
+        return r.ok ? { ...r, detail: r.tell ? `opened ${d.id}; ${r.detail}` : d.id } : { ok: false, detail: `opened ${d.id}, but ${r.detail}` };
       }
       return { ok: true, detail: d.id };
+    }
+    case 'show-doc': {
+      const d = resolveDoc(arg);
+      if (!d) return { ok: false, detail: `no Library doc matches "${arg}"` };
+      if (!getMC().docDocs[d.id]) docGet(d.id);
+      showViewer({ kind: 'doc', docId: d.id, title: d.title || d.id });
+      toast(`Mia is showing “${d.title || d.id}”`);
+      if (cmd.heading) {
+        const where = () => [...document.querySelectorAll(`[data-reader="viewer"][data-doc-id="${esc(d.id)}"]`)].pop();
+        const r = await scrollToText(cmd.heading, nav, { where });
+        return r.ok ? { ...r, detail: r.tell ? `showing ${d.id}; ${r.detail}` : d.id } : { ok: false, detail: `showing ${d.id}, but ${r.detail}` };
+      }
+      return { ok: true, detail: d.id };
+    }
+    case 'show-url': {
+      if (!/^https:\/\/\S+$/i.test(arg)) return { ok: false, detail: 'only https links can be shown' };
+      let host = '';
+      try {
+        host = new URL(arg).host.replace(/^www\./, '');
+      } catch {
+        return { ok: false, detail: 'not a valid link' };
+      }
+      toast(`Mia is opening ${host}…`);
+      const p = await linkPreview(arg);
+      if (p?.frameable) {
+        showViewer({ kind: 'url', url: p.finalUrl || arg, host, card: p });
+        return { ok: true, tell: true, detail: `framed — ${host} is showing inside the panel (he can scroll it himself; scroll commands can't reach inside a framed site)` };
+      }
+      const why = p ? p.why || p.error || 'the site could not be framed' : "the relay couldn't fetch it";
+      showViewer({ kind: 'card', url: p?.finalUrl || arg, host, card: p, why });
+      const has = [p?.title && 'title', p?.images?.length > 1 ? `${p.images.length} photos` : p?.image && 'photo', p?.description && 'summary']
+        .filter(Boolean)
+        .join(', ');
+      return { ok: true, tell: true, detail: `card — ${why}; showing a card (${has || 'link only'}) with an Open button that opens it in Safari` };
+    }
+    case 'close': {
+      if (getMC().viewer) {
+        closeViewer();
+        return { ok: true };
+      }
+      if (nav.docId?.()) {
+        nav.closeDoc();
+        return { ok: true, detail: 'closed the doc' };
+      }
+      return { ok: false, detail: 'nothing is open to close' };
+    }
+    case 'scroll': {
+      if (!['up', 'down', 'top', 'bottom'].includes(arg)) return { ok: false, detail: `scroll takes up, down, top or bottom` };
+      return scrollPage(arg, nav);
+    }
+    case 'highlight': {
+      if (!arg) return { ok: false, detail: 'no text given' };
+      const r = await scrollToText(arg, nav, { mark: true, visibleMs: 8000 });
+      if (r.ok) toast(`Mia highlighted “${clip(arg, 50)}”`);
+      return r;
     }
     case 'open-task': {
       const id = /^\d+$/.test(arg) ? String(Number(arg)).padStart(4, '0') : arg;
@@ -145,9 +392,9 @@ export async function runPanelCommand(cmd, nav) {
       return { ok: true };
     }
     case 'scroll-to': {
-      if (!arg) return { ok: false, detail: 'no heading given' };
-      const r = await scrollToHeading(arg, 2500);
-      if (r.ok) toast(`Mia jumped to “${r.detail.slice(0, 60)}”`);
+      if (!arg) return { ok: false, detail: 'no text given' };
+      const r = await scrollToText(arg, nav, { visibleMs: 8000 });
+      if (r.ok) toast(`Mia jumped to “${clip(r.tell ? arg : r.detail, 60)}”`);
       return r;
     }
     default:

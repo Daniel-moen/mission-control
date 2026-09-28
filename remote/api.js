@@ -24,6 +24,7 @@
 'use strict';
 
 const zlib = require('zlib');
+const { preview } = require('./preview');
 
 const MAX_BODY = 2 * 1024 * 1024; // doc bodies travel through here
 const ACK_TIMEOUT_MS = 15000;
@@ -223,6 +224,7 @@ function createApi({
       'PUT  /api/v1/docs/:id {content}': 'overwrite a document body',
       'PATCH /api/v1/docs/:id {kind?, status?, subject?, tags?, dir?}': 'update document metadata',
       'DELETE /api/v1/docs/:id': 'delete a document',
+      'GET  /api/v1/preview?url=https://…': 'can the panel frame this page, plus its card (title, image, description)',
       'GET  /api/v1/mia': 'Mia, the assistant: status, conversation, tasks, pending questions, schedule',
       'POST /api/v1/mia/message {text}': 'send Mia a chat message',
       'POST /api/v1/mia/answer {questionId, text}': 'answer one of Mia\'s pending questions',
@@ -290,6 +292,11 @@ function createApi({
         snapshot: snap,
         ...extras,
       });
+    }
+
+    // ---- link preview (`mia panel show-url`, preview.js) -------------------
+    if (route[0] === 'preview' && route.length === 1 && m === 'GET') {
+      return json(res, 200, await preview(url.searchParams.get('url') || ''));
     }
 
     // ---- panel HTTP fallback ------------------------------------------------

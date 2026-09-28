@@ -113,6 +113,9 @@ export const useMC = create(() => ({
   // Is this the panel Mia talks to? The relay picks the most recently active
   // one for `mia panel` commands and spoken announcements (docs/mia.md §8.2).
   panelPrimary: true,
+  // What Mia is showing over the panel (`mia panel show-url|show-doc`,
+  // shell/Viewer.jsx): null | { kind:'url'|'card'|'doc', url?, host?, card?, why?, docId?, n }
+  viewer: null,
   lastSnapshotAt: 0,
   now: Date.now(), // 1 Hz clock for staleness ages ("live" / "6s ago")
 }));
@@ -120,7 +123,7 @@ export const useMC = create(() => ({
 export const getMC = () => useMC.getState();
 const set = (patch) => useMC.setState(patch);
 
-export const PANEL_BUILD = 'v23.11 · 2026-09-24 · Mia model picker + spoken updates';
+export const PANEL_BUILD = 'v23.12 · 2026-09-28 · Mia shows pages, scrolls, wide tables';
 
 // ---- status helpers ---------------------------------------------------------
 // Status semantics: working = green, needs-you = amber, done = quiet neutral,
@@ -820,6 +823,25 @@ async function httpJSON(path, opts = {}, timeoutMs = 10000) {
   }
 }
 
+// `mia panel show-url`: can this page be framed, and what's on its card?
+// The relay fetches it (preview.js) — a browser can't see a site's
+// X-Frame-Options. null when the relay can't be asked.
+export async function linkPreview(url) {
+  try {
+    const { status, data } = await httpJSON(`/api/v1/preview?url=${encodeURIComponent(url)}`, {}, 12000);
+    return status === 200 && data ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+export function showViewer(v) {
+  useMC.setState((s) => ({ viewer: { ...v, n: (s.viewer?.n || 0) + 1 } }));
+}
+export function closeViewer() {
+  if (getMC().viewer) set({ viewer: null });
+}
+
 function wsFailed(why) {
   wsFails += 1;
   diagPatch({ wsFails });
@@ -1181,7 +1203,7 @@ function runPanel(msg) {
   }
   Promise.resolve(r).then((res) => {
     const out = res || { ok: false, detail: 'no result' };
-    sendRelay({ type: 'panelDone', id: msg.id, action: msg.action, arg: msg.arg, ok: !!out.ok, detail: out.detail || '' });
+    sendRelay({ type: 'panelDone', id: msg.id, action: msg.action, arg: msg.arg, ok: !!out.ok, detail: out.detail || '', tell: out.tell === true });
   });
 }
 

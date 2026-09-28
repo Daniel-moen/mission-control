@@ -334,26 +334,90 @@
   border-top: 1px solid var(--color-line);
   margin: 1.4em 0;
 }
-.md table {
-  display: block;
-  width: max-content;
+/* The article runs the full width of its window; running text is capped
+   near 80 characters so lines stay readable, while tables, code and images
+   take the whole width. */
+.md > p,
+.md > ul,
+.md > ol,
+.md > blockquote,
+.md > h1,
+.md > h2,
+.md > h3,
+.md > h4,
+.md > h5,
+.md > h6,
+.md > dl {
+  max-width: 80ch;
+}
+/* Tables (md.js wraps each one): scroll sideways rather than squash. Words
+   never break inside a cell; short cells don't wrap at all; long ones get a
+   readable minimum width, so a wide table overflows into the scroller. */
+.md .md-table {
   max-width: 100%;
   overflow-x: auto;
-  border-collapse: collapse;
-  margin: 0.9em 0;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  margin: 1em 0;
+  border: 1px solid var(--color-line);
+  border-radius: 10px;
+}
+.md table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 13.5px;
+  line-height: 1.5;
+  word-break: normal;
+  overflow-wrap: normal;
 }
 .md th,
 .md td {
-  border: 1px solid var(--color-line);
-  padding: 6px 12px;
+  border-bottom: 1px solid var(--color-line);
+  border-right: 1px solid var(--color-line);
+  padding: 8px 14px;
   text-align: left;
+  vertical-align: top;
+}
+.md tr > :last-child {
+  border-right: 0;
+}
+.md tbody tr:last-child > * {
+  border-bottom: 0;
+}
+.md td.nw,
+.md th.nw {
+  white-space: nowrap;
+}
+.md td.mid {
+  min-width: 14ch;
+}
+.md td.long {
+  min-width: 34ch;
 }
 .md th {
   font-size: 12px;
   font-weight: 600;
   color: var(--color-ink2);
   background: var(--color-raised);
+}
+.md tbody tr:nth-child(even) > td {
+  background: rgba(255, 255, 255, 0.025);
+}
+/* A short first column (a name, a number) stays put while the rest scrolls. */
+.md .md-table tr > .nw:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--color-surface);
+  box-shadow: 1px 0 0 var(--color-line2);
+}
+.md .md-table thead tr > .nw:first-child {
+  background: var(--color-raised);
+}
+.md tr.mia-flash > td,
+.md tr.mia-mark > td {
+  background: rgba(62, 207, 142, 0.14);
 }
 .md img {
   max-width: 100%;
@@ -421,11 +485,18 @@
   animation: mc-spin 0.7s linear infinite;
 }
 
-/* A heading Mia scrolled to (`mia panel scroll-to`) — a brief wash. */
+/* What Mia scrolled to (`mia panel scroll-to`) — a brief wash; `highlight`
+   holds a stronger accent mark for longer (lib/panelCommands.js). */
 .md .mia-flash {
   background: rgba(255, 255, 255, 0.09);
   border-radius: 8px;
   transition: background 1.2s ease;
+}
+.md .mia-mark {
+  background: rgba(62, 207, 142, 0.16);
+  box-shadow: 0 0 0 4px rgba(62, 207, 142, 0.16);
+  border-radius: 6px;
+  transition: background 1.2s ease, box-shadow 1.2s ease;
 }
 
 @media (prefers-reduced-motion: reduce) {
