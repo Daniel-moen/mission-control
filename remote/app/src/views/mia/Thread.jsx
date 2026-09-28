@@ -17,7 +17,7 @@ import {
 // the name line, and colour is kept for meaning only (a notify gets a thin
 // accent rule, an open question a thin amber one, system events go quiet).
 
-const toMs = (at) => {
+export const toMs = (at) => {
   if (!at) return 0;
   if (typeof at === 'number') return at > 1e12 ? at : at * 1000;
   const t = Date.parse(at);
@@ -114,7 +114,7 @@ function EventRow({ m }) {
   );
 }
 
-function MessageRow({ m, head, mia, onTask, pending, upload, showCaption = true }) {
+export function MessageRow({ m, head, mia, onTask, pending, upload, showCaption = true }) {
   const fromMia = m.from === 'mia';
   const isFile = m.kind === 'upload';
   const isQ = m.kind === 'question';

@@ -123,7 +123,7 @@ export const useMC = create(() => ({
 export const getMC = () => useMC.getState();
 const set = (patch) => useMC.setState(patch);
 
-export const PANEL_BUILD = 'v23.12 · 2026-09-28 · Mia shows pages, scrolls, wide tables';
+export const PANEL_BUILD = 'v23.13 · 2026-09-28 · Mini Mia chat on every view';
 
 // ---- status helpers ---------------------------------------------------------
 // Status semantics: working = green, needs-you = amber, done = quiet neutral,
@@ -1548,6 +1548,17 @@ export function miaBadge(mia, local = getMC().miaLocal) {
     unread++;
   }
   return unread + open.length;
+}
+
+// Mia messages (asks included) past the read marker — mini Mia's unread dot:
+// something she said or asked that he hasn't seen, not an old open question.
+export function miaUnread(mia, local = getMC().miaLocal) {
+  if (!mia) return 0;
+  const msgs = mia.messages;
+  const cut = Math.max(cutAfter(msgs, mia.readUpTo), cutAfter(msgs, local?.readUpTo));
+  let n = 0;
+  for (let i = cut; i < msgs.length; i++) if (msgs[i].from === 'mia') n++;
+  return n;
 }
 
 // Daniel's answer to a question, from wherever it is recorded: a local echo,

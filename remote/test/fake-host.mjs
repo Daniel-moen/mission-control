@@ -343,6 +343,33 @@ Only for the three recurring lookups; everything else still asks first.
 - G2 reviews, "billing" filter — https://example.com/g2/acme
 `;
 
+// Two tables that share a phrase and a heading Mia misspells (task 0067) —
+// shaped like Daniel's property deep-dive, where "four years unsold" is in a
+// listing's notes AND leads the ranking table's reason.
+const TARGETS_BODY = `# Oblivion targets — deep dive
+
+## Summary
+Sixteen listings checked against the brief; five are worth a call.
+
+### Verdict table
+| Rank | Listing | Verdict |
+|---|---|---|
+| 1 | B1 | Call first |
+| 2 | A4 | Call this week |
+
+## Listings
+| Ref | Listing | Area | Price | Agent | Listed | Notes |
+|---|---|---|---|---|---|---|
+| A4 | 9 Kloof Road | Bantry Bay | R38.5m | Pam Golding | Jan 2025 | Price cut twice. |
+| B1 | 121 Victoria Road penthouse | Camps Bay | R54.0m | RE/MAX, not sole | May 2022 | Over four years unsold. Over 400 m². Municipal value R34.6m. |
+
+## Ranking
+| # | Target | Why |
+|---|---|---|
+| 1 | B1, 121 Victoria Road penthouse | Four years unsold is the strongest motivation signal in either list |
+| 2 | A4, 9 Kloof Road | Two price cuts in a year |
+`;
+
 const NOTE_BODY = `# Standup notes — 2026-07-08
 
 - Shipped the tax client behind a feature flag
@@ -364,12 +391,31 @@ const docs = new Map([
     dir: '/Users/demo/acme', session: '',
     created: nowSec() - 86400, updatedAt: nowSec() - 5400, content: RESEARCH_BODY,
   }],
+  ['oblivion-targets-deep-dive.md', {
+    kind: 'research', status: 'done', subject: 'Property', tags: [],
+    dir: '', session: '',
+    created: nowSec() - 90000, updatedAt: nowSec() - 90000, content: TARGETS_BODY,
+  }],
   ['standup-notes.md', {
     kind: 'note', status: 'draft', subject: '', tags: ['meeting'],
     dir: '', session: '',
     created: nowSec() - 7200, updatedAt: nowSec() - 1800, content: NOTE_BODY,
   }],
 ]);
+
+// FAKE_HOST_LIBRARY=<dir> adds that folder's .md files (e.g. the real
+// ~/.mission-control/library) — for checking the panel against real docs.
+if (process.env.FAKE_HOST_LIBRARY) {
+  for (const f of fs.readdirSync(process.env.FAKE_HOST_LIBRARY)) {
+    if (!f.endsWith('.md')) continue;
+    const st = fs.statSync(path.join(process.env.FAKE_HOST_LIBRARY, f));
+    docs.set(f, {
+      kind: 'research', status: 'done', subject: '', tags: [], dir: '', session: '',
+      created: Math.floor(st.mtimeMs / 1000), updatedAt: Math.floor(st.mtimeMs / 1000),
+      content: fs.readFileSync(path.join(process.env.FAKE_HOST_LIBRARY, f), 'utf8'),
+    });
+  }
+}
 
 function docMetaList() {
   return [...docs.entries()]
@@ -455,6 +501,9 @@ const mia = {
   },
 };
 let miaMsgSeq = 2;
+// `mia ask` lines from the real CLI (no task on this host): open until
+// answered, like MiaManager's open questions.
+const looseQuestions = [];
 
 function miaBlock() {
   const pendingQuestions = [];
@@ -462,6 +511,9 @@ function miaBlock() {
     for (const q of t.questions || []) {
       if (q.answer == null) pendingQuestions.push({ questionId: q.id, taskId: t.id, text: q.text, options: q.options || [], askedAt: q.askedAt });
     }
+  }
+  for (const q of looseQuestions) {
+    if (q.answer == null) pendingQuestions.push({ questionId: q.id, taskId: null, text: q.text, options: q.options || [], askedAt: q.askedAt });
   }
   const block = { ...mia, messages: mia.messages.slice(-200), pendingQuestions };
   // FAKE_HOST_LEGACY_MIA=1 impersonates a Mac app before 0027 (no runningModel).
@@ -498,6 +550,13 @@ function handleMia(type, msg) {
       const text = String(msg.text ?? '').trim();
       let hit = null;
       for (const t of mia.tasks) for (const q of t.questions || []) if (q.id === msg.questionId) hit = { t, q };
+      const loose = looseQuestions.find((q) => q.id === msg.questionId && q.answer == null);
+      if (!hit && loose && text) {
+        loose.answer = text;
+        miaMessage({ from: 'daniel', kind: 'answer', text, questionId: loose.id });
+        log(`mia answer ${loose.id}: ${text}`);
+        return ack(true, 'Answer delivered');
+      }
       if (!hit) return ack(false, `No question ${msg.questionId}`);
       if (!text) return ack(false, 'Answer is empty');
       hit.q.answer = text;
@@ -1080,6 +1139,7 @@ if (MIA_DIR) {
     for (const m of tailLines(path.join(MIA_DIR, 'messages.jsonl'))) {
       if (m.from !== 'mia') continue;
       mia.messages.push(m);
+      if (m.kind === 'question' && m.questionId) looseQuestions.push({ id: m.questionId, text: m.text, options: m.options || [], askedAt: m.at, answer: null });
       log(`mia ${m.kind}${m.speak ? ' (speak)' : ''}: ${m.text}`);
     }
   }, 300);

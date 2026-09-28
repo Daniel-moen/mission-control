@@ -64,28 +64,33 @@ const BLOCKS = 'p,li,tr,blockquote,pre,dt,dd,figcaption,td';
 const textOf = (el) =>
   el.tagName === 'TR' ? [...el.cells].map((c) => c.textContent).join(' ') : el.textContent;
 
-function near(a, b) {
-  // one edit apart (typo), for words long enough to mean something
-  if (Math.abs(a.length - b.length) > 1 || Math.min(a.length, b.length) < 5) return false;
-  let i = 0;
-  let j = 0;
-  let edits = 0;
-  while (i < a.length && j < b.length) {
-    if (a[i] === b[j]) {
-      i++;
-      j++;
-      continue;
+// Edit distance where swapping two neighbouring letters is ONE edit
+// (optimal-string-alignment Damerau–Levenshtein), so "tabel" is as near to
+// "table" as "tabl" is. Gives up early once the distance must exceed `max`.
+export function editDistance(a, b, max = Infinity) {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let pp = null;
+  let p = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const c = [i];
+    let low = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let v = Math.min(p[j] + 1, c[j - 1] + 1, p[j - 1] + cost);
+      if (pp && i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) v = Math.min(v, pp[j - 2] + 1);
+      c.push(v);
+      if (v < low) low = v;
     }
-    if (++edits > 1) return false;
-    if (a.length > b.length) i++;
-    else if (b.length > a.length) j++;
-    else {
-      i++;
-      j++;
-    }
+    if (low > max) return max + 1;
+    pp = p;
+    p = c;
   }
-  return edits + (a.length - i) + (b.length - j) <= 1;
+  return p[b.length];
 }
+
+// One edit apart (a typo or a swapped pair), for words long enough to mean
+// something.
+export const near = (a, b) => Math.min(a.length, b.length) >= 5 && editDistance(a, b, 1) <= 1;
 const wordHit = (q, words) =>
   words.some((w) => w === q || (q.length >= 3 && w.startsWith(q)) || (w.length >= 4 && q.startsWith(w)) || near(q, w));
 
@@ -114,7 +119,12 @@ export function findTarget(root, query) {
   const holding = blocks.filter((b) => b.t.includes(q));
   const inner = holding.filter((b) => !holding.some((o) => o !== b && b.el.contains(o.el) && o.el.tagName !== 'TD'));
   if (inner.length) {
-    const el = inner[0].el.tagName === 'TD' ? inner[0].el.closest('tr') || inner[0].el : inner[0].el;
+    // The same words can sit in several places ("over four years unsold" in
+    // one table, "Four years unsold is…" in the next): prefer the block or
+    // cell that STARTS with them, then the tightest fit, then document order.
+    const rank = (b) => (b.t.startsWith(q) ? 0 : 1) * 1e6 + (b.t.length - q.length);
+    const pick = inner.reduce((best, b) => (rank(b) < rank(best) ? b : best), inner[0]);
+    const el = pick.el.tagName === 'TD' ? pick.el.closest('tr') || pick.el : pick.el;
     return { el, how: 'text' };
   }
   // Fuzzy: most of the words (prefixes / typos allowed), headings first.

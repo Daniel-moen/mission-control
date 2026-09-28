@@ -20,7 +20,12 @@
 // expand back, stop); announcements (chime + speech after a tap, the locked
 // "tap to hear" banner, answer via the pill's mic, quiet hours, background,
 // Off); announcements in Mia's realtime voice via a mocked /tts (played on the
-// blessed <audio>, device voice on failure, never while a talk call is live).
+// blessed <audio>, device voice on failure, never while a talk call is live);
+// mini Mia — the floating chat on other views at phone and iPad width (shown
+// off the Mia view, clear of header/viewer controls, unread dot, send, ask
+// options answer, auto-peek, drag + remembered spot); fuzzy scroll-to with a
+// transposition and a phrase that sits in two tables (task 0067).
+// SHOTS=<dir> keeps the mini-Mia screenshots.
 
 import { spawn, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -41,6 +46,8 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'mc-panel-'));
 const MIA_DIR = path.join(TMP, 'mia');
 const MIA_CLI = path.join(DIR, '..', '..', 'scripts', 'mia');
 const RESEARCH = 'acme-corp-pricing-teardown--7b2e9f14.md';
+const SHOTS = process.env.SHOTS || path.join(TMP, 'shots');
+fs.mkdirSync(SHOTS, { recursive: true });
 
 let passed = 0;
 let failed = 0;
@@ -255,6 +262,25 @@ async function main() {
     await sleep(700);
     const li = await inView('article.md li', 'bill shock');
     ok(r.ok && li?.inView && li.mark, 'highlight marks the list item holding the text');
+    // Task 0067: a swapped pair is one edit, and a phrase in two tables lands
+    // on the row that leads with it.
+    id = mia('panel', 'open-doc', 'oblivion-targets-deep-dive.md', '--at', 'verdict tabel');
+    r = await resultFor(id);
+    await sleep(700);
+    ok(r.ok && (await inView('article.md h3', 'Verdict table'))?.inView, `--at "verdict tabel" (transposed letters) lands on "Verdict table" (${r.detail})`);
+    await page.evaluate(() => document.querySelector('[data-reader="doc"]').scrollTo({ top: 0 }));
+    id = mia('panel', 'scroll-to', 'verdict tabel');
+    r = await resultFor(id);
+    await sleep(700);
+    ok(r.ok && (await inView('article.md h3', 'Verdict table'))?.inView, 'scroll-to "verdict tabel" lands on the heading');
+    await page.evaluate(() => document.querySelector('[data-reader="doc"]').scrollTo({ top: 0 }));
+    id = mia('panel', 'scroll-to', 'four years unsold');
+    r = await resultFor(id);
+    await sleep(700);
+    const rankRow = await inView('article.md tr', 'strongest motivation signal');
+    ok(r.ok && /^1 B1/.test(r.detail) && rankRow?.inView && rankRow.flash, `scroll-to "four years unsold" goes to the ranking row that leads with it (${r.detail})`);
+    id = mia('panel', 'open-doc', RESEARCH);
+    await resultFor(id);
     id = mia('panel', 'scroll-to', 'nothing like this exists zqx');
     r = await resultFor(id);
     ok(r.ok === false && /nothing matching/.test(r.detail), 'a real miss still fails with the reason');
@@ -611,6 +637,132 @@ async function main() {
     await until(async () => (await said()).some((t) => t.includes('In-call probe')), 8000, 'said in call');
     ok(asked.length === nCall, 'with a talk call live, the message is read in the call — no /tts');
     await page.locator('[data-pill-stop]').click().catch(() => {});
+    ok(!page.errors.length, `no page errors (${page.errors.join(' | ')})`);
+    await page.context().close();
+  }
+
+  // ---- 5. mini Mia: the floating chat on every other view --------------------------
+  for (const [label, viewport] of [['phone 390×844', { width: 390, height: 844 }], ['iPad portrait 820×1180', { width: 820, height: 1180 }]]) {
+    console.log(`mini Mia — ${label}`);
+    const tag = viewport.width < 500 ? 'phone' : 'ipad';
+    const page = await newPage(browser, { viewport, live: 'attached' });
+    await page.evaluate(() => localStorage.setItem('mc.announce.mode', JSON.stringify('off')));
+    const bubble = page.locator('[data-mini-mia="bubble"]');
+    const sheet = page.locator('[data-mini-mia="open"], [data-mini-mia="peek"]');
+    const go = async (h) => {
+      await page.evaluate((h) => (location.hash = h), h);
+      await sleep(700);
+    };
+    // Every button of the view the bubble must leave uncovered.
+    const covers = (sels) =>
+      page.evaluate((sels) => {
+        const b = document.querySelector('[data-mini-mia="bubble"]')?.getBoundingClientRect();
+        if (!b) return ['no bubble'];
+        const hits = [];
+        for (const el of document.querySelectorAll(sels)) {
+          const r = el.getBoundingClientRect();
+          if (!r.width || !r.height) continue;
+          if (r.x < b.right && b.x < r.right && r.y < b.bottom && b.y < r.bottom) hits.push(el.getAttribute('aria-label') || el.textContent.trim().slice(0, 30));
+        }
+        return hits;
+      }, sels);
+    const CHROME = 'header button, nav button, [aria-label="Close"], [aria-label="Back"]';
+
+    ok(await bubble.isVisible(), 'the bubble floats over Home');
+    ok((await covers(CHROME)).length === 0, `…covering no header or dock control (${await covers(CHROME)})`);
+    const inSafe = await bubble.boundingBox();
+    ok(inSafe.x >= 0 && inSafe.x + inSafe.width <= viewport.width && inSafe.y > 100, 'it sits inside the screen, below the top band');
+    await go('mia');
+    ok((await bubble.count()) === 0, 'hidden on the Mia view itself');
+    for (const h of ['fleet', 'library', `doc/${RESEARCH}`, 'agent/acme-worker-1']) {
+      await go(h);
+      ok(await bubble.isVisible(), `shown on #${h.split('/')[0]}`);
+      ok((await covers(CHROME)).length === 0, `…and covers no header/dock control there (${await covers(CHROME)})`);
+    }
+    let r = await resultFor(mia('panel', 'show-doc', 'acme pricing'));
+    await sleep(700);
+    ok(r.ok && (await bubble.isVisible()), 'shown over the page Mia is showing (viewer)');
+    ok((await covers('[role="dialog"] header button')).length === 0, "…without covering the viewer's Back / Open");
+    if (tag === 'ipad') await page.screenshot({ path: path.join(SHOTS, `mini-${tag}-viewer.png`) });
+    await resultFor(mia('panel', 'close'));
+    await go('fleet');
+
+    // Opening it reads the thread; folded again, there's no dot.
+    await bubble.click();
+    await sheet.waitFor({ timeout: 3000 });
+    await page.getByRole('button', { name: 'Minimise Mia' }).click();
+    await until(async () => (await bubble.count()) === 1 && !(await page.locator('[data-mini-dot]').count()), 5000, 'read, no dot');
+    ok(true, 'opening the sheet marks the thread read — no dot once folded');
+    // Mia says something while it's collapsed → the unread dot.
+    mia('say', `Mini probe ${tag}: the report is in the Library.`);
+    await page.locator('[data-mini-dot]').waitFor({ timeout: 6000 });
+    ok(true, 'Mia says something while collapsed → an unread dot');
+    await sleep(400);
+    await page.screenshot({ path: path.join(SHOTS, `mini-${tag}-collapsed.png`) });
+    await bubble.click();
+    await sheet.waitFor({ timeout: 3000 });
+    await sleep(600);
+    ok(await sheet.getByText(`Mini probe ${tag}: the report is in the Library.`).isVisible(), 'tap → the sheet shows her latest message');
+    ok(await sheet.getByRole('button', { name: 'Yes', exact: true }).first().isVisible(), '…and an older open ask stays in reach with its options');
+    await page.screenshot({ path: path.join(SHOTS, `mini-${tag}-open.png`) });
+
+    // Sending goes through the same miaSend as the Mia view.
+    const field = sheet.locator('textarea');
+    await field.fill(`hello from mini ${tag}`);
+    await field.press('Enter');
+    await until(async () => (await sheet.getByText(`hello from mini ${tag}`).count()) && !(await sheet.getByText('Sending…').count()), 6000, 'sent');
+    ok(true, 'sending from the sheet lands in the thread (echo retired by the host snapshot)');
+    await go('mia');
+    ok(await page.getByText(`hello from mini ${tag}`).first().isVisible(), '…and the Mia view shows the same message (one data source)');
+    await go('library');
+    await until(async () => !(await page.locator('[data-mini-dot]').count()), 4000, 'read').catch(() => {});
+    ok(!(await page.locator('[data-mini-dot]').count()), 'having read it, no unread dot');
+
+    // A new `mia ask` peeks open with its options; a tap answers it.
+    mia('ask', `Mini ask ${tag}: which colour?`, '--options', 'Red|Blue');
+    await page.locator('[data-mini-mia="peek"]').waitFor({ timeout: 6000 });
+    ok(true, 'a new ask auto-peeks the sheet');
+    await sleep(600);
+    await page.screenshot({ path: path.join(SHOTS, `mini-${tag}-ask.png`) });
+    await page.locator('[data-mini-mia] button', { hasText: /^Blue$/ }).click();
+    await until(async () => (await page.locator('[data-mini-mia]').getByText('You answered ·').count()) > 0, 6000, 'answered');
+    ok(true, 'tapping an option answers the ask (shown as "You answered · Blue")');
+    await go('mia');
+    ok(await page.getByText('You answered · ').last().isVisible(), '…and the Mia view shows it answered');
+    await go('fleet');
+    // A peek nobody touches folds itself away.
+    mia('ask', `Mini ask two ${tag}?`, '--options', 'Yes|No');
+    await page.locator('[data-mini-mia="peek"]').waitFor({ timeout: 6000 });
+    await sleep(1000);
+    ok((await page.locator('[data-mini-mia="peek"]').count()) === 1, '…and stays up for a few seconds');
+    await until(async () => (await page.locator('[data-mini-mia="peek"]').count()) === 0 && (await bubble.count()) === 1, 10000, 'peek folded');
+    ok(true, 'an untouched peek collapses after a few seconds');
+    ok(await page.locator('[data-mini-dot]').isVisible(), '…leaving the dot for the open question');
+
+    // Drag it to the other side; the spot is remembered on this device.
+    const b0 = await bubble.boundingBox({ timeout: 5000 }).catch(async (e) => {
+      console.error('mini state:', await page.evaluate(() => [...document.querySelectorAll('[data-mini-mia]')].map((x) => x.dataset.miniMia)), await hash(page));
+      throw e;
+    });
+    await page.mouse.move(b0.x + b0.width / 2, b0.y + b0.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(60, b0.y + b0.height / 2 - 80, { steps: 8 });
+    await page.mouse.up();
+    await sleep(600);
+    const b1 = await bubble.boundingBox({ timeout: 5000 }).catch(async (e) => {
+      console.error('mini state after drag:', await page.evaluate(() => [...document.querySelectorAll('[data-mini-mia]')].map((x) => x.dataset.miniMia)), await hash(page));
+      await page.screenshot({ path: path.join(SHOTS, 'drag-fail.png') });
+      throw e;
+    });
+    const mid = (b) => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
+    ok(mid(b1).x < viewport.width / 2 && b1.x < 40 && Math.abs(mid(b1).y - (mid(b0).y - 80)) < 4, `drag moves it and it snaps to the left edge (${Math.round(b1.x)},${Math.round(b1.y)})`);
+    ok((await sheet.count()) === 0, 'a drag does not open it');
+    await page.reload();
+    await bubble.waitFor({ timeout: 15000 });
+    await sleep(800);
+    const b2 = await bubble.boundingBox();
+    ok(Math.abs(mid(b2).x - mid(b1).x) < 2 && Math.abs(mid(b2).y - mid(b1).y) < 2, 'after a reload it is where he left it');
+    await page.evaluate(() => localStorage.removeItem('mc.miniMia.pos'));
     ok(!page.errors.length, `no page errors (${page.errors.join(' | ')})`);
     await page.context().close();
   }

@@ -15,6 +15,7 @@ import CommandPalette from './shell/CommandPalette.jsx';
 import Toast from './ui/Toast.jsx';
 import TalkHost from './shell/TalkHost.jsx';
 import Viewer from './shell/Viewer.jsx';
+import MiniMia from './shell/MiniMia.jsx';
 import { startTalk } from './lib/talkSession.js';
 
 import Home from './views/home/Home.jsx';
@@ -59,6 +60,7 @@ export default function App() {
   const docs = useMC((s) => s.docs);
   const agentCount = useMC((s) => s.agents.length);
   const miaCount = useMC((s) => miaBadge(s.mia, s.miaLocal));
+  const viewerOn = useMC((s) => !!s.viewer);
   const desktop = useMedia('(min-width: 1024px)');
   // Side columns start folded on cramped landscape screens (an 11" iPad is
   // 1180 wide); once toggled, the choice is remembered per column.
@@ -507,6 +509,12 @@ export default function App() {
         onOpenDoc={(id) => setOpenDoc({ id, edit: false })}
       />
       <Viewer />
+      {/* Mia from anywhere but her own view (the viewer over it still counts
+          as elsewhere); out of the way of sheets, the palette and the console. */}
+      <MiniMia
+        hidden={(!viewerOn && (mainKind === 'mia' || phoneKind === 'mia')) || !!sheet || !!composer || !!console_ || palette}
+        onOpenMia={() => panelApi.current.view('mia')}
+      />
       {talkHost}
       <Toast />
     </div>

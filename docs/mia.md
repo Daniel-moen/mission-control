@@ -422,7 +422,7 @@ itself. Failures reach Mia as `[MC] Panel: … didn't work — <reason>`.
 | `view` | home, fleet, library, mia, insights, settings | switches view (settings = the sheet) |
 | `open-url` | `https://…` only | `window.open`; in the Home Screen app falls back to navigating (iOS hands meeting links to their apps); in a browser tab offers the link in the top-bar pill |
 | `search` | text | opens ⌘K search pre-filled |
-| `scroll-to` | heading or any text | scrolls to it and flashes it: headings (exact, prefix, substring, the heading inside a longer ask), then the smallest paragraph / list item / table row holding the text, then fuzzy (word prefixes, one-letter typos; `tell` says where it went). Case, accents, emoji and punctuation are ignored |
+| `scroll-to` | heading or any text | scrolls to it and flashes it: headings (exact, prefix, substring, the heading inside a longer ask), then the smallest paragraph / list item / table row holding the text, then fuzzy (word prefixes, one-edit typos incl. a swapped letter pair; `tell` says where it went). Text in several blocks goes to the one that starts with it, then the tightest. Case, accents, emoji and punctuation are ignored |
 | `highlight` | text | as scroll-to, with a 6 s accent mark |
 | `scroll` | up, down, top, bottom | ~85% of a screen per step; `tell` when already at the end |
 | `show-url` | `https://…` only | asks the relay `GET /api/v1/preview?url=` (preview.js: X-Frame-Options / CSP frame-ancestors, Open Graph card, same-host gallery; public https only, 8 s, 1.5 MB). Frameable → sandboxed iframe in the viewer (no top navigation; falls back to the card if it never loads). Otherwise a card: photo, title, summary, gallery, Open button. Always `tell`: `framed — …` or `card — <why> …` |
@@ -589,6 +589,17 @@ POST /api/v1/mia/tasks     {title,detail?,dir?,priority?}
   slim top bar; narrower, `--talkbar` reserves a strip under the status bar so
   it covers no control. It never touches the dock. The same pill carries
   announcements (8.3) and links Mia opened that the browser blocked.
+- **Mini Mia** (`shell/MiniMia.jsx`): on every view except Mia's own (and
+  over the show-url / show-doc viewer), a small bubble on the left or right
+  edge — draggable, snaps to the nearer side, position remembered per device
+  (`mc.miniMia.pos`), kept below the top band where windows and the viewer
+  have Back / Close and above the dock, safe areas measured. Tap opens a
+  compact sheet: the last few messages plus any older open ask (options as
+  pills via the thread's `<Answer>`), a composer with dictation, Talk, and
+  Open Mia. Same store, `miaSend`, `miaAnswer` and read marker as the Mia
+  view — no second copy. An amber dot marks Mia messages he hasn't read; a
+  new `mia ask` peeks the sheet open for ~7 s (touching it keeps it open).
+  Hidden under sheets, the palette and the terminal console.
 
 ## 10. Claude in Chrome
 
