@@ -293,6 +293,30 @@ function openUrl(url, host) {
   return 'offered';
 }
 
+// The show-url viewer: framed when the site allows it, else a card with its
+// photos. `byYou` (a tapped listing photo, lib/thumbs.js) goes straight to the
+// card when the page has photos — that's what the tap asked to see.
+export async function showUrl(url, { byYou = false } = {}) {
+  let host = '';
+  try {
+    host = new URL(url).host.replace(/^www\./, '');
+  } catch {
+    return { ok: false, detail: 'not a valid link' };
+  }
+  toast(byYou ? `Opening ${host}…` : `Mia is opening ${host}…`);
+  const p = await linkPreview(url);
+  if (p?.frameable && !(byYou && p.images?.length)) {
+    showViewer({ kind: 'url', url: p.finalUrl || url, host, card: p, byYou });
+    return { ok: true, tell: true, detail: `framed — ${host} is showing inside the panel (he can scroll it himself; scroll commands can't reach inside a framed site)` };
+  }
+  const why = p ? p.why || p.error || 'the site could not be framed' : "the relay couldn't fetch it";
+  showViewer({ kind: 'card', url: p?.finalUrl || url, host, card: p, why, byYou });
+  const has = [p?.title && 'title', p?.images?.length > 1 ? `${p.images.length} photos` : p?.image && 'photo', p?.description && 'summary']
+    .filter(Boolean)
+    .join(', ');
+  return { ok: true, tell: true, detail: `card — ${why}; showing a card (${has || 'link only'}) with an Open button that opens it in Safari` };
+}
+
 export async function runPanelCommand(cmd, nav) {
   const arg = typeof cmd.arg === 'string' ? cmd.arg.trim() : '';
   switch (cmd.action) {
@@ -328,24 +352,7 @@ export async function runPanelCommand(cmd, nav) {
     }
     case 'show-url': {
       if (!/^https:\/\/\S+$/i.test(arg)) return { ok: false, detail: 'only https links can be shown' };
-      let host = '';
-      try {
-        host = new URL(arg).host.replace(/^www\./, '');
-      } catch {
-        return { ok: false, detail: 'not a valid link' };
-      }
-      toast(`Mia is opening ${host}…`);
-      const p = await linkPreview(arg);
-      if (p?.frameable) {
-        showViewer({ kind: 'url', url: p.finalUrl || arg, host, card: p });
-        return { ok: true, tell: true, detail: `framed — ${host} is showing inside the panel (he can scroll it himself; scroll commands can't reach inside a framed site)` };
-      }
-      const why = p ? p.why || p.error || 'the site could not be framed' : "the relay couldn't fetch it";
-      showViewer({ kind: 'card', url: p?.finalUrl || arg, host, card: p, why });
-      const has = [p?.title && 'title', p?.images?.length > 1 ? `${p.images.length} photos` : p?.image && 'photo', p?.description && 'summary']
-        .filter(Boolean)
-        .join(', ');
-      return { ok: true, tell: true, detail: `card — ${why}; showing a card (${has || 'link only'}) with an Open button that opens it in Safari` };
+      return showUrl(arg);
     }
     case 'close': {
       if (getMC().viewer) {

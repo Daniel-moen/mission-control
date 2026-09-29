@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { useMC, closeViewer, docGet } from '../lib/store.js';
 import { renderMarkdown } from '../lib/md.js';
+import { useDocImages, loadImage, imgEndpoint } from '../lib/thumbs.js';
 import { sheetUp } from '../lib/motion.js';
 import IconButton from '../ui/IconButton.jsx';
 import Button from '../ui/Button.jsx';
@@ -43,6 +44,30 @@ function Header({ title, sub, url, onClose }) {
   );
 }
 
+// A card photo through the relay's image cache (thumbs.js): listing CDNs
+// often refuse hotlinks. The original URL if the relay can't get it.
+function Photo({ src, className, lazy }) {
+  const [url, setUrl] = useState('');
+  useEffect(() => {
+    let live = true;
+    loadImage(imgEndpoint(src)).then((u) => live && setUrl(u || src));
+    return () => {
+      live = false;
+    };
+  }, [src]);
+  if (!url) return <div className={`${className} bg-white/[0.06]`} />;
+  return (
+    <img
+      src={url}
+      alt=""
+      loading={lazy ? 'lazy' : undefined}
+      referrerPolicy="no-referrer"
+      className={className}
+      onError={(e) => (e.currentTarget.style.display = 'none')}
+    />
+  );
+}
+
 function Card({ v }) {
   const c = v.card || {};
   const photos = (c.images || []).slice(0, 12);
@@ -50,12 +75,7 @@ function Card({ v }) {
     <div className="noscroll min-h-0 flex-1 overflow-y-auto" data-reader="viewer">
       <div className="md mx-auto max-w-[1100px] px-4 pb-28 pt-4 sm:px-6 lg:pb-8">
         {photos[0] && (
-          <img
-            src={photos[0]}
-            alt=""
-            referrerPolicy="no-referrer"
-            className="mb-4 max-h-[52vh] w-full rounded-xl3 object-cover"
-          />
+          <Photo src={photos[0]} className="mb-4 aspect-[3/2] max-h-[52vh] w-full rounded-xl3 object-cover" />
         )}
         <h2 className="!mt-0 !border-0">{c.title || v.host}</h2>
         {c.description && <p>{c.description}</p>}
@@ -67,20 +87,14 @@ function Card({ v }) {
         <p className="text-[12.5px] text-ink3">
           {c.ok === false || !c.title
             ? `The panel couldn't read this page (${v.why || 'no preview'}).`
-            : `${v.host} doesn't let itself be shown inside another page, so this is its preview.`}
+            : v.byYou && c.frameable
+              ? `Photos from ${v.host}. Open shows the full listing.`
+              : `${v.host} doesn't let itself be shown inside another page, so this is its preview.`}
         </p>
         {photos.length > 1 && (
           <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
             {photos.slice(1).map((src) => (
-              <img
-                key={src}
-                src={src}
-                alt=""
-                loading="lazy"
-                referrerPolicy="no-referrer"
-                className="aspect-[4/3] w-full rounded-xl2 object-cover"
-                onError={(e) => (e.currentTarget.style.display = 'none')}
-              />
+              <Photo key={src} src={src} lazy className="aspect-[4/3] w-full rounded-xl2 object-cover" />
             ))}
           </div>
         )}
@@ -129,10 +143,13 @@ function DocBody({ v }) {
     docGet(v.docId);
   }, [doc, link, lastSnapshotAt, v.docId]);
   const html = useMemo(() => (doc ? renderMarkdown(doc.content) : ''), [doc]);
+  const [article, setArticle] = useState(null);
+  useDocImages(article, html);
   return (
     <div className="noscroll min-h-0 flex-1 overflow-y-auto" data-reader="viewer" data-doc-id={v.docId}>
       {doc ? (
         <article
+          ref={setArticle}
           className="md mx-auto max-w-[1600px] px-5 pb-28 pt-5 sm:px-8 lg:pb-10"
           data-doc-id={v.docId}
           dangerouslySetInnerHTML={{ __html: html }}
@@ -155,7 +172,7 @@ export default function Viewer() {
   const frameFailed = v && v.kind === 'url' && failedN === v.n;
   const kind = frameFailed ? 'card' : v?.kind;
   const title = v?.kind === 'doc' ? v.title : v?.card?.title || v?.host || '';
-  const sub = v?.kind === 'doc' ? 'Library · shown by Mia' : v ? `${v.host} · shown by Mia` : '';
+  const sub = v?.kind === 'doc' ? 'Library · shown by Mia' : v ? `${v.host} · ${v.byYou ? 'listing' : 'shown by Mia'}` : '';
 
   return createPortal(
     <AnimatePresence>

@@ -123,7 +123,7 @@ export const useMC = create(() => ({
 export const getMC = () => useMC.getState();
 const set = (patch) => useMC.setState(patch);
 
-export const PANEL_BUILD = 'v23.13 · 2026-09-28 · Mini Mia chat on every view';
+export const PANEL_BUILD = 'v23.14 · 2026-09-29 · listing photos in docs';
 
 // ---- status helpers ---------------------------------------------------------
 // Status semantics: working = green, needs-you = amber, done = quiet neutral,

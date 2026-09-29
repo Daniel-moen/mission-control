@@ -423,6 +423,81 @@
   max-width: 100%;
   border-radius: 10px;
 }
+/* Listing photos (md.js + lib/thumbs.js, task 0070): a small rounded photo in
+   front of a listing link. A neutral block while it loads; the button is
+   removed when the page has no photo. Compact in table cells so a 55-row
+   table still scrolls on a phone. */
+.md .md-listing {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  vertical-align: middle;
+}
+.md .md-thumb {
+  position: relative;
+  flex: none;
+  width: 96px;
+  height: 72px;
+  padding: 0;
+  border: 1px solid var(--color-line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+}
+.md td .md-thumb {
+  width: 64px;
+  height: 48px;
+  margin-top: -3px; /* eats into the cell padding, so the row barely grows */
+  border-radius: 8px;
+}
+.md .md-thumb[data-state='loading'] {
+  animation: mc-thumb-pulse 1.4s ease-in-out infinite;
+}
+.md .md-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  object-fit: cover;
+  border-radius: 0;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  pointer-events: none;
+}
+.md .md-thumb[data-state='ok'] img {
+  opacity: 1;
+}
+.md .md-thumb:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+/* In a cell the link sits under the photo: the column is only as wide as
+   the photo, so a table that already fills an iPad doesn't grow sideways. */
+.md td .md-listing {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  line-height: 1.3;
+}
+.md td .md-listing:has(.md-thumb) > a {
+  font-size: 12px;
+}
+@keyframes mc-thumb-pulse {
+  50% {
+    background: rgba(255, 255, 255, 0.11);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .md .md-thumb[data-state='loading'] {
+    animation: none;
+  }
+}
 
 /* hide scrollbars but keep scrolling */
 .noscroll::-webkit-scrollbar {

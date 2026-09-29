@@ -16,7 +16,9 @@
     "test:upload-panel": "node test/upload-panel-e2e.mjs",
     "test:upload-mac": "bash test/upload-mac-e2e.sh",
     "test:spoken": "node test/spoken-test.mjs",
-    "test:mia-model": "node test/mia-model-e2e.mjs"
+    "test:mia-model": "node test/mia-model-e2e.mjs",
+    "test:thumbs": "node test/thumbs-test.mjs",
+    "test:thumbs-panel": "node test/thumbs-panel-e2e.mjs"
   },
   "engines": {
     "node": ">=20"

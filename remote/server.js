@@ -61,6 +61,7 @@ const fs = require('fs');
 const path = require('path');
 const { WebSocketServer } = require('ws');
 const { createApi } = require('./api');
+const { createThumbs } = require('./thumbs');
 const { createPush } = require('./push');
 const { createStt } = require('./stt');
 const { createRealtime } = require('./realtime');
@@ -369,8 +370,18 @@ function panelDone(msg) {
   });
 }
 
+// Listing thumbnails (thumbs.js): the disk cache lives on the Railway volume;
+// without one (a local run) it goes to the OS temp dir, never the repo.
+const thumbs = createThumbs({
+  dir:
+    process.env.THUMB_CACHE ||
+    (process.env.RAILWAY_VOLUME_MOUNT_PATH ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'thumb-cache') : undefined),
+  maxBytes: (Number(process.env.THUMB_CACHE_MB) || 200) * 1024 * 1024,
+});
+
 const api = createApi({
   tokenOk,
+  thumbs,
   hostOnline: () => host !== null,
   latestSnapshot: () => lastSnapshot,
   snapshotMeta: () => ({ seq: snapshotSeq, at: lastSnapshotAt }),

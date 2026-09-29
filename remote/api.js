@@ -24,7 +24,7 @@
 'use strict';
 
 const zlib = require('zlib');
-const { preview } = require('./preview');
+const { createThumbs } = require('./thumbs');
 
 const MAX_BODY = 2 * 1024 * 1024; // doc bodies travel through here
 const ACK_TIMEOUT_MS = 15000;
@@ -45,6 +45,7 @@ function createApi({
   notePresence = () => {},
   pollerExtras = () => ({}),
   onPanelDone = () => {},
+  thumbs = createThumbs(),
 }) {
   // ---------------------------------------------------------------------------
   // Assembled terminal screens for HTTP pollers: sessionId → { seq, text, at }.
@@ -225,6 +226,9 @@ function createApi({
       'PATCH /api/v1/docs/:id {kind?, status?, subject?, tags?, dir?}': 'update document metadata',
       'DELETE /api/v1/docs/:id': 'delete a document',
       'GET  /api/v1/preview?url=https://…': 'can the panel frame this page, plus its card (title, image, description)',
+      'GET  /api/v1/thumb?url=https://…': 'the first photo of that page (og:image), as image bytes, small where the CDN allows; 204 when it has none. Cached 7 days',
+      'GET  /api/v1/thumb/stats': 'thumbnail cache and upstream limiter counters',
+      'GET  /api/v1/img?url=https://…': 'an image a doc embeds, proxied and cached (raster only)',
       'GET  /api/v1/mia': 'Mia, the assistant: status, conversation, tasks, pending questions, schedule',
       'POST /api/v1/mia/message {text}': 'send Mia a chat message',
       'POST /api/v1/mia/answer {questionId, text}': 'answer one of Mia\'s pending questions',
@@ -296,7 +300,18 @@ function createApi({
 
     // ---- link preview (`mia panel show-url`, preview.js) -------------------
     if (route[0] === 'preview' && route.length === 1 && m === 'GET') {
-      return json(res, 200, await preview(url.searchParams.get('url') || ''));
+      return json(res, 200, await thumbs.preview(url.searchParams.get('url') || ''));
+    }
+
+    // ---- listing thumbnails + doc images (thumbs.js, task 0070) ------------
+    if (route[0] === 'thumb' && route[1] === 'stats' && route.length === 2 && m === 'GET') {
+      return json(res, 200, { ok: true, ...thumbs.stats() });
+    }
+    if (route[0] === 'thumb' && route.length === 1 && m === 'GET') {
+      return thumbs.send(res, await thumbs.thumb(url.searchParams.get('url') || ''));
+    }
+    if (route[0] === 'img' && route.length === 1 && m === 'GET') {
+      return thumbs.send(res, await thumbs.proxied(url.searchParams.get('url') || ''));
     }
 
     // ---- panel HTTP fallback ------------------------------------------------

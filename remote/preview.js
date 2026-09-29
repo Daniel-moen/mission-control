@@ -193,4 +193,4 @@ async function preview(raw) {
   }
 }
 
-module.exports = { preview, frameBlock, parseCard, privateIp };
+module.exports = { preview, frameBlock, parseCard, privateIp, publicHost, UA };

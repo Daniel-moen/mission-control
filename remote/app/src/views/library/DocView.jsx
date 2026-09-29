@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useMC, docGet, docSave, docDelete, docMeta, kindLabel, docStatusLabel, toast } from '../../lib/store.js';
 import { renderMarkdown, ago } from '../../lib/md.js';
+import { useDocImages } from '../../lib/thumbs.js';
 import { useMedia } from '../../lib/hooks.js';
 import { fadeUp, fadeIn, press } from '../../lib/motion.js';
 import Field from '../../ui/Field.jsx';
@@ -153,6 +154,8 @@ export default function DocView({ docId, startEditing = false, onClose, onLaunch
 
   const title = meta?.title || doc?.title || kindLabel(kind);
   const html = useMemo(() => (doc ? renderMarkdown(doc.content) : ''), [doc]);
+  const [article, setArticle] = useState(null);
+  useDocImages(article, html);
   const launchLabel = kind === 'plan' ? 'Build' : 'Continue';
   const launchIcon = kind === 'plan' ? 'launch' : 'bolt';
   function doLaunch() {
@@ -304,6 +307,7 @@ export default function DocView({ docId, startEditing = false, onClose, onLaunch
               {/* Sanitized in md.js — docs quote arbitrary repo content. Full
                   width: prose caps itself near 80ch, tables and code don't. */}
               <article
+                ref={setArticle}
                 className="md mx-auto max-w-[1600px] px-5 pb-10 sm:px-8"
                 data-doc-id={docId}
                 dangerouslySetInnerHTML={{ __html: html }}
