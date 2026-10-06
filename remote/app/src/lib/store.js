@@ -1548,6 +1548,9 @@ export function miaOpenQuestions(mia, local = getMC().miaLocal) {
   return mia.pendingQuestions.filter((q) => q.questionId && !(q.questionId in answered) && !(q.questionId in dismissed));
 }
 
+// Whether the Mac knows miaDismiss (0103+): it always sends the max age.
+export const miaCanDismiss = (mia) => mia?.questionMaxAgeHours != null;
+
 // Open questions past the max age: hidden by default, still answerable.
 export function miaOldQuestions(mia, local = getMC().miaLocal) {
   if (!mia) return [];

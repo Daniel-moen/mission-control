@@ -44,10 +44,10 @@ const ok = (c, label) => {
   else { failed += 1; console.error(`  ✗ ${label}`); }
 };
 const procs = [];
-function boot(args, name) {
+function boot(args, name, extra = {}) {
   const p = spawn('node', args, {
     cwd: path.join(DIR, '..'),
-    env: { ...process.env, MC_TOKEN: TOKEN, PORT: String(PORT), MIA_DIR, PUSH_STORE: path.join(TMP, 'push.json'), REALTIME_STORE: path.join(TMP, 'rt.json'), OPENAI_API_KEY: '' },
+    env: { ...process.env, MC_TOKEN: TOKEN, PORT: String(PORT), MIA_DIR, ...extra, PUSH_STORE: path.join(TMP, 'push.json'), REALTIME_STORE: path.join(TMP, 'rt.json'), OPENAI_API_KEY: '' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   p.stdout.on('data', (d) => process.env.E2E_VERBOSE && console.log(`[${name}]`, d.toString().trim()));
@@ -91,7 +91,7 @@ const INIT = () => {
   Object.defineProperty(window, 'speechSynthesis', { value: synth, configurable: true });
 };
 
-async function newPage(browser, viewport) {
+async function newPage(browser, viewport, base = BASE) {
   const ctx = await browser.newContext({ viewport, hasTouch: true });
   await ctx.addInitScript(INIT);
   const page = await ctx.newPage();
@@ -99,7 +99,7 @@ async function newPage(browser, viewport) {
   page.on('pageerror', (e) => page.errors.push(`pageerror: ${e.message}`));
   page.on('console', (m) => { if (m.type() === 'error') page.errors.push(`console: ${m.text()}`); });
   await page.route('**/tts', (r) => r.fulfill({ status: 204, body: '' })); // no audio → device voice → __said
-  await page.goto(`${BASE}/?token=${TOKEN}`);
+  await page.goto(`${base}/?token=${TOKEN}`);
   await page.waitForSelector('[aria-label="Live"]', { timeout: 15000, state: 'attached' });
   await sleep(1200);
   return page;
@@ -244,7 +244,20 @@ async function main() {
   ok(await phone.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'no horizontal scroll');
   await phone.screenshot({ path: path.join(SHOTS, 'home-phone.png') });
 
-  const errs = [...page.errors, ...other.errors, ...phone.errors];
+  console.log('A Mac app from before 0103');
+  const LPORT = PORT - 1;
+  const LBASE = `http://localhost:${LPORT}`;
+  boot(['server.js'], 'relay-legacy', { PORT: String(LPORT), MIA_DIR: path.join(TMP, 'mia-legacy') });
+  await until(async () => (await fetch(`${LBASE}/health`).catch(() => null))?.ok, 5000, 'legacy relay');
+  boot(['test/fake-host.mjs'], 'host-legacy', { PORT: String(LPORT), MIA_DIR: path.join(TMP, 'mia-legacy'), FAKE_HOST_LEGACY_MIA: '1' });
+  await until(async () => (await (await fetch(`${LBASE}/health`)).json()).host, 8000, 'legacy host');
+  const legacy = await newPage(browser, { width: 1180, height: 820 }, LBASE);
+  await until(() => visible(legacy, 'q_seed1'), 6000, 'legacy card').catch(() => {});
+  ok(await visible(legacy, 'q_seed1'), 'questions still show as cards');
+  ok(!(await legacy.locator('[aria-label="Dismiss question"]').count()) && !(await legacy.locator('[data-old-questions]').count()),
+    'no X, swipe or old-questions bar the Mac could not honour');
+
+  const errs = [...page.errors, ...other.errors, ...phone.errors, ...legacy.errors];
   ok(errs.length === 0, `zero console errors${errs.length ? `: ${errs.join(' / ')}` : ''}`);
   await browser.close();
 }

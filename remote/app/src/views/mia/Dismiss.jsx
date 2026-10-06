@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import { motion, AnimatePresence, useMotionValue, useTransform } from 'motion/react';
-import { useMC, miaDismiss, miaDismissOld, miaOldQuestions, fmtQuestionAge } from '../../lib/store.js';
+import { useMC, miaDismiss, miaDismissOld, miaOldQuestions, miaCanDismiss, fmtQuestionAge } from '../../lib/store.js';
 import { spring } from '../../lib/motion.js';
 import IconButton from '../../ui/IconButton.jsx';
 import Button from '../../ui/Button.jsx';
@@ -9,9 +9,12 @@ import Button from '../../ui/Button.jsx';
 // question closed on the Mac (every panel drops it) and Mia gets an [MC] line
 // saying no answer is coming. Old questions — open past the max age, 48 h by
 // default — are hidden and don't count anywhere; this bar says how many and
-// clears them in one tap.
+// clears them in one tap. A Mac app older than this sends no max age and
+// can't dismiss, so the controls stay out of the way until it's updated.
 
 export function DismissButton({ questionId, size = 'sm', className = '' }) {
+  const can = useMC((s) => miaCanDismiss(s.mia));
+  if (!can) return null;
   return (
     <IconButton
       icon="close"
@@ -33,7 +36,9 @@ export function DismissButton({ questionId, size = 'sm', className = '' }) {
 export function Swipeable({ questionId, children, className = '' }) {
   const x = useMotionValue(0);
   const dragged = useRef(false);
+  const can = useMC((s) => miaCanDismiss(s.mia));
   const opacity = useTransform(x, [-180, -70, 0, 70, 180], [0.25, 0.85, 1, 0.85, 0.25]);
+  if (!can) return <div className={className}>{children}</div>;
   return (
     <motion.div
       drag="x"

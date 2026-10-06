@@ -530,7 +530,13 @@ function miaBlock() {
   const oldQuestions = open.filter((o) => isOldQ(o.card)).map((o) => o.card);
   const block = { ...mia, messages: mia.messages.slice(-200), pendingQuestions, oldQuestions, closedQuestions, questionMaxAgeHours };
   // FAKE_HOST_LEGACY_MIA=1 impersonates a Mac app before 0027 (no runningModel).
-  if (process.env.FAKE_HOST_LEGACY_MIA) delete block.runningModel;
+  if (process.env.FAKE_HOST_LEGACY_MIA) {
+    delete block.runningModel;
+    // …and before 0103: no question ages, no miaDismiss.
+    delete block.oldQuestions;
+    delete block.closedQuestions;
+    delete block.questionMaxAgeHours;
+  }
   return block;
 }
 
@@ -580,6 +586,7 @@ function handleMia(type, msg) {
       return ack(true, 'Answer delivered');
     }
     case 'miaDismiss': {
+      if (process.env.FAKE_HOST_LEGACY_MIA) return ack(false, `Unknown command ${type}`);
       // As MiaManager.dismiss: the ids given, or (old) every open one past the
       // max age; Mia gets one [MC] line (events.jsonl under MIA_DIR).
       const want = new Set([...(msg.questionIds || []), msg.questionId].filter(Boolean));
