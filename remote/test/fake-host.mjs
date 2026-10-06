@@ -505,17 +505,30 @@ let miaMsgSeq = 2;
 // answered, like MiaManager's open questions.
 const looseQuestions = [];
 
-function miaBlock() {
-  const pendingQuestions = [];
+// Like MiaQuestions.swift: open = unanswered and not dismissed; open ones
+// older than questionMaxAgeHours ride as oldQuestions (hidden, not counted).
+let questionMaxAgeHours = 48;
+const closedQuestions = {}; // qid → 'dismissed' | 'expired'
+const isOldQ = (q) => questionMaxAgeHours > 0 && Date.now() - Date.parse(q.askedAt) > questionMaxAgeHours * 3600e3;
+function openQuestions() {
+  const out = [];
   for (const t of mia.tasks) {
+    if (['done', 'failed', 'cancelled'].includes(t.status)) continue;
     for (const q of t.questions || []) {
-      if (q.answer == null) pendingQuestions.push({ questionId: q.id, taskId: t.id, text: q.text, options: q.options || [], askedAt: q.askedAt });
+      if (q.answer == null && !closedQuestions[q.id]) out.push({ q, card: { questionId: q.id, taskId: t.id, text: q.text, options: q.options || [], askedAt: q.askedAt } });
     }
   }
   for (const q of looseQuestions) {
-    if (q.answer == null) pendingQuestions.push({ questionId: q.id, taskId: null, text: q.text, options: q.options || [], askedAt: q.askedAt });
+    if (q.answer == null && !closedQuestions[q.id]) out.push({ q, card: { questionId: q.id, taskId: null, text: q.text, options: q.options || [], askedAt: q.askedAt } });
   }
-  const block = { ...mia, messages: mia.messages.slice(-200), pendingQuestions };
+  return out;
+}
+
+function miaBlock() {
+  const open = openQuestions();
+  const pendingQuestions = open.filter((o) => !isOldQ(o.card)).map((o) => o.card);
+  const oldQuestions = open.filter((o) => isOldQ(o.card)).map((o) => o.card);
+  const block = { ...mia, messages: mia.messages.slice(-200), pendingQuestions, oldQuestions, closedQuestions, questionMaxAgeHours };
   // FAKE_HOST_LEGACY_MIA=1 impersonates a Mac app before 0027 (no runningModel).
   if (process.env.FAKE_HOST_LEGACY_MIA) delete block.runningModel;
   return block;
@@ -565,6 +578,32 @@ function handleMia(type, msg) {
       hit.t.updatedAt = iso();
       miaMessage({ from: 'daniel', kind: 'answer', text, questionId: hit.q.id, taskId: hit.t.id });
       return ack(true, 'Answer delivered');
+    }
+    case 'miaDismiss': {
+      // As MiaManager.dismiss: the ids given, or (old) every open one past the
+      // max age; Mia gets one [MC] line (events.jsonl under MIA_DIR).
+      const want = new Set([...(msg.questionIds || []), msg.questionId].filter(Boolean));
+      const hits = openQuestions().filter((o) => (msg.old ? isOldQ(o.card) : want.has(o.q.id)));
+      if (!hits.length) return ack(false, msg.old ? 'No old questions to dismiss' : 'That question is already closed');
+      for (const { q, card } of hits) {
+        closedQuestions[q.id] = 'dismissed';
+        q.dismissedAt = iso();
+        const t = card.taskId && task(card.taskId);
+        if (t && t.status === 'asking' && !(t.questions || []).some((x) => x.answer == null && !closedQuestions[x.id])) t.status = 'queued';
+      }
+      const ref = (c) => (c.taskId ? `${c.questionId} (task ${c.taskId})` : c.questionId);
+      const line = hits.length === 1
+        ? `[MC] Daniel dismissed ${ref(hits[0].card)} — no answer is coming, don't wait on it: "${hits[0].card.text}"`
+        : `[MC] Daniel dismissed ${hits.length}${msg.old ? ' old' : ''} questions — no answers are coming, don't wait on them: ${hits.map((h) => ref(h.card)).join(', ')}`;
+      log(`mia event ${line}`);
+      if (MIA_DIR) fs.appendFileSync(path.join(MIA_DIR, 'events.jsonl'), JSON.stringify({ id: `e_${Date.now()}`, at: iso(), kind: 'dismiss', text: line, delivered: false }) + '\n');
+      return ack(true, hits.length === 1 ? 'Question dismissed' : `Dismissed ${hits.length} questions`);
+    }
+    case 'miaQuestionAge': {
+      const h = Number(msg.hours);
+      if (!Number.isFinite(h) || h < 0) return ack(false, 'Bad age');
+      questionMaxAgeHours = h;
+      return ack(true, h === 0 ? 'Old questions stay visible' : `Questions hide after ${h} h`);
     }
     case 'miaRead':
       if (!mia.messages.some((m) => m.id === msg.upTo)) return ack(false, `No message ${msg.upTo}`);

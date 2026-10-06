@@ -143,8 +143,25 @@ every 5 s; `mia inbox` prints the last 50 so a freshly restarted Mia can catch
 up. The app marks an entry delivered once `send` returns `.sent`.
 
 ```json
-{"id":"e_…","at":"…","kind":"answer|chat|task|executor|reminder|heartbeat|upload|system","text":"…","delivered":true}
+{"id":"e_…","at":"…","kind":"answer|dismiss|chat|task|executor|reminder|heartbeat|upload|system","text":"…","delivered":true}
 ```
+
+### 2.5 `questions.json` — closed questions and the "old" age
+
+```json
+{"maxAgeHours": 48,
+ "closed": {"q_…": {"state": "dismissed|expired", "at": "…", "by": "daniel|mia"}}}
+```
+
+A question (a `kind:"question"` line in messages.jsonl) is **open** until an
+`answer` line names it or it appears under `closed`. Open questions older than
+`maxAgeHours` (0 = never) are **old**: hidden from badges, the home stack, the
+home sentence, read-aloud and `mia status` (unless `--all`), still answerable.
+Nothing is ever deleted from messages.jsonl; closing a task question also sets
+`dismissedAt`/`expiredAt` on its record in `tasks/<id>.json` (and a task in
+`asking` with nothing left open goes back to `queued`, as after an answer).
+The rules live in `Sources/AgentWidget/MiaQuestions.swift` and `scripts/mia`;
+both write under the shared lock.
 
 ---
 
@@ -194,7 +211,12 @@ mia heartbeat set <id> (--every <min>|--at HH:MM) [--label <l>] [--prompt <p>]
 mia heartbeat enable|disable|remove <id>
 mia inbox [-n 50]                                      recent system events (catch-up after restart)
 mia uploads [-n 20] [--json]                           files Daniel sent from the panel (uploads.jsonl), newest last
-mia status                                             one-screen summary: tasks by status, open questions
+mia status [--all]                                     one-screen summary: tasks by status, open questions
+                                                       (old ones only with --all; a line says how many are hidden)
+mia question list [--all] [--json]                     open questions (--all: old ones too, tagged [old])
+mia question dismiss <q_id>…                           close questions that no longer matter (state dismissed, by mia)
+mia question expire [--older-than 48h] [--dry-run]     close every open question older than that (default: the max age)
+mia question max-age [<48h|3d|never>]                  show/set when an open question counts as old (questions.json)
 mia help
 ```
 
@@ -211,6 +233,8 @@ Every delivered event is one line, prefixed so Mia can recognise it, sent via
 ```
 [MC] Daniel: <text>                                      (chat)
 [MC] Daniel answered q_… (task 0007): <text>             (answer)
+[MC] Daniel dismissed q_… (task 0007) — no answer is coming, don't wait on it: "<question>"   (dismiss)
+[MC] Daniel dismissed 5 old questions — no answers are coming, don't wait on them: q_…, q_… (task 0007)
 [MC] New task 0009 queued: <title>                        (task added from panel)
 [MC] Executor for task 0007 finished (session <id>). Review it: mia task show 0007 ; report at ~/.mission-control/mia/briefs/0007.report.md
 [MC] Executor for task 0007 exited without finishing.
@@ -238,6 +262,7 @@ HOW YOU TALK TO DANIEL
 - `mia say "…"` for conversation. `mia notify "…"` when he should be pinged (a task finished, something in mail needs him). `mia ask "…" --options "A|B|C"` when you need a decision — give options whenever you can so he can answer with one tap. Batch questions: one `mia ask` per task, not five.
 - A message that starts with "(voice)" was spoken aloud in talk mode on the panel, and whatever you `mia say` or `mia notify` next is read aloud to him. Reply with `mia say` in one to three short spoken sentences: no markdown, lists, links, code or ids; say times and numbers the way you would out loud. Anything long goes in the Library or a task, and you say so in one sentence.
 - After asking, END YOUR TURN. Do not poll, sleep, or loop. Mission Control delivers his answer as a message starting with `[MC]`.
+- Questions don't pile up. When one is moot (you found out, the task moved on), close it: `mia question dismiss <q_id>`. Unanswered questions older than 48 h are hidden from Daniel; `mia question expire` closes them. `[MC] Daniel dismissed q_…` means no answer is coming: carry on without it or ask again differently.
 - Add `--speak` to `mia say`, `mia notify` or `mia ask` to have an open panel read it aloud to him even when talk mode is off: for questions, finished tasks and anything that needs his attention, in one short spoken sentence ("Hey Daniel, task 14 is done. Anything else?"). Asks and notifies are read out by default; quiet hours and the app being closed are handled for you.
 
 THE PANEL ON HIS SCREEN
@@ -377,6 +402,9 @@ model), **without** the strict MCP config (they are ordinary agents).
   "messages": [ …last 200 lines of messages.jsonl… ],
   "tasks": [ …every tasks/<id>.json, cancelled/done older than 7 days omitted… ],
   "pendingQuestions": [ {"questionId":"q_…","taskId":"0007","text":"…","options":["…"],"askedAt":"…"} ],
+  "oldQuestions": [ …same shape: open but older than questionMaxAgeHours (hidden, never counted)… ],
+  "closedQuestions": { "q_…": "dismissed|expired" },   // for questions still in `messages`
+  "questionMaxAgeHours": 48,
   "schedule": { …schedule.json… },
   "pushKey": "<VAPID public key, if the relay told the host one>"
 }
@@ -388,6 +416,8 @@ model), **without** the strict MCP config (they are ordinary agents).
 |------|--------|
 | `miaSend` | `text` |
 | `miaAnswer` | `questionId`, `text` |
+| `miaDismiss` | `questionId` or `questionIds[]` — or `old: true` for every open question past the max age. Marks them dismissed in questions.json and tells Mia (§4). Fails if none were open. |
+| `miaQuestionAge` | `hours` (0 = never hide) — sets `maxAgeHours` |
 | `miaRead` | `upTo` (message id) |
 | `miaTaskAdd` | `title`, `detail?`, `dir?`, `priority?` (positive int, default 3). Ack carries `id` of the new task. |
 | `miaTaskCancel` | `id` |
@@ -547,6 +577,7 @@ Use the `web-push` npm package.
 GET  /api/v1/mia                     the snapshot's mia block
 POST /api/v1/mia/message   {text}    → miaSend
 POST /api/v1/mia/answer    {questionId,text}
+POST /api/v1/mia/dismiss   {questionId | questionIds[] | old:true}   → miaDismiss
 POST /api/v1/mia/tasks     {title,detail?,dir?,priority?}
 ```
 
@@ -575,7 +606,14 @@ POST /api/v1/mia/tasks     {title,detail?,dir?,priority?}
   POSTs to `/push/subscribe`; shows "Notifications on" once done, and a
   "Test" button (`miaPushTest`).
 - **Attention cards**: pending Mia questions appear as cards with pills
-  (kind `mia`), answering sends `miaAnswer`.
+  (kind `mia`), answering sends `miaAnswer`. An X in the corner, or a
+  sideways swipe, dismisses one (`miaDismiss`). Under the stack, when any are
+  old: "N old questions hidden · over 2 d" with **Show** (old cards, "asked 5d
+  ago") and **Dismiss all old** (`miaDismiss {old:true}`). The thread has the
+  same bar and an X on open questions; closed ones read "Dismissed" /
+  "Expired", old ones "Hidden — unanswered for over 2 d. Dismiss".
+- **Settings → Mia's questions**: "Hide unanswered after" 24 h / 48 h / 7 d /
+  Never (`miaQuestionAge`).
 - **Service worker** `public/sw.js`: shows the push (`title`, `body`, `tag`),
   click focuses/opens the panel at `#mia`. `public/manifest.json` with
   `display: standalone` (required for iOS push); link it from `index.html`.

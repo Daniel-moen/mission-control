@@ -101,7 +101,7 @@ export const useMC = create(() => ({
   mia: null,
   // Optimistic local echo so the thread and badge react before the next
   // snapshot: messages sent but not yet seen, answers given, read marker.
-  miaLocal: { sent: [], answered: {}, readUpTo: '' },
+  miaLocal: { sent: [], answered: {}, dismissed: {}, readUpTo: '' },
   push: 'idle', // Web Push state for this device — see lib/push.js
   // Files for Mia (lib/upload.js): picked but not yet sent, and uploads in
   // flight/just finished — { id, name, size, mime, loaded, status, error, relayId, at }.
@@ -1448,7 +1448,8 @@ export function stopAll() {
 // ---- Mia --------------------------------------------------------------------
 // The persistent assistant (docs/mia.md §8). The host puts a `mia` block on the
 // snapshot: { enabled, online, sessionId, model, runningModel, restarts,
-// readUpTo, messages, tasks, pendingQuestions, schedule, pushKey }. Every field
+// readUpTo, messages, tasks, pendingQuestions, oldQuestions, closedQuestions,
+// questionMaxAgeHours, schedule, pushKey }. Every field
 // is optional here — an absent block means "Mia is off / host predates her",
 // never a crash. `model` is the saved choice (Settings.miaModel on the Mac);
 // `runningModel` is what her live session was launched on — the two differ
@@ -1479,6 +1480,11 @@ function normMia(m) {
     messages: arr(m.messages),
     tasks: arr(m.tasks),
     pendingQuestions: arr(m.pendingQuestions),
+    // Open but past the max age: hidden, not counted, dismissable in one go.
+    // Hosts before 0103 send neither these nor the age (null → unknown).
+    oldQuestions: arr(m.oldQuestions),
+    closedQuestions: m.closedQuestions && typeof m.closedQuestions === 'object' ? m.closedQuestions : {},
+    questionMaxAgeHours: Number.isFinite(Number(m.questionMaxAgeHours)) && m.questionMaxAgeHours !== null ? Number(m.questionMaxAgeHours) : null,
     schedule: m.schedule && typeof m.schedule === 'object' ? m.schedule : null,
     pushKey: str(m.pushKey),
   };
@@ -1502,15 +1508,22 @@ function ingestMia(s, mc, patch) {
     const seen = msgs.filter((m) => m.from === 'daniel' && m.kind === 'chat' && m.text === p.text).length;
     return seen <= p.baseline;
   });
-  const pending = new Set((mia?.pendingQuestions || []).map((q) => q.questionId));
-  let answered = loc.answered;
-  for (const id of Object.keys(answered)) {
-    if (!pending.has(id)) {
-      if (answered === loc.answered) answered = { ...answered };
-      delete answered[id];
+  const pending = new Set([...(mia?.pendingQuestions || []), ...(mia?.oldQuestions || [])].map((q) => q.questionId));
+  const retire = (map) => {
+    let out = map;
+    for (const id of Object.keys(map)) {
+      if (!pending.has(id)) {
+        if (out === map) out = { ...map };
+        delete out[id];
+      }
     }
+    return out;
+  };
+  const answered = retire(loc.answered);
+  const dismissed = retire(loc.dismissed);
+  if (sent.length !== loc.sent.length || answered !== loc.answered || dismissed !== loc.dismissed) {
+    patch.miaLocal = { ...loc, sent, answered, dismissed };
   }
-  if (sent.length !== loc.sent.length || answered !== loc.answered) patch.miaLocal = { ...loc, sent, answered };
 }
 
 // Where "after <id>" starts in the message list. Ids are `m_<epoch ms>`, so an
@@ -1525,11 +1538,41 @@ function cutAfter(msgs, id) {
   return j < 0 ? msgs.length : j;
 }
 
-// Questions still waiting on Daniel, minus the ones he just answered here.
+// Questions still waiting on Daniel, minus the ones he just answered or
+// dismissed here. Old ones (past the max age) are never in this list — they
+// don't count in badges, the home stack or anything read aloud.
 export function miaOpenQuestions(mia, local = getMC().miaLocal) {
   if (!mia) return [];
   const answered = local?.answered || {};
-  return mia.pendingQuestions.filter((q) => q.questionId && !(q.questionId in answered));
+  const dismissed = local?.dismissed || {};
+  return mia.pendingQuestions.filter((q) => q.questionId && !(q.questionId in answered) && !(q.questionId in dismissed));
+}
+
+// Open questions past the max age: hidden by default, still answerable.
+export function miaOldQuestions(mia, local = getMC().miaLocal) {
+  if (!mia) return [];
+  const answered = local?.answered || {};
+  const dismissed = local?.dismissed || {};
+  return mia.oldQuestions.filter((q) => q.questionId && !(q.questionId in answered) && !(q.questionId in dismissed));
+}
+
+// How a question that's no longer open was closed: 'answered' | 'dismissed' |
+// 'expired' | 'old' (still open, just hidden) | null.
+export function miaQuestionState(mia, questionId, local = getMC().miaLocal) {
+  if (!questionId) return null;
+  if (local?.dismissed?.[questionId]) return 'dismissed';
+  if (miaAnswerFor(mia, questionId, local) != null) return 'answered';
+  const c = mia?.closedQuestions?.[questionId];
+  if (c === 'dismissed' || c === 'expired') return c;
+  if ((mia?.oldQuestions || []).some((q) => q.questionId === questionId)) return 'old';
+  return null;
+}
+
+// "48 h" / "2 d" — the max age as Daniel reads it.
+export function fmtQuestionAge(h) {
+  if (h == null) return '';
+  if (!h) return 'never';
+  return h >= 24 && h % 24 === 0 ? `${h / 24} d` : `${h} h`;
 }
 
 // Dock badge: unread Mia messages + open questions. A question that is both
@@ -1544,7 +1587,8 @@ export function miaBadge(mia, local = getMC().miaLocal) {
   for (let i = cut; i < msgs.length; i++) {
     const m = msgs[i];
     if (m.from !== 'mia') continue;
-    if (m.kind === 'question' && openIds.has(m.questionId)) continue;
+    // Open questions are counted below; old, dismissed or expired ones never.
+    if (m.kind === 'question') continue;
     unread++;
   }
   return unread + open.length;
@@ -1556,8 +1600,14 @@ export function miaUnread(mia, local = getMC().miaLocal) {
   if (!mia) return 0;
   const msgs = mia.messages;
   const cut = Math.max(cutAfter(msgs, mia.readUpTo), cutAfter(msgs, local?.readUpTo));
+  const open = new Set(miaOpenQuestions(mia, local).map((q) => q.questionId));
   let n = 0;
-  for (let i = cut; i < msgs.length; i++) if (msgs[i].from === 'mia') n++;
+  for (let i = cut; i < msgs.length; i++) {
+    const m = msgs[i];
+    if (m.from !== 'mia') continue;
+    if (m.kind === 'question' && !open.has(m.questionId)) continue; // old or closed: not news
+    n++;
+  }
   return n;
 }
 
@@ -1582,6 +1632,7 @@ function setMiaLocal(fn) {
 const MIA_ACK_OK = {
   miaTaskAdd: 'Task added',
   miaTaskCancel: 'Task cancelled',
+  miaQuestionAge: 'Saved',
   miaTaskSet: 'Task updated',
   miaStart: 'Starting Mia',
   miaStop: 'Mia stopped',
@@ -1595,10 +1646,16 @@ function handleMiaAck(msg) {
   if (!msg.ok) {
     if (msg.cmd === 'miaRead') return; // housekeeping — never worth a toast
     if (msg.cmd === 'miaSend') setMiaLocal((l) => ({ sent: l.sent.slice(1) }));
+    if (msg.cmd === 'miaDismiss') setMiaLocal(() => ({ dismissed: {} })); // the snapshot is the truth again
     toast(`Mia: ${msg.detail || 'that didn’t go through'}`);
     return;
   }
   // The thread itself shows a sent message or an answer — no toast for those.
+  if (msg.cmd === 'miaDismiss') {
+    // One card leaving is its own feedback; a batch says how many went.
+    if (msg.detail && !/^Question dismissed/.test(msg.detail)) toast(msg.detail);
+    return;
+  }
   const t = MIA_ACK_OK[msg.cmd];
   if (t) toast(msg.cmd === 'miaPushTest' && msg.detail ? msg.detail : t);
 }
@@ -1627,6 +1684,27 @@ export function miaAnswer(questionId, text) {
   if (!send({ type: 'miaAnswer', questionId, text })) return false;
   setMiaLocal((l) => ({ answered: { ...l.answered, [questionId]: text } }));
   return true;
+}
+// Close questions without answering (gone on every device; Mia is told).
+// The local echo drops the cards at once; a failed ack puts them back.
+export function miaDismiss(questionIds) {
+  const ids = (Array.isArray(questionIds) ? questionIds : [questionIds]).filter(Boolean);
+  if (!ids.length) return false;
+  if (!send({ type: 'miaDismiss', questionIds: ids })) return false;
+  setMiaLocal((l) => ({ dismissed: { ...l.dismissed, ...Object.fromEntries(ids.map((id) => [id, true])) } }));
+  return true;
+}
+// "Dismiss all old": every open question past the max age, decided on the Mac.
+export function miaDismissOld() {
+  const old = miaOldQuestions(getMC().mia);
+  if (!old.length) return false;
+  if (!send({ type: 'miaDismiss', old: true })) return false;
+  setMiaLocal((l) => ({ dismissed: { ...l.dismissed, ...Object.fromEntries(old.map((q) => [q.questionId, true])) } }));
+  return true;
+}
+export function miaSetQuestionAge(hours) {
+  const h = Number(hours);
+  return Number.isFinite(h) && h >= 0 && send({ type: 'miaQuestionAge', hours: h });
 }
 // Mark the thread read up to a message id. Silent: no toast either way, and it
 // only goes out when it moves the marker.

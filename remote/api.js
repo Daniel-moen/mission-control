@@ -232,6 +232,7 @@ function createApi({
       'GET  /api/v1/mia': 'Mia, the assistant: status, conversation, tasks, pending questions, schedule',
       'POST /api/v1/mia/message {text}': 'send Mia a chat message',
       'POST /api/v1/mia/answer {questionId, text}': 'answer one of Mia\'s pending questions',
+      'POST /api/v1/mia/dismiss {questionId | questionIds[] | old:true}': 'close Mia\'s questions without answering (old:true = every one past the max age); Mia is told',
       'POST /api/v1/mia/tasks {title, detail?, dir?, priority?}': 'queue a task for Mia (priority 1 = highest, default 3)',
     },
   };
@@ -518,6 +519,15 @@ function createApi({
         const text = String(body.text ?? '').trim();
         if (!questionId || !text) return json(res, 400, { ok: false, error: 'questionId and text are required' });
         return sendAndAck(res, 'miaAnswer', { type: 'miaAnswer', questionId, text });
+      }
+
+      // Close questions without answering: {questionId} | {questionIds:[…]} | {old:true}.
+      if (route[1] === 'dismiss' && route.length === 2 && m === 'POST') {
+        const ids = [...(Array.isArray(body.questionIds) ? body.questionIds : []), body.questionId]
+          .filter((x) => x != null && String(x).trim())
+          .map((x) => String(x).trim());
+        if (!ids.length && body.old !== true) return json(res, 400, { ok: false, error: 'questionId, questionIds or old:true is required' });
+        return sendAndAck(res, 'miaDismiss', { type: 'miaDismiss', questionIds: ids, old: body.old === true });
       }
 
       if (route[1] === 'tasks' && route.length === 2 && m === 'POST') {

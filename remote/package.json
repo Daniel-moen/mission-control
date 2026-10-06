@@ -18,7 +18,9 @@
     "test:spoken": "node test/spoken-test.mjs",
     "test:mia-model": "node test/mia-model-e2e.mjs",
     "test:thumbs": "node test/thumbs-test.mjs",
-    "test:thumbs-panel": "node test/thumbs-panel-e2e.mjs"
+    "test:thumbs-panel": "node test/thumbs-panel-e2e.mjs",
+    "test:questions": "node test/questions-test.mjs",
+    "test:questions-panel": "node test/questions-panel-e2e.mjs"
   },
   "engines": {
     "node": ">=20"

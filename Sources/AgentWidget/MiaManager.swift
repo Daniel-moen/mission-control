@@ -45,6 +45,8 @@ final class MiaManager: ObservableObject {
     private let panelPath: String
     private let eventsPath: String
     private let schedulePath: String
+    /// Dismissed/expired questions + the "old" age (MiaQuestions).
+    private let questionsPath: String
     private let statePath: String
     private let lockPath: String
     private let mcpPath: String
@@ -100,6 +102,7 @@ final class MiaManager: ObservableObject {
         lockPath = d + "/.lock"
         mcpPath = d + "/mcp.json"
         uploadsIndexPath = d + "/uploads.jsonl"
+        questionsPath = d + "/questions.json"
 
         ensureLayout()
         // Only what lands from now on is news; history was already notified.
@@ -749,7 +752,7 @@ final class MiaManager: ObservableObject {
                     qs[i]["answeredAt"] = Self.iso(Date())
                 }
                 task["questions"] = qs
-                let stillOpen = qs.contains { $0["answer"] == nil || $0["answer"] is NSNull }
+                let stillOpen = qs.contains(where: Self.taskQuestionOpen)
                 if task["status"] as? String == "asking", !stillOpen { task["status"] = "queued" }
                 appendLog(&task, "Daniel answered: \(text)")
                 saveTaskUnlocked(task)
@@ -758,6 +761,78 @@ final class MiaManager: ObservableObject {
         let where_ = taskId.map { " (task \($0))" } ?? ""
         enqueue(kind: "answer", line: "[MC] Daniel answered \(questionId)\(where_): \(text)")
         return Outcome(ok: true, detail: "Answer sent" + offNote)
+    }
+
+    /// A task's question record still waits on Daniel: no answer, not closed.
+    private static func taskQuestionOpen(_ q: [String: Any]) -> Bool {
+        (q["answer"] == nil || q["answer"] is NSNull) && q["dismissedAt"] == nil && q["expiredAt"] == nil
+    }
+
+    private func readQuestionState() -> MiaQuestions.State {
+        MiaQuestions.State(json: readJSON(questionsPath))
+    }
+
+    /// Daniel dismissed questions from the panel: the given ids, or (`old`)
+    /// every open question past the max age. They're marked closed in
+    /// questions.json (never deleted), their task records are updated, and
+    /// Mia gets one `[MC]` line so she stops waiting on them.
+    func dismiss(questionIds: [String], old: Bool) -> Outcome {
+        let msgs = allMessages(force: true)
+        var closedQs: [[String: Any]] = []
+        let at = Self.iso(Date())
+        withLock {
+            var st = readQuestionState()
+            let open = MiaQuestions.open(msgs, st)
+            let targets: [[String: Any]]
+            if old {
+                targets = MiaQuestions.split(open, maxAgeHours: st.maxAgeHours, now: Date()).old
+            } else {
+                let want = Set(questionIds)
+                targets = open.filter { want.contains($0["questionId"] as? String ?? "") }
+            }
+            guard !targets.isEmpty else { return }
+            var byTask: [String: Set<String>] = [:]
+            for q in targets {
+                guard let qid = q["questionId"] as? String else { continue }
+                st.closed[qid] = ["state": "dismissed", "at": at, "by": "daniel"]
+                if let tid = q["taskId"] as? String { byTask[tid, default: []].insert(qid) }
+            }
+            writeJSON(questionsPath, st.json)
+            for (tid, qids) in byTask {
+                guard var task = loadTaskUnlocked(tid) else { continue }
+                var qs = task["questions"] as? [[String: Any]] ?? []
+                for i in qs.indices where qids.contains(qs[i]["id"] as? String ?? "") { qs[i]["dismissedAt"] = at }
+                task["questions"] = qs
+                if task["status"] as? String == "asking", !qs.contains(where: Self.taskQuestionOpen) {
+                    task["status"] = "queued"
+                }
+                appendLog(&task, "Daniel dismissed " + qids.sorted().joined(separator: ", "))
+                saveTaskUnlocked(task)
+            }
+            closedQs = targets
+        }
+        guard !closedQs.isEmpty else {
+            return Outcome(ok: false, detail: old ? "No old questions to dismiss" : "That question is already closed")
+        }
+        enqueue(kind: "dismiss", line: MiaQuestions.dismissedLine(closedQs, old: old))
+        let n = closedQs.count
+        return Outcome(ok: true, detail: n == 1 ? "Question dismissed" : "Dismissed \(n) questions")
+    }
+
+    /// How old an unanswered question gets before it's hidden (0 = never).
+    func setQuestionMaxAge(hours: Double) -> Outcome {
+        guard hours.isFinite, hours >= 0, hours <= 24 * 365 else { return Outcome(ok: false, detail: "Bad age") }
+        withLock {
+            var st = readQuestionState()
+            st.maxAgeHours = hours
+            writeJSON(questionsPath, st.json)
+        }
+        return Outcome(ok: true, detail: hours == 0 ? "Old questions stay visible"
+                                                    : "Questions hide after \(Self.hoursLabel(hours))")
+    }
+
+    static func hoursLabel(_ h: Double) -> String {
+        h >= 24 && h.truncatingRemainder(dividingBy: 24) == 0 ? "\(Int(h / 24)) d" : "\(Int(h)) h"
     }
 
     func markRead(upTo: String) -> Outcome {
@@ -940,14 +1015,27 @@ final class MiaManager: ObservableObject {
         let closed: Set<String> = Set(tasks.compactMap { t in
             ["done", "failed", "cancelled"].contains(t["status"] as? String ?? "") ? t["id"] as? String : nil
         })
-        let answered = Set(msgs.compactMap { ($0["kind"] as? String) == "answer" ? $0["questionId"] as? String : nil })
-        let pendingQs: [[String: Any]] = msgs.compactMap { m in
-            guard (m["kind"] as? String) == "question", let qid = m["questionId"] as? String,
-                  !answered.contains(qid) else { return nil }
+        // Open questions: the fresh ones are pending (badges, cards, read
+        // aloud); old ones ride separately so the panel can show or dismiss
+        // them without counting them (MiaQuestions).
+        let qstate = readQuestionState()
+        let shownMsgs = Array(msgs.suffix(200))
+        let (freshQs, oldQs) = MiaQuestions.split(MiaQuestions.open(msgs, qstate),
+                                                  maxAgeHours: qstate.maxAgeHours, now: Date())
+        func card(_ m: [String: Any]) -> [String: Any]? {
+            guard let qid = m["questionId"] as? String else { return nil }
             if let tid = m["taskId"] as? String, closed.contains(tid) { return nil }
             return ["questionId": qid, "taskId": (m["taskId"] as? String) ?? NSNull(),
                     "text": m["text"] ?? "", "options": m["options"] ?? [] as [Any],
                     "askedAt": m["at"] ?? ""]
+        }
+        let pendingQs = freshQs.compactMap(card)
+        let oldPendingQs = oldQs.compactMap(card)
+        // How the questions still in the thread window were closed, so the
+        // thread can say "Dismissed" instead of a bare "Closed".
+        var closedQs: [String: String] = [:]
+        for m in shownMsgs where (m["kind"] as? String) == "question" {
+            if let qid = m["questionId"] as? String, let s = qstate.state(of: qid) { closedQs[qid] = s }
         }
         var block: [String: Any] = [
             "enabled": settings.miaEnabled,
@@ -959,9 +1047,12 @@ final class MiaManager: ObservableObject {
             "runningModel": live != nil ? (state["runningModel"] as? String).map { $0 as Any } ?? NSNull() : NSNull(),
             "restarts": (state["restarts"] as? Int) ?? 0,
             "readUpTo": settings.miaReadUpTo.isEmpty ? NSNull() as Any : settings.miaReadUpTo,
-            "messages": Array(msgs.suffix(200)),
+            "messages": shownMsgs,
             "tasks": shownTasks,
             "pendingQuestions": pendingQs,
+            "oldQuestions": oldPendingQs,
+            "closedQuestions": closedQs,
+            "questionMaxAgeHours": qstate.maxAgeHours,
             "schedule": readJSON(schedulePath) ?? Self.defaultSchedule,
         ]
         if let pushKey { block["pushKey"] = pushKey }
@@ -1164,6 +1255,7 @@ HOW YOU TALK TO DANIEL
 - `mia say "…"` for conversation. `mia notify "…"` when he should be pinged (a task finished, something in mail needs him). `mia ask "…" --options "A|B|C"` when you need a decision — give options whenever you can so he can answer with one tap. Batch questions: one `mia ask` per task, not five.
 - A message that starts with "(voice)" was spoken aloud in talk mode on the panel, and whatever you `mia say` or `mia notify` next is read aloud to him. Reply with `mia say` in one to three short spoken sentences: no markdown, lists, links, code or ids; say times and numbers the way you would out loud. Anything long goes in the Library or a task, and you say so in one sentence.
 - After asking, END YOUR TURN. Do not poll, sleep, or loop. Mission Control delivers his answer as a message starting with `[MC]`.
+- Questions don't pile up. When one is moot (you found out, the task moved on), close it: `mia question dismiss <q_id>`. Unanswered questions older than 48 h are hidden from Daniel; `mia question expire` closes them. `[MC] Daniel dismissed q_…` means no answer is coming: carry on without it or ask again differently.
 - Add `--speak` to `mia say`, `mia notify` or `mia ask` to have an open panel read it aloud to him even when talk mode is off: for questions, finished tasks and anything that needs his attention, in one short spoken sentence ("Hey Daniel, task 14 is done. Anything else?"). Asks and notifies are read out by default; quiet hours and the app being closed are handled for you.
 
 THE PANEL ON HIS SCREEN

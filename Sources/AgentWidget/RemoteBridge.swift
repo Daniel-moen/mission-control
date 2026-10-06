@@ -26,7 +26,7 @@ import Combine
 ///                  {type:"docGet|docSave|docCreate|docDelete|docMeta|docSearch", …}  document library
 ///                  {type:"viewers", count}         how many panels are watching
 ///                  {type:"pushKey", key}           relay's VAPID public key (echoed in the snapshot)
-///                  {type:"miaSend|miaAnswer|miaRead|miaTaskAdd|miaTaskCancel|miaTaskSet|
+///                  {type:"miaSend|miaAnswer|miaDismiss|miaQuestionAge|miaRead|miaTaskAdd|miaTaskCancel|miaTaskSet|
 ///                         miaStart|miaStop|miaRestart|miaSetModel|miaSchedule|miaPushTest", …}  Mia (docs/mia.md §8)
 ///                  {type:"panelResult", id, ok, action, arg, detail}   how a `mia panel` command landed
 ///                  {type:"upload", id, key, name, mime, size, sha256, caption?, batch?, batchId?}
@@ -480,6 +480,14 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
             r = mia.answer(questionId: str("questionId"), text: str("text"))
         case "miaRead":
             r = mia.markRead(upTo: str("upTo"))
+        case "miaDismiss":
+            // {questionId} or {questionIds:[…]} — or {old:true}: every open
+            // question past the max age ("Dismiss all old").
+            var ids = (obj["questionIds"] as? [String]) ?? []
+            if !str("questionId").isEmpty { ids.append(str("questionId")) }
+            r = mia.dismiss(questionIds: ids, old: (obj["old"] as? Bool) ?? false)
+        case "miaQuestionAge":
+            r = mia.setQuestionMaxAge(hours: (obj["hours"] as? NSNumber)?.doubleValue ?? Double(str("hours")) ?? -1)
         case "miaTaskAdd":
             let p = (obj["priority"] as? NSNumber)?.intValue ?? Int(str("priority")) ?? 3
             r = mia.addTask(title: str("title"), detail: str("detail"), dir: str("dir"),

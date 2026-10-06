@@ -227,6 +227,11 @@ async function main() {
   const badAnswer = await api('POST', '/mia/answer', { questionId: 'q_nope', text: 'Yes' });
   ok(badAnswer.status === 422 && badAnswer.data.ok === false, 'answer to an unknown question is a 422');
   ok((await api('POST', '/mia/answer', { text: 'Yes' })).status === 400, 'answer without questionId is a 400');
+  ok((await api('POST', '/mia/dismiss', {})).status === 400, 'dismiss with no ids and no old:true is a 400');
+  const badDismiss = await api('POST', '/mia/dismiss', { questionId: 'q_nope' });
+  ok(badDismiss.status === 422 && badDismiss.data.ok === false, 'dismissing an unknown question is a 422');
+  const noOld = await api('POST', '/mia/dismiss', { old: true });
+  ok(noOld.status === 422 && /No old questions/.test(noOld.data.detail || noOld.data.error || ''), 'dismiss old:true with none old is a 422');
   const answer = await api('POST', '/mia/answer', { questionId: 'q_seed1', text: 'Whole app' });
   ok(answer.status === 200 && answer.data.ok, 'answer acks ok');
   const task = await api('POST', '/mia/tasks', { title: 'Renew the SSL cert', detail: 'expires Friday', dir: '/Users/demo/tools', priority: 1 });

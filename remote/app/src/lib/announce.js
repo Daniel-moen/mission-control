@@ -280,6 +280,14 @@ export function announce(msg) {
 
 const msgMs = (at) => (typeof at === 'number' ? (at > 1e12 ? at : at * 1000) : Date.parse(at) || 0);
 
+// A question worth reading out: not dismissed/expired, not past the max age.
+function questionLive(m) {
+  const mia = getMC().mia;
+  if (mia?.closedQuestions?.[m.questionId]) return false;
+  const h = mia?.questionMaxAgeHours;
+  return !h || Date.now() - msgMs(m.at) <= h * 3600e3;
+}
+
 // Called with each new snapshot's messages (TalkHost). History present when
 // the panel first sees Mia is never announced.
 let seen = null;
@@ -294,6 +302,7 @@ export function considerMessages(msgs) {
     if (seen.has(k)) continue;
     seen.add(k);
     if (!wantsAnnounce(m)) continue;
+    if (m.kind === 'question' && !questionLive(m)) continue; // old or already closed
     if (getTalk().on) continue; // the talk session reads it out itself
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') continue;
     if (!getMC().panelPrimary) continue;

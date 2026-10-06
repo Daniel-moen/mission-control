@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useShallow } from 'zustand/react/shallow';
-import { useMC, attentionList, agentName, reply, kill, sendKey } from '../../lib/store.js';
+import { useMC, attentionList, agentName, reply, kill, sendKey, miaOldQuestions } from '../../lib/store.js';
+import { fmtAge } from '../../lib/format.js';
 import { spring, ease } from '../../lib/motion.js';
 import Icon from '../../ui/Icon.jsx';
 import Answer from '../mia/Answer.jsx';
+import { DismissButton, Swipeable, OldQuestionsBar } from '../mia/Dismiss.jsx';
 
 // Bottom-left stack: every agent that needs a human, each as a frosted card
 // with INLINE answers — the parsed menu options as tappable pills — so most
@@ -36,33 +38,44 @@ function Pill({ tone = 'neutral', onClick, children, title }) {
 }
 
 // A question from Mia — same frosted card, her options as pills. Answering
-// sends miaAnswer; the card leaves as soon as the answer is echoed.
+// sends miaAnswer; the card leaves as soon as the answer is echoed. The X (or
+// a sideways swipe) dismisses it: gone everywhere, and Mia stops waiting.
+// Old questions (past the max age) only show here when Daniel asks to see them.
 function MiaCard({ item, onOpenMia }) {
   const q = item.question;
+  const asked = Date.parse(q.askedAt);
   return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, y: 14, scale: 0.98 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: 8, scale: 0.98 }}
-      transition={spring.smooth}
-      className="glass w-full p-4"
-    >
-      <button onClick={() => onOpenMia?.()} className="flex w-full items-start gap-2.5 text-left">
-        <span className="mt-1.5 h-2 w-2 flex-none rounded-full bg-warn" />
-        <span className="min-w-0 flex-1">
-          <span className="flex items-baseline gap-2">
-            <span className="truncate text-[14px] font-semibold tracking-tight text-ink">Mia</span>
-            {q.taskId && <span className="truncate font-mono text-[11px] text-ink3">#{q.taskId}</span>}
-          </span>
-          <span className="mt-0.5 block line-clamp-3 text-[12.5px] leading-snug text-ink2">{q.text || 'Mia has a question'}</span>
-        </span>
-        <Icon name="chevronRight" size={15} className="mt-1 flex-none text-ink3" />
-      </button>
-      <div className="mt-3">
-        <Answer question={q} />
-      </div>
-    </motion.div>
+    <Swipeable questionId={q.questionId}>
+      <motion.div
+        layout
+        initial={{ opacity: 0, y: 14, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 8, scale: 0.98 }}
+        transition={spring.smooth}
+        data-question={q.questionId}
+        className="glass w-full p-4"
+      >
+        <div className="flex items-start gap-1">
+          <button onClick={() => onOpenMia?.()} className="flex min-w-0 flex-1 items-start gap-2.5 text-left">
+            <span className={`mt-1.5 h-2 w-2 flex-none rounded-full ${item.old ? 'bg-ink3' : 'bg-warn'}`} />
+            <span className="min-w-0 flex-1">
+              <span className="flex items-baseline gap-2">
+                <span className="truncate text-[14px] font-semibold tracking-tight text-ink">Mia</span>
+                {q.taskId && <span className="truncate font-mono text-[11px] text-ink3">#{q.taskId}</span>}
+                {item.old && Number.isFinite(asked) && (
+                  <span className="truncate text-[11px] text-ink3">asked {fmtAge(Date.now() - asked)} ago</span>
+                )}
+              </span>
+              <span className="mt-0.5 block line-clamp-3 text-[12.5px] leading-snug text-ink2">{q.text || 'Mia has a question'}</span>
+            </span>
+          </button>
+          <DismissButton questionId={q.questionId} className="-mr-1.5 -mt-1.5" />
+        </div>
+        <div className="mt-3">
+          <Answer question={q} />
+        </div>
+      </motion.div>
+    </Swipeable>
   );
 }
 
@@ -143,7 +156,9 @@ export default function AttentionCards({ onOpen, onOpenMia }) {
   const agents = useMC(useShallow((s) => s.agents));
   const mia = useMC((s) => s.mia);
   useMC((s) => s.miaLocal); // an answer given here drops its card at once
-  const items = attentionList(agents, mia);
+  const [showOld, setShowOld] = useState(false);
+  const old = showOld ? miaOldQuestions(mia).map((q) => ({ kind: 'mia', old: true, key: `mia-old:${q.questionId}`, question: q })) : [];
+  const items = [...attentionList(agents, mia), ...old];
   const [expanded, setExpanded] = useState(false);
 
   // Two-tap clear for an exited session: the first tap arms for 3s.
@@ -193,6 +208,8 @@ export default function AttentionCards({ onOpen, onOpenMia }) {
             {expanded ? 'Show less' : `+${more} more`}
           </button>
         )}
+
+        <OldQuestionsBar shown={showOld} onToggle={() => setShowOld((v) => !v)} />
       </div>
     </div>
   );

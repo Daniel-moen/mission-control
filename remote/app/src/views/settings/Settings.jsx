@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
-import { useMC, changeToken, forgetToken, dataAge, stopAll, PANEL_BUILD } from '../../lib/store.js';
+import { useMC, changeToken, forgetToken, dataAge, stopAll, PANEL_BUILD, miaSetQuestionAge } from '../../lib/store.js';
 import { useNow } from '../../lib/hooks.js';
 import Sheet from '../../ui/Sheet.jsx';
 import Button from '../../ui/Button.jsx';
@@ -183,6 +183,37 @@ function VoiceSection() {
   );
 }
 
+// How long an unanswered Mia question stays on show. Older ones are hidden
+// from badges, the home stack and read-aloud (never deleted); the value lives
+// on the Mac (questions.json) so every panel and `mia status` agree.
+const QUESTION_AGES = [
+  { value: 24, label: '24 h' },
+  { value: 48, label: '48 h' },
+  { value: 168, label: '7 d' },
+  { value: 0, label: 'Never' },
+];
+function QuestionsSection() {
+  const saved = useMC((s) => s.mia?.questionMaxAgeHours ?? null);
+  const [picked, setPicked] = useState(null);
+  useEffect(() => setPicked(null), [saved]);
+  if (saved == null) return null; // Mia off, or a Mac before this setting
+  const value = picked ?? saved;
+  const options = QUESTION_AGES.some((o) => o.value === saved) ? QUESTION_AGES : [...QUESTION_AGES, { value: saved, label: `${saved} h` }];
+  return (
+    <Section title="Mia's questions">
+      <Row label="Hide unanswered after" hint="Old questions leave badges and the home screen and aren't read aloud. Nothing is deleted." last>
+        <Segmented
+          options={options}
+          value={value}
+          onChange={(v) => {
+            if (v !== value && miaSetQuestionAge(v)) setPicked(v);
+          }}
+        />
+      </Row>
+    </Section>
+  );
+}
+
 export default function Settings({ onClose }) {
   const token = useMC((s) => s.token);
   const link = useMC((s) => s.link);
@@ -272,6 +303,7 @@ export default function Settings({ onClose }) {
 
         <VoiceSection />
         <AnnounceSection Section={Section} Row={Row} />
+        <QuestionsSection />
 
         <Section title="Modes">
           <Row label="TV mode" hint="Ambient fleet display for a big screen — or open #tv directly">

@@ -1,12 +1,13 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { useMC, miaSend, miaRead, miaAnswerFor, miaStart, voiceText } from '../../lib/store.js';
+import { useMC, miaSend, miaRead, miaAnswerFor, miaQuestionState, miaDismiss, miaStart, voiceText, fmtQuestionAge } from '../../lib/store.js';
 import { spring, press } from '../../lib/motion.js';
 import Icon from '../../ui/Icon.jsx';
 import Button from '../../ui/Button.jsx';
 import EmptyState from '../../ui/EmptyState.jsx';
 import MicField from '../agent/MicField.jsx';
 import Answer from './Answer.jsx';
+import { DismissButton, OldQuestionsBar } from './Dismiss.jsx';
 import Progress from '../../ui/Progress.jsx';
 import {
   pickFiles, stageFiles, unstage, sendStaged, retryUpload, dismissUpload, fmtSize, fileIcon, MAX_BYTES,
@@ -120,7 +121,8 @@ export function MessageRow({ m, head, mia, onTask, pending, upload, showCaption 
   const isQ = m.kind === 'question';
   const isNotify = m.kind === 'notify';
   const open = isQ && m.questionId && mia.openIds.has(m.questionId);
-  const answer = isQ && !open ? miaAnswerFor(mia.block, m.questionId, mia.local) : null;
+  const qState = isQ && !open ? miaQuestionState(mia.block, m.questionId, mia.local) : null;
+  const answer = qState === 'answered' ? miaAnswerFor(mia.block, m.questionId, mia.local) : null;
   const said = voiceText(m.text);
 
   const rule = isNotify
@@ -145,7 +147,10 @@ export function MessageRow({ m, head, mia, onTask, pending, upload, showCaption 
         {(isNotify || isQ) && (
           <div className={`mb-0.5 flex items-center gap-1.5 text-[11px] font-medium ${isNotify ? (m.urgent ? 'text-warn' : 'text-accent') : open ? 'text-warn' : 'text-ink3'}`}>
             <Icon name={isNotify ? 'bell' : 'chat'} size={11} />
-            {isNotify ? (m.urgent ? 'Urgent' : 'Update') : open ? 'Question' : 'Asked'}
+            {isNotify ? (m.urgent ? 'Urgent' : 'Update') : open ? 'Question' : qState === 'old' ? 'Old question' : 'Asked'}
+            {isQ && (open || qState === 'old') && m.questionId && (
+              <DismissButton questionId={m.questionId} className="-my-2 ml-auto" />
+            )}
           </div>
         )}
         {isFile ? (
@@ -176,14 +181,21 @@ export function MessageRow({ m, head, mia, onTask, pending, upload, showCaption 
             </div>
           ) : (
             <div className="mt-1.5 flex items-start gap-1.5 text-[13px] leading-snug text-ink2">
-              <Icon name="check" size={14} className="mt-[2px] flex-none text-ink3" />
+              <Icon name={qState === 'answered' || qState == null ? 'check' : 'close'} size={14} className="mt-[2px] flex-none text-ink3" />
               {answer != null ? (
                 <span className="min-w-0 break-words">
                   <span className="text-ink3">You answered · </span>
                   {voiceText(answer).text}
                 </span>
+              ) : qState === 'old' ? (
+                <span className="text-ink3">
+                  Hidden — unanswered for over {fmtQuestionAge(mia.block?.questionMaxAgeHours) || 'a while'}.{' '}
+                  <button onClick={() => miaDismiss(m.questionId)} className="font-medium text-ink2 underline-offset-2 hover:text-ink hover:underline">
+                    Dismiss
+                  </button>
+                </span>
               ) : (
-                <span className="text-ink3">Closed</span>
+                <span className="text-ink3">{qState === 'dismissed' ? 'Dismissed' : qState === 'expired' ? 'Expired' : 'Closed'}</span>
               )}
             </div>
           ))}
@@ -212,8 +224,13 @@ export default function Thread({ mia, active = true, onTask }) {
   const pageVisible = usePageVisible();
 
   const openIds = useMemo(
-    () => new Set(mia.pendingQuestions.map((q) => q.questionId).filter((id) => id && !(id in local.answered))),
-    [mia.pendingQuestions, local.answered],
+    () =>
+      new Set(
+        mia.pendingQuestions
+          .map((q) => q.questionId)
+          .filter((id) => id && !(id in local.answered) && !(id in (local.dismissed || {}))),
+      ),
+    [mia.pendingQuestions, local.answered, local.dismissed],
   );
 
   // Rows: the thread, minus answer lines whose question is on screen (the
@@ -334,6 +351,8 @@ export default function Thread({ mia, active = true, onTask }) {
           </Button>
         </div>
       )}
+
+      <OldQuestionsBar className="mx-4 mb-2 flex-none sm:mx-5" />
 
       <div
         ref={scroller}

@@ -1153,13 +1153,206 @@ def cmd_uploads(args):
                                           r.get("mime", ""), p, batch, note, gone))
 
 
-def open_questions():
+# ---- questions ---------------------------------------------------------------
+# A question is open until Daniel answers it, he dismisses it from the panel,
+# or it is closed here (`mia question dismiss|expire`). Closures live in
+# questions.json — {"maxAgeHours": 48, "closed": {qid: {state, at, by}}} — so
+# the history in messages.jsonl is never rewritten. Open questions older than
+# maxAgeHours are "old": hidden from the panel, badges, read-aloud and
+# `mia status` (unless --all), but still answerable and never deleted.
+# The app (MiaManager.swift, MiaQuestions.swift) reads the same file.
+
+QUESTIONS = os.path.join(D, "questions.json")
+DEFAULT_MAX_AGE_HOURS = 48
+
+
+def load_qstate():
+    s = read_json(QUESTIONS)
+    if not isinstance(s, dict):
+        s = {}
+    if not isinstance(s.get("closed"), dict):
+        s["closed"] = {}
+    try:
+        s["maxAgeHours"] = max(0.0, float(s.get("maxAgeHours", DEFAULT_MAX_AGE_HOURS)))
+    except (TypeError, ValueError):
+        s["maxAgeHours"] = float(DEFAULT_MAX_AGE_HOURS)
+    return s
+
+
+def save_qstate(s):
+    h = s["maxAgeHours"]
+    s["maxAgeHours"] = int(h) if h == int(h) else h
+    write_json(QUESTIONS, s)
+
+
+def parse_iso(v):
+    try:
+        return datetime.datetime.strptime(v, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def q_age_hours(q, now=None):
+    at = parse_iso(q.get("at"))
+    if at is None:
+        return 0.0
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    return (now - at).total_seconds() / 3600.0
+
+
+def parse_hours(s):
+    """48h, 2d, 90m, 1w, or a bare number of hours → hours (float)."""
+    m = re.match(r"^\s*(\d+(?:\.\d+)?)\s*([mhdw]?)\s*$", str(s or "").lower())
+    if not m:
+        die("bad duration %r (try 48h, 2d, 90m)" % s)
+    n = float(m.group(1))
+    return n * {"m": 1 / 60.0, "h": 1, "": 1, "d": 24, "w": 168}[m.group(2)]
+
+
+def fmt_hours(h):
+    if h <= 0:
+        return "never"
+    if h >= 24 and h % 24 == 0:
+        return "%dd" % (h // 24)
+    return ("%dh" % h) if h == int(h) else ("%gh" % h)
+
+
+def all_open_questions(qs=None):
+    """Every unanswered, unclosed question, oldest first."""
+    qs = qs or load_qstate()
     msgs = read_jsonl(MSGS)
     answered = set(m.get("questionId") for m in msgs if m.get("kind") == "answer")
-    return [m for m in msgs if m.get("kind") == "question" and m.get("questionId") not in answered]
+    closed = qs["closed"]
+    return [m for m in msgs if m.get("kind") == "question" and m.get("questionId")
+            and m["questionId"] not in answered and m["questionId"] not in closed]
+
+
+def split_old(open_qs, max_age):
+    if max_age <= 0:
+        return open_qs, []
+    fresh = [q for q in open_qs if q_age_hours(q) <= max_age]
+    old = [q for q in open_qs if q_age_hours(q) > max_age]
+    return fresh, old
+
+
+def close_questions(ids, state, by):
+    """Mark questions dismissed/expired (and their task records). Returns the
+    ids actually closed; already answered/closed/unknown ids are skipped."""
+    done = []
+    with Lock():
+        qs = load_qstate()
+        open_by_id = dict((q["questionId"], q) for q in all_open_questions(qs))
+        at = now_iso()
+        touched = {}
+        for qid in ids:
+            q = open_by_id.get(qid)
+            if not q:
+                continue
+            qs["closed"][qid] = {"state": state, "at": at, "by": by}
+            done.append(qid)
+            if q.get("taskId"):
+                touched.setdefault(q["taskId"], []).append(qid)
+        if done:
+            save_qstate(qs)
+        for tid, qids in touched.items():
+            t = read_json(task_path(tid))
+            if not isinstance(t, dict):
+                continue
+            for rec in t.get("questions") or []:
+                if rec.get("id") in qids:
+                    rec[state + "At"] = at
+            still = [r for r in t.get("questions") or []
+                     if r.get("answer") is None and not r.get("dismissedAt") and not r.get("expiredAt")]
+            if t.get("status") == "asking" and not still:
+                t["status"] = "queued"
+            t.setdefault("log", []).append({"at": at, "text": "%s question%s %s" % (
+                state.capitalize(), "s" if len(qids) > 1 else "", ", ".join(qids))})
+            save_task(t)
+    return done
+
+
+def q_line(q, now=None):
+    tag = " (task %s)" % q["taskId"] if q.get("taskId") else ""
+    opts = "  [%s]" % " | ".join(q.get("options") or []) if q.get("options") else ""
+    return "  %s%s %s%s  · %s ago" % (q.get("questionId"), tag, q.get("text", ""), opts,
+                                      fmt_age(q_age_hours(q, now)))
+
+
+def fmt_age(h):
+    if h < 1:
+        return "%dm" % max(0, round(h * 60))
+    if h < 48:
+        return "%dh" % round(h)
+    return "%dd" % round(h / 24)
+
+
+def cmd_question(args):
+    if not args or args[0] in ("help", "-h", "--help"):
+        die("question needs: list|dismiss|expire|max-age (see mia help)")
+    sub, rest = args[0], args[1:]
+    if sub == "list":
+        pos, o = parse(rest, {"--all": False, "--json": False})
+        qs = load_qstate()
+        fresh, old = split_old(all_open_questions(qs), qs["maxAgeHours"])
+        rows = fresh + old if o.get("--all") else fresh
+        if o.get("--json"):
+            out = [dict(id=q["questionId"], taskId=q.get("taskId"), text=q.get("text", ""),
+                        options=q.get("options") or [], askedAt=q.get("at"),
+                        old=q in old) for q in rows]
+            print(json.dumps(out, indent=2, ensure_ascii=False))
+            return
+        if not rows:
+            print("(no open questions)")
+        for q in rows:
+            print(q_line(q) + ("  [old]" if q in old else ""))
+        if old and not o.get("--all"):
+            print("(+%d older than %s hidden — mia question list --all)" % (len(old), fmt_hours(qs["maxAgeHours"])))
+    elif sub == "dismiss":
+        pos, o = parse(rest, {})
+        ids = [x.strip() for x in pos if x.strip()]
+        if not ids:
+            die("usage: mia question dismiss <question-id>…")
+        done = close_questions(ids, "dismissed", "mia")
+        for qid in ids:
+            print("%s\t%s" % (qid, "dismissed" if qid in done else "not open (answered, closed or unknown)"))
+        if not done:
+            sys.exit(1)
+    elif sub == "expire":
+        pos, o = parse(rest, {"--older-than": True, "--dry-run": False})
+        if pos:
+            die("usage: mia question expire [--older-than 48h] [--dry-run]")
+        qs = load_qstate()
+        h = parse_hours(o["--older-than"]) if "--older-than" in o else qs["maxAgeHours"]
+        if h <= 0:
+            die("--older-than must be more than 0")
+        old = [q for q in all_open_questions(qs) if q_age_hours(q) > h]
+        if o.get("--dry-run"):
+            for q in old:
+                print(q_line(q))
+            print("would expire %d question%s" % (len(old), "" if len(old) == 1 else "s"))
+            return
+        done = close_questions([q["questionId"] for q in old], "expired", "mia")
+        print("expired %d question%s older than %s%s" % (len(done), "" if len(done) == 1 else "s",
+                                                       fmt_hours(h), (": " + " ".join(done)) if done else ""))
+    elif sub == "max-age":
+        pos, o = parse(rest, {})
+        if not pos:
+            print(fmt_hours(load_qstate()["maxAgeHours"]))
+            return
+        if len(pos) != 1:
+            die("usage: mia question max-age [<48h|3d|never>]")
+        h = 0.0 if pos[0].lower() in ("never", "off", "0") else parse_hours(pos[0])
+        with Lock():
+            qs = load_qstate()
+            qs["maxAgeHours"] = h
+            save_qstate(qs)
+        print("old questions: %s" % ("never hidden" if h <= 0 else "hidden after " + fmt_hours(h)))
+    else:
+        die("unknown question command: %s (try: mia help)" % sub)
 
 
 def cmd_status(args):
+    pos, o = parse(args, {"--all": False})
     st = read_json(STATE, {}) or {}
     if st:
         print("Mia: %s · model %s · restarts %s" % (
@@ -1183,12 +1376,15 @@ def cmd_status(args):
         closed.sort(key=lambda t: t.get("updatedAt", ""), reverse=True)
         for t in closed[:3]:
             print("  %s  %-9s      %s" % (t.get("id"), t.get("status"), t.get("title", "")))
-    qs = open_questions()
-    print("Open questions: %s" % ("none" if not qs else len(qs)))
-    for q in qs:
-        tag = " (task %s)" % q["taskId"] if q.get("taskId") else ""
-        opts = "  [%s]" % " | ".join(q.get("options") or []) if q.get("options") else ""
-        print("  %s%s %s%s" % (q.get("questionId"), tag, q.get("text", ""), opts))
+    qst = load_qstate()
+    fresh, old = split_old(all_open_questions(qst), qst["maxAgeHours"])
+    shown = fresh + old if o.get("--all") else fresh
+    print("Open questions: %s" % ("none" if not shown else len(shown)))
+    for q in shown:
+        print(q_line(q) + ("  [old]" if q in old else ""))
+    if old and not o.get("--all"):
+        print("  (+%d older than %s hidden — `mia status --all`, or clear them: `mia question expire`)"
+              % (len(old), fmt_hours(qst["maxAgeHours"])))
     s = read_json(SCHED)
     if isinstance(s, dict):
         rs = [r for r in s.get("reminders", []) if not r.get("fired")]
@@ -1331,7 +1527,15 @@ HELP = """mia — Mia's line to Daniel and the Mission Control task list.
   mia panel close                                   close the viewer
   mia inbox [-n 50]                                 recent system events
   mia uploads [-n 20] [--json]                      files Daniel sent from the panel (newest last)
-  mia status                                        tasks, open questions, reminders
+  mia question list [--all] [--json]               open questions (--all: old ones too)
+  mia question dismiss <question-id>…               close questions that no longer matter
+  mia question expire [--older-than 48h] [--dry-run]
+                                                    close every open question older than that
+                                                    (default: the max age below)
+  mia question max-age [<48h|3d|never>]             show/set when open questions count as old
+                                                    (old = hidden from Daniel; never deleted)
+  mia status [--all]                                tasks, open questions, reminders
+                                                    (--all: old questions too)
   mia help
 
 Statuses: queued, asking, running, checking, done, failed, cancelled.
@@ -1346,7 +1550,8 @@ def main(argv):
     table = {"say": cmd_say, "notify": cmd_notify, "ask": cmd_ask, "task": cmd_task,
              "dispatch": cmd_dispatch, "tell": cmd_tell, "remind": cmd_remind,
              "heartbeat": cmd_heartbeat, "inbox": cmd_inbox, "status": cmd_status,
-             "panel": cmd_panel, "uploads": cmd_uploads}
+             "panel": cmd_panel, "uploads": cmd_uploads,
+             "question": cmd_question, "questions": cmd_question}
     if cmd not in table:
         die("unknown command: %s (try: mia help)" % cmd)
     table[cmd](rest)
@@ -1392,7 +1597,12 @@ mia heartbeat set <id> (--every <min>|--at HH:MM) [--label <l>] [--prompt <p>]
 mia heartbeat enable|disable|remove <id>
 mia inbox [-n 50]                                 recent events delivered to Mia
 mia uploads [-n 20] [--json]                      files Daniel sent from the panel
-mia status                                        tasks, open questions, reminders
+mia status [--all]                                tasks, open questions, reminders
+                                                  (--all: old questions too)
+mia question list [--all] [--json]                open questions (--all: old ones too)
+mia question dismiss <q_id>…                      close questions that no longer matter
+mia question expire [--older-than 48h] [--dry-run]   close every open question older than that
+mia question max-age [<48h|3d|never>]             when an open question counts as old
 ```
 
 Statuses: `queued → asking → running → checking → done | failed | cancelled`.
@@ -1437,6 +1647,22 @@ the panel; he scrolls it himself, `scroll` can't reach into another site) or
 `— card …` (the site forbids framing, e.g. Property24: he sees its title,
 photos, summary and an Open button). Scroll commands act on the viewer while
 it's open, else the open doc, else the main view.
+
+**Old questions**: an unanswered question older than the max age (48 h by
+default; Daniel can change it in the panel's Settings, you with
+`mia question max-age`) is hidden from Daniel: no badge, no home card, not
+read aloud, not in `mia status` (use `--all`). Nothing is deleted; closures
+live in `~/.mission-control/mia/questions.json`. Close questions yourself once
+they're moot — `mia question dismiss q_…` for one you no longer need,
+`mia question expire` (or `--older-than 3d`) to clear stale ones. When Daniel
+dismisses from the panel you get:
+
+```
+[MC] Daniel dismissed q_… (task 0012) — no answer is coming, don't wait on it: "<question>"
+[MC] Daniel dismissed 5 old questions — no answers are coming, don't wait on them: q_…, q_… (task 0012)
+```
+
+Carry on without the answer, or ask again differently if it still matters.
 
 **If you are Mia**: never sleep or poll — end your turn and wait for `[MC]`.
 """#
