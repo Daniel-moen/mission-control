@@ -412,7 +412,8 @@ if (process.env.FAKE_HOST_LIBRARY) {
     docs.set(f, {
       kind: 'research', status: 'done', subject: '', tags: [], dir: '', session: '',
       created: Math.floor(st.mtimeMs / 1000), updatedAt: Math.floor(st.mtimeMs / 1000),
-      content: fs.readFileSync(path.join(process.env.FAKE_HOST_LIBRARY, f), 'utf8'),
+      // The Mac sends the body only (DocLibrary strips the frontmatter).
+      content: fs.readFileSync(path.join(process.env.FAKE_HOST_LIBRARY, f), 'utf8').replace(/^---\n[\s\S]*?\n---\n/, ''),
     });
   }
 }

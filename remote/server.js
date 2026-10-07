@@ -67,6 +67,7 @@ const { createStt } = require('./stt');
 const { createRealtime } = require('./realtime');
 const { createTts } = require('./tts');
 const { createUpload } = require('./upload');
+const { createDocAssets } = require('./docassets');
 
 const PORT = process.env.PORT || 8080;
 const TOKEN = process.env.MC_TOKEN || '';
@@ -144,11 +145,28 @@ function serveFile(res, filePath, { immutable = false } = {}) {
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://x');
-  const pathname = decodeURIComponent(url.pathname);
+  let pathname;
+  try {
+    pathname = decodeURIComponent(url.pathname);
+  } catch {
+    res.writeHead(400, { 'content-type': 'text/plain' });
+    res.end('bad path');
+    return;
+  }
 
   if (pathname === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, host: host !== null, viewers: viewers.size, pollers: pollers.size, pushSubscriptions: push.count(), stt: stt.info().provider, realtime: realtime.info(), tts: tts.info(), uploads: upload.info() }));
+    res.end(JSON.stringify({ ok: true, host: host !== null, viewers: viewers.size, pollers: pollers.size, pushSubscriptions: push.count(), stt: stt.info().provider, realtime: realtime.info(), tts: tts.info(), uploads: upload.info(), docAssets: docAssets.info().bytes }));
+    return;
+  }
+
+  // Images for Library docs (token-auth, pushed by `mc-doc attach`) — see docassets.js.
+  if (url.pathname.startsWith('/api/v1/doc-assets/')) {
+    docAssets.handle(req, res, url).catch((err) => {
+      console.error('doc-assets error:', err);
+      if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'internal error' }));
+    });
     return;
   }
 
@@ -377,6 +395,16 @@ const thumbs = createThumbs({
     process.env.THUMB_CACHE ||
     (process.env.RAILWAY_VOLUME_MOUNT_PATH ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'thumb-cache') : undefined),
   maxBytes: (Number(process.env.THUMB_CACHE_MB) || 200) * 1024 * 1024,
+});
+
+// Library doc images (docassets.js): on the Railway volume, like the thumb
+// cache; a local run uses the OS temp dir.
+const docAssets = createDocAssets({
+  tokenOk,
+  dir:
+    process.env.DOC_ASSETS ||
+    (process.env.RAILWAY_VOLUME_MOUNT_PATH ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'doc-assets') : undefined),
+  maxTotalBytes: (Number(process.env.DOC_ASSETS_MB) || 2048) * 1024 * 1024,
 });
 
 const api = createApi({

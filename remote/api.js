@@ -229,6 +229,8 @@ function createApi({
       'GET  /api/v1/thumb?url=https://…': 'the first photo of that page (og:image), as image bytes, small where the CDN allows; 204 when it has none. Cached 7 days',
       'GET  /api/v1/thumb/stats': 'thumbnail cache and upstream limiter counters',
       'GET  /api/v1/img?url=https://…': 'an image a doc embeds, proxied and cached (raster only)',
+      'GET  /api/v1/doc-assets/:stem/': 'the images a Library doc has (pushed by mc-doc attach/sync): name, bytes, sha256',
+      'GET  /api/v1/doc-assets/:stem/:name[?size=thumb]': 'one doc image (thumb = the small copy, else the full one); PUT raw bytes to store, DELETE to remove',
       'GET  /api/v1/mia': 'Mia, the assistant: status, conversation, tasks, pending questions, schedule',
       'POST /api/v1/mia/message {text}': 'send Mia a chat message',
       'POST /api/v1/mia/answer {questionId, text}': 'answer one of Mia\'s pending questions',

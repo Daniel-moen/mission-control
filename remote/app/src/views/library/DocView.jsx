@@ -153,7 +153,7 @@ export default function DocView({ docId, startEditing = false, onClose, onLaunch
   }
 
   const title = meta?.title || doc?.title || kindLabel(kind);
-  const html = useMemo(() => (doc ? renderMarkdown(doc.content) : ''), [doc]);
+  const html = useMemo(() => (doc ? renderMarkdown(doc.content, { docId }) : ''), [doc, docId]);
   const [article, setArticle] = useState(null);
   useDocImages(article, html);
   const launchLabel = kind === 'plan' ? 'Build' : 'Continue';

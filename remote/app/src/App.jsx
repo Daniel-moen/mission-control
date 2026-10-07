@@ -15,6 +15,8 @@ import CommandPalette from './shell/CommandPalette.jsx';
 import Toast from './ui/Toast.jsx';
 import TalkHost from './shell/TalkHost.jsx';
 import Viewer from './shell/Viewer.jsx';
+import Lightbox from './shell/Lightbox.jsx';
+import { lightboxOpen, closeLightbox } from './lib/lightbox.js';
 import MiniMia from './shell/MiniMia.jsx';
 import { startTalk } from './lib/talkSession.js';
 
@@ -286,7 +288,8 @@ export default function App() {
       }
       if (e.key === 'Escape') {
         // One handler, one close — the topmost overlay and nothing else.
-        if (tvOn || carOn) location.hash = '';
+        if (lightboxOpen()) closeLightbox();
+        else if (tvOn || carOn) location.hash = '';
         else if (palette) setPalette(false);
         else if (useMC.getState().viewer) closeViewer();
         else if (console_) setConsole(null);
@@ -509,6 +512,7 @@ export default function App() {
         onOpenDoc={(id) => setOpenDoc({ id, edit: false })}
       />
       <Viewer />
+      <Lightbox />
       {/* Mia from anywhere but her own view (the viewer over it still counts
           as elsewhere); out of the way of sheets, the palette and the console. */}
       <MiniMia

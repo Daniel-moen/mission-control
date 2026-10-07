@@ -174,7 +174,7 @@ normalize_tags() {
     END { printf "%s", out }'
 }
 
-trim() { printf '%s' "$1" | sed -e 's/^[ \t]*//' -e 's/[ \t]*$//'; }
+trim() { printf '%s' "$1" | sed -e 's/^[[:blank:]]*//' -e 's/[[:blank:]]*$//'; }
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
@@ -211,9 +211,10 @@ replace_file() {
 require_val() { [ $# -ge 2 ] && [ -n "${2:-}" ] || die "$1 needs a value"; }
 
 cmd_new() {
-  local kind="" title="" subject="" tags="" dir="" bodyfile="" stdin=0
+  local kind="" title="" subject="" tags="" dir="" bodyfile="" stdin=0 base=""
   while [ $# -gt 0 ]; do
     case "$1" in
+      --assets-from) require_val "$1" "${2:-}"; base=$2; shift 2 ;;
       --kind) require_val "$1" "${2:-}"; kind=$2; shift 2 ;;
       --title) require_val "$1" "${2:-}"; title=$2; shift 2 ;;
       --subject) subject=${2:-}; shift 2 ;;
@@ -246,6 +247,9 @@ cmd_new() {
     printf '# %s\n\n' "$title" >"$body_tmp"
   fi
   finalize_body_file "$body_tmp"
+  # Local image refs (./photo.jpg, ~/x.png) are attached and rewritten to assets/.
+  [ -n "$base" ] || { [ -n "$bodyfile" ] && base=$(dirname "$bodyfile") || base=$PWD; }
+  resolve_refs "$id" "$body_tmp" "$base"
 
   F_kind=$kind
   F_status=draft
@@ -255,6 +259,7 @@ cmd_new() {
   F_session=""
   F_created=$(now_iso)
   emit_doc "$body_tmp" | replace_file "$id"
+  sync_assets "$id"
   printf '%s\n' "$LIB/$id"
 }
 
@@ -341,9 +346,10 @@ cmd_set() {
 cmd_write() {
   local id="${1:-}"; shift || true
   require_id "$id"
-  local bodyfile="" stdin=0
+  local bodyfile="" stdin=0 base=""
   while [ $# -gt 0 ]; do
     case "$1" in
+      --assets-from) require_val "$1" "${2:-}"; base=$2; shift 2 ;;
       --stdin) stdin=1; shift ;;
       --body-file) require_val "$1" "${2:-}"; bodyfile=$2; shift 2 ;;
       *) die "unknown flag: $1" ;;
@@ -361,8 +367,337 @@ cmd_write() {
     die "write needs --stdin or --body-file"
   fi
   finalize_body_file "$body_tmp"
+  [ -n "$base" ] || { [ -n "$bodyfile" ] && base=$(dirname "$bodyfile") || base=$PWD; }
+  resolve_refs "$id" "$body_tmp" "$base"
   # Frontmatter is preserved verbatim — only the body changes.
   { get_head "$id"; cat "$body_tmp"; } | replace_file "$id"
+  sync_assets "$id"
+}
+
+# ---------------------------------------------------------------------------
+# Images (task 0124). A doc's pictures live next to it in <stem>.assets/ and
+# the body points at them relatively: ![alt](assets/photo.jpg "Tag | caption").
+# The Mac app lists only *.md, so the folder is invisible to it. Attaching
+# shrinks big photos (max ${MC_DOC_IMG_MAX:-1600} px, JPEG) and keeps a small
+# copy in .thumbs/ for the panel's inline view; then the files are pushed to
+# the relay (the panel can't read the Mac's disk), which serves them under the
+# same token as the docs. Pushing is skipped quietly when no relay is set up.
+
+IMG_MAX=${MC_DOC_IMG_MAX:-1600}
+THUMB_MAX=${MC_DOC_THUMB_MAX:-800}
+KEEP_JPEG_BYTES=1572864   # a JPEG this small and within IMG_MAX is kept as-is
+KEEP_PNG_BYTES=1048576    # same for PNG (screenshots, diagrams stay crisp)
+MAX_SRC_BYTES=104857600   # refuse anything over 100 MB outright
+MAX_GIF_BYTES=12582912    # GIFs are copied verbatim (animation), so cap them
+
+assets_dir() { printf '%s/%s.assets' "$LIB" "${1%.md}"; }
+
+valid_asset_name() {
+  case "$1" in
+    ""|.*|*/*|*\\*|*..*) return 1 ;;
+  esac
+  printf '%s' "$1" | grep -Eq '^[a-z0-9][a-z0-9._-]*\.(jpg|png|gif)$'
+}
+
+# sips property ($2) of image $1, or "" if it isn't an image sips can read.
+img_prop() { sips -g "$2" "$1" 2>/dev/null | awk -v k="$2" '$1==k":" && $2!="<nil>" { print $2; exit }'; }
+
+file_bytes() { stat -f %z "$1" 2>/dev/null || wc -c <"$1" | tr -d ' '; }
+
+# The asset name for source file $1 (or the --name $2), extension $3.
+asset_name_for() {
+  local base="${2:-$(basename "$1")}" stem
+  stem=${base%.*}
+  [ "$stem" != "" ] || stem=$base
+  stem=$(slugify "$stem")
+  printf '%s.%s' "$stem" "$3"
+}
+
+# Copy image $1 into the doc's assets as name $3 (format $4), shrinking it.
+# Writes the full copy and, when it is bigger than THUMB_MAX, a thumb.
+store_image() {
+  local src="$1" adir="$2" name="$3" fmt="$4" w="$5" h="$6" bytes="$7"
+  local max=$w; [ "$h" -gt "$max" ] && max=$h
+  local tmp; tmp=$(mktemp "$adir/.in.XXXXXX")
+  case "$fmt" in
+    gif) cp "$src" "$tmp" ;;
+    png)
+      if [ "$max" -le "$IMG_MAX" ] && [ "$bytes" -le "$KEEP_PNG_BYTES" ]; then cp "$src" "$tmp"
+      else sips -s format png -Z "$IMG_MAX" "$src" --out "$tmp" >/dev/null 2>&1 || { rm -f "$tmp"; die "could not convert $src"; }
+      fi ;;
+    jpg)
+      if [ "$max" -le "$IMG_MAX" ] && [ "$bytes" -le "$KEEP_JPEG_BYTES" ] && [ "$(img_prop "$src" format)" = "jpeg" ]; then
+        cp "$src" "$tmp"
+      elif [ "$max" -gt "$IMG_MAX" ]; then
+        sips -s format jpeg -s formatOptions 82 -Z "$IMG_MAX" "$src" --out "$tmp" >/dev/null 2>&1 || { rm -f "$tmp"; die "could not convert $src"; }
+      else
+        sips -s format jpeg -s formatOptions 82 "$src" --out "$tmp" >/dev/null 2>&1 || { rm -f "$tmp"; die "could not convert $src"; }
+      fi ;;
+  esac
+  mv "$tmp" "$adir/$name"
+  chmod 644 "$adir/$name"
+  rm -f "$adir/.thumbs/$name"
+  if [ "$fmt" != gif ] && [ "$max" -gt "$THUMB_MAX" ]; then
+    mkdir -p "$adir/.thumbs"
+    if [ "$fmt" = png ]; then
+      sips -s format png -Z "$THUMB_MAX" "$adir/$name" --out "$adir/.thumbs/$name" >/dev/null 2>&1 || true
+    else
+      sips -s format jpeg -s formatOptions 76 -Z "$THUMB_MAX" "$adir/$name" --out "$adir/.thumbs/$name" >/dev/null 2>&1 || true
+    fi
+    if [ -f "$adir/.thumbs/$name" ]; then chmod 644 "$adir/.thumbs/$name"; fi
+  fi
+  return 0
+}
+
+# Attach one file to doc $1; prints the stored name. $3 = explicit name.
+attach_one() {
+  local id="$1" src="$2" want="${3:-}"
+  [ -f "$src" ] || die "no such file: $src"
+  local bytes; bytes=$(file_bytes "$src")
+  [ "$bytes" -le "$MAX_SRC_BYTES" ] || die "too large (over 100 MB): $src"
+  local sfmt w h fmt
+  sfmt=$(img_prop "$src" format)
+  w=$(img_prop "$src" pixelWidth); h=$(img_prop "$src" pixelHeight)
+  case "$w$h" in ""|*[!0-9]*) sfmt="" ;; esac
+  [ -n "$sfmt" ] || die "not an image this Mac can read: $src"
+  case "$sfmt" in
+    gif) fmt=gif; [ "$bytes" -le "$MAX_GIF_BYTES" ] || die "GIF over 12 MB: $src" ;;
+    png) fmt=png
+         # opaque big PNGs (photos saved as PNG) are far smaller as JPEG
+         if [ "$(img_prop "$src" hasAlpha)" != "yes" ] && [ "$bytes" -gt "$KEEP_PNG_BYTES" ]; then fmt=jpg; fi ;;
+    *) fmt=jpg ;;   # jpeg, heic, tiff, webp, bmp… → JPEG
+  esac
+  local name; name=$(asset_name_for "$src" "$want" "$fmt")
+  valid_asset_name "$name" || die "bad asset name: $name"
+  local adir; adir=$(assets_dir "$id")
+  mkdir -p "$adir"
+  store_image "$src" "$adir" "$name" "$fmt" "$w" "$h" "$bytes"
+  printf '%s\n' "$name"
+}
+
+# Relay URL and token: env first, else the Mission Control app's settings.
+relay_conf() {
+  R_URL=${MC_RELAY_URL:-}
+  R_TOKEN=${MC_TOKEN:-}
+  if [ -z "$R_URL" ] && [ "${MC_DOC_NO_DEFAULTS:-0}" != 1 ]; then
+    R_URL=$(defaults read com.agentwidget.mission-control remoteURL 2>/dev/null || true)
+  fi
+  if [ -z "$R_TOKEN" ] && [ "${MC_DOC_NO_DEFAULTS:-0}" != 1 ]; then
+    R_TOKEN=$(defaults read com.agentwidget.mission-control remoteToken 2>/dev/null || true)
+  fi
+  R_URL=$(trim "$R_URL"); R_URL=${R_URL%/}
+  case "$R_URL" in
+    wss://*) R_URL="https://${R_URL#wss://}" ;;
+    ws://*) R_URL="http://${R_URL#ws://}" ;;
+    http://*|https://*) ;;
+    "") ;;
+    *) R_URL="https://$R_URL" ;;
+  esac
+  R_URL=${R_URL%/ws}
+  R_TOKEN=$(trim "$R_TOKEN")
+  [ -n "$R_URL" ] && [ -n "$R_TOKEN" ]
+}
+
+# Push doc $1's assets to the relay, skipping files it already has.
+# Quiet no-op without a relay (or with MC_DOC_NO_SYNC=1). $2=strict → fail loudly.
+sync_assets() {
+  local id="$1" strict="${2:-}"
+  [ "${MC_DOC_NO_SYNC:-0}" = 1 ] && return 0
+  local adir; adir=$(assets_dir "$id")
+  [ -d "$adir" ] || return 0
+  if ! relay_conf; then
+    [ -n "$strict" ] && die "no relay configured (set MC_RELAY_URL and MC_TOKEN, or the app's Remote settings)"
+    printf 'mc-doc: images kept on this Mac only (no relay configured)\n' >&2
+    return 0
+  fi
+  local stem=${id%.md} have failed=0 pushed=0 f name sha tsha
+  have=$(curl -sS --max-time 20 -H "Authorization: Bearer $R_TOKEN" "$R_URL/api/v1/doc-assets/$stem/" 2>/dev/null || true)
+  case "$have" in *'"ok":true'*) ;; *) have="" ;; esac
+  for f in "$adir"/*; do
+    [ -f "$f" ] || continue
+    name=$(basename "$f")
+    valid_asset_name "$name" || continue
+    sha=$(shasum -a 256 "$f" | awk '{print $1}')
+    tsha=""
+    [ -f "$adir/.thumbs/$name" ] && tsha=$(shasum -a 256 "$adir/.thumbs/$name" | awk '{print $1}')
+    local entry
+    entry=$(printf '%s' "$have" | grep -o "\"name\":\"$name\",\"bytes\":[0-9]*,\"sha256\":\"[0-9a-f]*\",\"thumb\":[^}]*" || true)
+    case "$entry" in *"\"sha256\":\"$sha\""*) ;; *)
+      if curl -sS --fail --max-time 120 -X PUT --data-binary @"$f" -H "Authorization: Bearer $R_TOKEN" \
+           -H 'Content-Type: application/octet-stream' "$R_URL/api/v1/doc-assets/$stem/$name" >/dev/null 2>&1; then
+        pushed=$((pushed+1))
+      else
+        failed=$((failed+1)); printf 'mc-doc: could not push %s to the relay\n' "$name" >&2
+      fi ;;
+    esac
+    if [ -n "$tsha" ]; then
+      case "$entry" in *"\"thumb\":\"$tsha\""*) ;; *)
+        curl -sS --fail --max-time 120 -X PUT --data-binary @"$adir/.thumbs/$name" -H "Authorization: Bearer $R_TOKEN" \
+          -H 'Content-Type: application/octet-stream' "$R_URL/api/v1/doc-assets/$stem/$name?size=thumb" >/dev/null 2>&1 \
+          || { failed=$((failed+1)); printf 'mc-doc: could not push the thumb of %s\n' "$name" >&2; } ;;
+      esac
+    fi
+  done
+  [ "$pushed" -gt 0 ] && printf 'mc-doc: pushed %s image(s) to the relay\n' "$pushed" >&2
+  if [ "$failed" -gt 0 ]; then
+    printf 'mc-doc: %s upload(s) failed; the images are safe on this Mac — run: mc-doc sync %s\n' "$failed" "$id" >&2
+    [ -n "$strict" ] && return 1
+  fi
+  return 0
+}
+
+# The python half of relative-image handling in new/write: list (mode=scan) or
+# rewrite (mode=rewrite, with a "path<TAB>name" map) the local image refs of a
+# markdown body. Fenced code is left alone; http(s)/data refs and ones already
+# under assets/ are not touched (missing assets/ files are reported).
+refs_py() {
+  python3 - "$@" <<'PY'
+import os, re, sys
+from urllib.parse import unquote
+mode, body, base, adir = sys.argv[1:5]
+mp = {}
+if mode == 'rewrite':
+    for line in open(sys.argv[5], encoding='utf-8'):
+        k, _, v = line.rstrip('\n').partition('\t')
+        if k: mp[k] = v
+IMG = re.compile(r'(!\[[^\]\n]*\]\(\s*)(<[^>\n]+>|[^\s)\n]+)((?:\s+"[^"\n]*")?\s*\))')
+def resolve(ref):
+    r = ref[1:-1] if ref.startswith('<') else ref
+    if re.match(r'^(?:[a-z][a-z0-9+.-]*:|#|//)', r, re.I): return None
+    r2 = re.sub(r'^\./', '', r)
+    if r2.startswith('assets/'):
+        if mode == 'scan' and not os.path.isfile(os.path.join(adir, r2[7:])):
+            sys.stderr.write('mc-doc: warning: %s is not attached to this doc (mc-doc attach)\n' % r2)
+        return None
+    for cand in (r, unquote(r)):
+        p = os.path.expanduser(cand)
+        p = os.path.realpath(p if os.path.isabs(p) else os.path.join(base, p))
+        if os.path.isfile(p): return p
+    if mode == 'scan': sys.stderr.write('mc-doc: warning: image not found: %s\n' % r)
+    return None
+text = open(body, encoding='utf-8', errors='surrogateescape').read()
+out, fence, seen = [], None, []
+for line in text.split('\n'):
+    m = re.match(r'^\s*(```+|~~~+)', line)
+    if fence:
+        if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence): fence = None
+        out.append(line); continue
+    if m:
+        fence = m.group(1); out.append(line); continue
+    def sub(mt):
+        p = resolve(mt.group(2))
+        if p is None: return mt.group(0)
+        if mode == 'scan':
+            if p not in seen: seen.append(p)
+            return mt.group(0)
+        name = mp.get(p)
+        return mt.group(1) + 'assets/' + name + mt.group(3) if name else mt.group(0)
+    out.append(IMG.sub(sub, line))
+if mode == 'scan':
+    for p in seen: print(p)
+else:
+    open(body, 'w', encoding='utf-8', errors='surrogateescape').write('\n'.join(out))
+PY
+}
+
+# Attach every local image the body refers to and point the refs at assets/.
+resolve_refs() {
+  local id="$1" body="$2" base="$3"
+  command -v python3 >/dev/null 2>&1 || { printf 'mc-doc: python3 missing; image refs left as written\n' >&2; return 0; }
+  grep -q '!\[' "$body" || return 0
+  local adir; adir=$(assets_dir "$id")
+  local srcs; srcs=$(refs_py scan "$body" "$base" "$adir") || return 0
+  [ -n "$srcs" ] || return 0
+  local map; map=$(mktemp)
+  local src name
+  while IFS= read -r src; do
+    [ -n "$src" ] || continue
+    name=$(attach_one "$id" "$src") || { rm -f "$map"; exit 1; }
+    printf '%s\t%s\n' "$src" "$name" >>"$map"
+    printf 'mc-doc: attached %s as assets/%s\n' "$src" "$name" >&2
+  done <<EOF
+$srcs
+EOF
+  refs_py rewrite "$body" "$base" "$adir" "$map"
+  rm -f "$map"
+  finalize_body_file "$body"
+}
+
+# A ready-to-paste markdown ref for asset $1 (caption $2, tag $3).
+md_ref() {
+  local name="$1" caption="$2" tag="$3" alt title=""
+  alt=${caption:-${name%.*}}
+  alt=$(printf '%s' "$alt" | tr -d '[]')
+  if [ -n "$tag" ] && [ -n "$caption" ]; then title="$tag | $caption"
+  elif [ -n "$tag" ]; then title="$tag |"
+  else title="$caption"; fi
+  title=$(printf '%s' "$title" | tr -d '"')
+  if [ -n "$title" ]; then printf '![%s](assets/%s "%s")\n' "$alt" "$name" "$title"
+  else printf '![%s](assets/%s)\n' "$alt" "$name"; fi
+}
+
+cmd_attach() {
+  local id="${1:-}"; shift || true
+  require_id "$id"
+  local name="" caption="" tag="" nosync=0 files=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --name) require_val "$1" "${2:-}"; name=$2; shift 2 ;;
+      --caption) caption=${2:-}; shift 2 ;;
+      --tag) tag=${2:-}; shift 2 ;;
+      --no-sync) nosync=1; shift ;;
+      --) shift; while [ $# -gt 0 ]; do files+=("$1"); shift; done ;;
+      -*) die "unknown flag: $1" ;;
+      *) files+=("$1"); shift ;;
+    esac
+  done
+  [ ${#files[@]} -gt 0 ] || die "attach needs at least one file"
+  [ -z "$name" ] || [ ${#files[@]} -eq 1 ] || die "--name works with one file at a time"
+  local f stored
+  for f in "${files[@]}"; do
+    stored=$(attach_one "$id" "$f" "$name") || exit 1
+    md_ref "$stored" "$caption" "$tag"
+  done
+  [ "$nosync" -eq 1 ] || sync_assets "$id"
+}
+
+cmd_assets() {
+  local id="${1:-}"
+  require_id "$id"
+  local adir; adir=$(assets_dir "$id")
+  [ -d "$adir" ] || return 0
+  local f name
+  for f in "$adir"/*; do
+    [ -f "$f" ] || continue
+    name=$(basename "$f")
+    valid_asset_name "$name" || continue
+    printf '%s\t%s\t%sx%s\tassets/%s\n' "$name" "$(file_bytes "$f")" \
+      "$(img_prop "$f" pixelWidth)" "$(img_prop "$f" pixelHeight)" "$name"
+  done
+}
+
+cmd_sync() {
+  local id="${1:-}"
+  require_id "$id"
+  sync_assets "$id" strict
+}
+
+cmd_detach() {
+  local id="${1:-}"; shift || true
+  require_id "$id"
+  [ $# -gt 0 ] || die "detach needs a file name"
+  local adir; adir=$(assets_dir "$id")
+  local n
+  for n in "$@"; do
+    n=${n#assets/}
+    valid_asset_name "$n" || die "bad asset name: $n"
+    [ -f "$adir/$n" ] || die "not attached: $n"
+    rm -f "$adir/$n" "$adir/.thumbs/$n"
+    if [ "${MC_DOC_NO_SYNC:-0}" != 1 ] && relay_conf; then
+      curl -sS --max-time 20 -X DELETE -H "Authorization: Bearer $R_TOKEN" \
+        "$R_URL/api/v1/doc-assets/${id%.md}/$n" >/dev/null 2>&1 || true
+    fi
+  done
 }
 
 cmd_help() {
@@ -373,16 +708,32 @@ Library root: ${MC_LIBRARY:-$HOME/.mission-control/library}
 
   mc-doc new --kind <plan|research|note> --title <t>
              [--subject <s>] [--tags a,b] [--dir <path>]
-             [--body-file <f> | --stdin]
+             [--body-file <f> | --stdin] [--assets-from <dir>]
         Create a doc; prints its absolute path (and nothing else).
 
   mc-doc path <id>                 Absolute path of <id> (exit 1 if missing).
   mc-doc list [--kind k] [--status s] [--tag t]
                                    One "id<TAB>kind<TAB>status<TAB>title" per line.
   mc-doc get  <id>                 Print the body (frontmatter stripped).
-  mc-doc write <id> [--stdin | --body-file f]
+  mc-doc write <id> [--stdin | --body-file f] [--assets-from <dir>]
                                    Replace the body, keep frontmatter verbatim.
   mc-doc set  <id> <key> <value>   Rewrite one of kind|status|subject|tags|dir.
+
+Images (stored in <stem>.assets/ next to the doc, pushed to the relay):
+  mc-doc attach <id> <file>... [--name n] [--caption c] [--tag t] [--no-sync]
+                                   Copy images in (big ones shrunk to 1600 px
+                                   JPEG, plus an 800 px thumb) and print the
+                                   markdown to paste: ![c](assets/x.jpg "t | c")
+  mc-doc assets <id>               "name<TAB>bytes<TAB>WxH<TAB>assets/name" per image.
+  mc-doc sync   <id>               Push the doc's images to the relay again.
+  mc-doc detach <id> <name>...     Remove images (here and on the relay).
+  new/write also accept local image refs — ![x](./photo.jpg), ![x](~/Desktop/a.png):
+  they are attached and rewritten to assets/… (relative to the body file's
+  folder, the current folder for --stdin, or --assets-from <dir>).
+
+Layout blocks (lines of ::: around normal markdown; see the library skill):
+  :::pair  :::gallery  :::facts  :::pills  :::callout <tone> [title]   …   :::
+
   mc-doc help
 
 Typical research flow:
@@ -404,6 +755,10 @@ main() {
     get)   cmd_get "$@" ;;
     set)   cmd_set "$@" ;;
     write) cmd_write "$@" ;;
+    attach) cmd_attach "$@" ;;
+    assets) cmd_assets "$@" ;;
+    sync)  cmd_sync "$@" ;;
+    detach) cmd_detach "$@" ;;
     help|-h|--help) cmd_help ;;
     *) die "unknown command: $cmd (try: mc-doc help)" ;;
   esac
@@ -462,6 +817,11 @@ Use the tool for everything.
 - `mc-doc get <id>` — print the body (frontmatter stripped).
 - `mc-doc write <id> [--stdin | --body-file f]` — replace the body, keep frontmatter.
 - `mc-doc set <id> <key> <value>` — rewrite one of `kind`, `status`, `subject`, `tags`, `dir`.
+- `mc-doc attach <id> <file>... [--name n] [--caption c] [--tag t]` — copy images into the doc
+  (see **Images** below) and print the markdown line to paste for each one.
+- `mc-doc assets <id>` — the doc's images: `name<TAB>bytes<TAB>WxH<TAB>assets/name`.
+- `mc-doc sync <id>` — push the doc's images to the panel's relay again (after a network failure).
+- `mc-doc detach <id> <name>...` — remove images.
 
 `new` and `path` print an absolute path; the other commands take an `id`, which
 is the filename (the last path component, e.g. `acme-pricing.md`). Capture it
@@ -499,6 +859,102 @@ Write the body as a self-contained markdown report the user can read cold:
 - Structured `##` sections for the substance.
 - Concrete, cited facts — numbers, dates, names — not vague summary.
 - A final `## Sources` section listing every source you used.
+
+## Images
+
+Reports can carry photos, screenshots and maps — use them whenever a picture is
+evidence (a listing photo next to Street View, a chart, a screenshot of a page).
+
+- Images live next to the doc in `~/.mission-control/library/<stem>.assets/`
+  and the body points at them relatively: `![alt](assets/photo.jpg)`.
+- **Always add them with `mc-doc attach`** (never copy files in by hand). It
+  shrinks big photos to 1600 px JPEG, makes an 800 px thumbnail for fast
+  phone/iPad loading, and pushes both to the relay so Daniel's panel can show
+  them (the panel can't read this Mac's disk). It prints the line to paste:
+  ```sh
+  mc-doc attach "$id" ~/Downloads/p47.jpg --tag Listing --caption "Drive with garages"
+  # → ![Drive with garages](assets/p47.jpg "Listing | Drive with garages")
+  ```
+- Shortcut: `mc-doc new/write` also accept local refs like `![x](./shots/a.png)`
+  or `![x](~/Desktop/map.png)` — they are attached and rewritten to `assets/…`
+  for you (relative to the body file's folder; `--stdin` uses the current
+  folder; `--assets-from <dir>` overrides). Web images (`https://…`) are left
+  as links and load through the relay's proxy.
+- Raster only: JPEG, PNG, HEIC, WebP, TIFF (→ JPEG), GIF (as-is, ≤12 MB). No SVG.
+- If attach says it could not push to the relay, the image is still safe on the
+  Mac; run `mc-doc sync <id>` later.
+- Caption = the image title. Text before ` | ` is a small coloured tag:
+  `![alt](assets/x.jpg "Street View | 27 Ravensteyn Rd, Oct 2024")`. Write a real
+  alt text too. An image alone on its line becomes a captioned figure; tap
+  opens a full-size lightbox (swipe/arrows through every image in the doc).
+
+## Layout blocks
+
+Fence a few lines with `:::name` … `:::` (each on its own line; blocks don't
+nest). Outside the panel they read as plain markdown.
+
+| Block | Inside | Renders as |
+|---|---|---|
+| `:::pair` (alias `:::compare`) | optional prose + 2 (or 3) images | side-by-side evidence, stacked on a phone. Tags `Listing`/`Photo` are warm, `Street View`/`Satellite`/`Map` cool |
+| `:::gallery` | any number of images | a responsive grid of tiles; tap → lightbox |
+| `:::facts` | a list of `- Label: value` | label/value chips (mono values) |
+| `:::pills` | a list of `- [ok] text` (`ok`, `warn`, `bad`, `info`; no tag = neutral) | verdict / confidence pills |
+| `:::callout <ok\|warn\|bad\|info> [Title]` | any markdown | a toned box with an optional bold title |
+
+Link to another Library doc by its id — `[the Fetzer search](fetzer-search-camps-bay-12-bed-with-ocea.md)` —
+and the panel opens it in place.
+
+Pattern for a visual comparison report (one evidence pair per finding):
+`# title` → one-paragraph answer → `:::facts` → `:::pills` → then per finding a
+`## short heading`, one paragraph, one `:::pair` → a `:::callout warn` for what
+doesn't match yet → `## Sources`.
+
+### Worked example — "is this listing in that building?"
+
+```sh
+id=$(basename "$(mc-doc new --kind research --title "Is the Double.D flat in Silvertree Place?" \
+  --subject "Silvertree Place" --tags "property,camps-bay")")
+mc-doc set "$id" status active
+cd ~/research/silvertree          # where the screenshots/photos were saved
+mc-doc attach "$id" listing-p47.jpg sv-platteklip.jpg >/dev/null
+mc-doc write "$id" --stdin <<'REPORT'
+# Is the Double.D flat in Silvertree Place?
+
+Probably: the drive, the two flat-roofed blocks and the palm all match.
+
+:::facts
+- Scheme: SS66/1993
+- Erf: 1447
+- Best-guess unit: Section 25
+:::
+
+:::pills
+- [ok] Building: about 75% sure
+- [warn] Section 25: about 40% sure
+:::
+
+## The drive and garages
+
+:::pair
+Red-paved drive with garages on both sides and Lion's Head at the end — the
+same drive Street View looks down from Platteklip Plain.
+
+![Listing photo: red-paved drive and garages](assets/listing-p47.jpg "Listing | Drive with garages, looking north")
+![Street View down the gated drive](assets/sv-platteklip.jpg "Street View | 9 Platteklip Plain, Aug 2025")
+:::
+
+:::callout warn What doesn't match yet
+The walls look white from the street, not cream.
+:::
+
+## Sources
+- Property24 listing 117363447
+- Google Street View, Platteklip Plain (Aug 2025)
+REPORT
+mc-doc set "$id" status done
+```
+
+Daniel can also see it right away: `mia panel show-doc "$id"`.
 
 ## Worked example — "research pricing at Acme Corp"
 

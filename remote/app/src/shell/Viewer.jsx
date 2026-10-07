@@ -142,7 +142,7 @@ function DocBody({ v }) {
     lastReq.current = Date.now();
     docGet(v.docId);
   }, [doc, link, lastSnapshotAt, v.docId]);
-  const html = useMemo(() => (doc ? renderMarkdown(doc.content) : ''), [doc]);
+  const html = useMemo(() => (doc ? renderMarkdown(doc.content, { docId: v.docId }) : ''), [doc, v.docId]);
   const [article, setArticle] = useState(null);
   useDocImages(article, html);
   return (

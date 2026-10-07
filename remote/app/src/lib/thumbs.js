@@ -14,6 +14,7 @@
 import { useEffect } from 'react';
 import { getMC } from './store.js';
 import { showUrl } from './panelCommands.js';
+import { openLightbox } from './lightbox.js';
 
 const CONCURRENCY = 4;
 const LONG_PRESS_MS = 550;
@@ -69,6 +70,18 @@ export function loadImage(endpoint) {
 
 export const thumbEndpoint = (page) => `/api/v1/thumb?url=${encodeURIComponent(page)}`;
 export const imgEndpoint = (src) => `/api/v1/img?url=${encodeURIComponent(src)}`;
+// A doc's own image (task 0124), from the relay's doc-asset store. `thumb`
+// asks for the small copy mc-doc made at attach time (the relay falls back to
+// the full one); the lightbox asks for the full one.
+export const assetEndpoint = (stem, name, thumb = false) =>
+  `/api/v1/doc-assets/${encodeURIComponent(stem)}/${encodeURIComponent(name)}${thumb ? '?size=thumb' : ''}`;
+
+// What the lightbox shows for one rendered image.
+function fullOf(img) {
+  if (img.dataset.asset) return img.dataset.stem ? assetEndpoint(img.dataset.stem, img.dataset.asset) : '';
+  if (img.dataset.img) return imgEndpoint(img.dataset.img);
+  return '';
+}
 
 function fill(el) {
   if (el.dataset.state) return;
@@ -84,6 +97,21 @@ function fill(el) {
       img.onload = () => (el.dataset.state = 'ok');
       img.onerror = () => el.remove();
       img.src = src;
+    });
+  } else if (el.dataset.asset) {
+    if (!el.dataset.stem) {
+      el.dataset.state = 'failed';
+      return;
+    }
+    loadImage(assetEndpoint(el.dataset.stem, el.dataset.asset, true)).then((src) => {
+      if (!el.isConnected) return;
+      if (!src) {
+        el.dataset.state = 'failed';
+        return;
+      }
+      el.onload = () => (el.dataset.state = 'ok');
+      el.onerror = () => (el.dataset.state = 'failed');
+      el.src = src;
     });
   } else {
     const orig = el.dataset.img;
@@ -107,7 +135,7 @@ function openOut(url) {
 export function useDocImages(root, html) {
   useEffect(() => {
     if (!root) return;
-    const els = [...root.querySelectorAll('.md-thumb[data-thumb], img.md-img[data-img]')];
+    const els = [...root.querySelectorAll('.md-thumb[data-thumb], img.md-img[data-img], img.md-img[data-asset]')];
     // Watched against the doc's own scroller (a viewport root would clip at
     // its edge and ignore the margin), by table row — a photo in a far-right
     // column sits outside the table's sideways scroll, but its row is on
@@ -156,6 +184,29 @@ export function useDocImages(root, html) {
     };
     const up = () => press && clearTimeout(press.timer);
     const click = (e) => {
+      // A figure's photo → the lightbox, over every figure in the doc.
+      const figImg = e.target.closest?.('.md-fig')?.querySelector('img');
+      if (figImg && root.contains(figImg) && !e.target.closest('a')) {
+        const imgs = [...root.querySelectorAll('.md-fig img')].filter((i) => i.dataset.state !== 'failed' && fullOf(i));
+        const at = imgs.indexOf(figImg);
+        if (at < 0) return;
+        e.preventDefault();
+        openLightbox(
+          imgs.map((i) => {
+            const fig = i.closest('.md-fig');
+            return {
+              full: fullOf(i),
+              preview: i.currentSrc || i.src || '',
+              alt: i.getAttribute('alt') || '',
+              tag: fig?.querySelector('.md-tag')?.textContent || '',
+              tone: fig?.querySelector('.md-tag')?.getAttribute('data-tone') || 'n',
+              caption: fig?.querySelector('.md-cap')?.textContent || '',
+            };
+          }),
+          at,
+        );
+        return;
+      }
       const b = e.target.closest?.('.md-thumb');
       if (!b || !root.contains(b)) return;
       e.preventDefault();

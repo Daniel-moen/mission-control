@@ -262,6 +262,14 @@ function blocks(tokens, mono) {
       case 'hr':
         out.push({ canvas: [{ type: 'line', x1: 0, y1: 0, x2: 515, y2: 0, lineWidth: 0.6, lineColor: LINE }], margin: [0, 6, 0, 10] });
         break;
+      // :::pair / :::facts / :::callout … (md.js, task 0124): the PDF keeps
+      // the content (images as their [alt]); a callout's title goes bold.
+      case 'mdBlock': {
+        const m = t.kind === 'callout' ? /^(?:ok|good|warn|bad|info|note|risk|crit|yes|no|high|low|medium|maybe|mid)?\s*(.*)$/i.exec(t.args || '') : null;
+        if (m && m[1]) out.push({ text: m[1], bold: true, margin: [0, 4, 0, 3] });
+        out.push(...blocks(t.tokens, mono));
+        break;
+      }
       case 'html': {
         const text = t.text.replace(/<[^>]+>/g, '').trim();
         if (text) out.push({ text, margin: [0, 0, 0, 8] });
