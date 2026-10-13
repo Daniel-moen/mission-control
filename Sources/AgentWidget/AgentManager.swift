@@ -375,7 +375,9 @@ final class AgentManager: ObservableObject {
         // CLAUDE_CODE* marker first; this is the actual fix for "agents launched
         // from the menu aren't tracked".
         var c = #"unset $(env | sed -n 's/^\(CLAUDE_CODE[A-Za-z_]*\)=.*/\1/p') CLAUDECODE AI_AGENT 2>/dev/null"#
-        if miaTooling { c += #"; export PATH="$HOME/.mission-control/bin:$PATH""# }
+        // ~/.bun/bin: Bun runs Mia's iMessage channel server (MiaChannels); the
+        // installer only adds it to ~/.zshrc.
+        if miaTooling { c += #"; export PATH="$HOME/.mission-control/bin:$HOME/.bun/bin:$PATH""# }
         c += "; cd \(q(dir))"
         c += " && claude"
         if !model.isEmpty { c += " --model \(model)" }

@@ -183,6 +183,7 @@ struct RootView: View {
             Divider()
             Toggle("📡 Remote panel (iPad)", isOn: $settings.remoteEnabled)
             Toggle("✦ Mia (assistant)", isOn: $settings.miaEnabled)
+            Toggle("✦ Mia: iMessage channel (from her next start)", isOn: $settings.miaIMessage)
             if !settings.remoteURL.isEmpty {
                 Button("Open remote panel in browser") {
                     if let url = panelLink() { NSWorkspace.shared.open(url) }

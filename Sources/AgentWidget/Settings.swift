@@ -69,6 +69,11 @@ final class Settings: ObservableObject {
     @Published var miaModel: String {
         didSet { defaults.set(miaModel, forKey: Keys.miaModel) }
     }
+    /// Launch Mia with the iMessage channel (MiaChannels) so Daniel can text
+    /// her. Applies from her next start.
+    @Published var miaIMessage: Bool {
+        didSet { defaults.set(miaIMessage, forKey: Keys.miaIMessage) }
+    }
     /// Id of the newest Mia message the panel has marked read.
     @Published var miaReadUpTo: String {
         didSet { defaults.set(miaReadUpTo, forKey: Keys.miaReadUpTo) }
@@ -97,6 +102,7 @@ final class Settings: ObservableObject {
         static let remoteToken = "remoteToken"
         static let miaEnabled = "miaEnabled"
         static let miaModel = "miaModel"
+        static let miaIMessage = "miaIMessage"
         static let miaReadUpTo = "miaReadUpTo"
     }
 
@@ -131,6 +137,7 @@ final class Settings: ObservableObject {
         // Only the default: a model picked in the panel (miaSetModel) is stored
         // and wins over this.
         miaModel = store.string(forKey: Keys.miaModel) ?? "claude-fable-5-1"
+        miaIMessage = bool(Keys.miaIMessage, default: true)
         miaReadUpTo = store.string(forKey: Keys.miaReadUpTo) ?? ""
     }
 }
