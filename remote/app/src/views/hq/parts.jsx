@@ -184,7 +184,7 @@ export function LevelPicker({ project, registry }) {
         )}
       </div>
       <div className="mt-1.5 text-[12px] text-ink3">
-        <span className="text-ink2">{cur.label}:</span> {cur.hint}
+        <span className="text-ink2">{cur.label}:</span> {cur.hint}.
         {project.autonomy === 3 && ' Never money, new contacts, deleting, publishing or legal.'}
       </div>
     </div>
