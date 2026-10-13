@@ -7,6 +7,7 @@ import Button from '../ui/Button.jsx';
 const ITEMS = [
   { key: 'mia', label: 'Mia', icon: 'mia' },
   { key: 'home', label: 'Home', icon: 'sparkles' },
+  { key: 'hq', label: 'HQ', icon: 'hq' },
   { key: 'fleet', label: 'Fleet', icon: 'agents' },
   { key: 'insights', label: 'Insights', icon: 'overview' },
   { key: 'library', label: 'Library', icon: 'library' },
@@ -42,7 +43,7 @@ export default function Dock({ active = 'home', badges = {}, onSelect, onMic, on
                 onClick={() => onSelect?.(it.key)}
                 aria-label={badge ? `${it.label}, ${badge} new` : it.label}
                 aria-pressed={on}
-                className={`pill relative flex h-11 items-center gap-2 px-3.5 text-[13px] font-medium transition-colors sm:px-4 ${
+                className={`pill relative flex h-11 items-center gap-2 px-3 text-[13px] font-medium transition-colors sm:px-4 ${
                   on ? 'text-ink' : 'text-ink2 hover:text-ink'
                 }`}
               >

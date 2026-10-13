@@ -7,7 +7,7 @@ import { offerLink } from './announce.js';
 // store reports it back to the relay → Mac → Mia (failures reach her as an
 // [MC] event). `nav` is App's set of doors (App.jsx, panelApi).
 
-const VIEWS = { home: 'Home', fleet: 'Fleet', library: 'Library', mia: 'Mia', insights: 'Insights', settings: 'Settings' };
+const VIEWS = { home: 'Home', hq: 'HQ', fleet: 'Fleet', library: 'Library', mia: 'Mia', insights: 'Insights', settings: 'Settings' };
 
 const norm = (s) => String(s || '').toLowerCase().replace(/\.md$/, '').replace(/[^a-z0-9]+/g, ' ').trim();
 const words = (s) => norm(s).split(' ').filter(Boolean);

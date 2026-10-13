@@ -26,6 +26,7 @@ import Fleet, { FleetRail } from './views/fleet/Fleet.jsx';
 import Insights from './views/insights/Insights.jsx';
 import Library from './views/library/Library.jsx';
 import Mia from './views/mia/Mia.jsx';
+import HQ from './views/hq/HQ.jsx';
 import DocView from './views/library/DocView.jsx';
 import AgentView from './views/agent/AgentView.jsx';
 import TerminalConsole from './views/agent/TerminalConsole.jsx';
@@ -69,7 +70,8 @@ export default function App() {
   const narrowDesk = useMedia('(max-width: 1099px)');
   const midDesk = useMedia('(max-width: 1279px)');
 
-  const [win, setWin] = useState(null); // null | 'mia' | 'fleet' | 'insights' | 'library'
+  const [win, setWin] = useState(null); // null | 'mia' | 'hq' | 'fleet' | 'insights' | 'library'
+  const [hqCompany, setHqCompany] = useState(null); // HQ's open company page (task 0199)
   const [sel, setSel] = useState(null); // agent id → Agent window
   const [openDoc, setOpenDoc] = useState(null); // { id, edit }
   const [sheet, setSheet] = useState(null); // 'launch' | 'settings' | null
@@ -89,6 +91,7 @@ export default function App() {
     setConsole(null);
     setOpenDoc(null);
     setSel(null);
+    if (key === 'hq') setHqCompany(null);
     setWin(key === 'home' ? null : key);
   }, []);
 
@@ -156,7 +159,7 @@ export default function App() {
 
   // ---- hash routes -------------------------------------------------------
   // Deep links are load-bearing: #agent/<id>, #doc/<id>, #console/<id>,
-  // #mia, #fleet, #insights, #library, #launch, #settings, #tv, #car.
+  // #mia, #hq, #hq/<company>, #fleet, #insights, #library, #launch, #settings, #tv, #car.
   const applyHash = useCallback(() => {
     const h = decodeURIComponent(location.hash.replace(/^#/, ''));
     setTvOn(h === 'tv');
@@ -179,6 +182,13 @@ export default function App() {
       setSheet('launch');
     } else if (head === 'settings') {
       setSheet('settings');
+    } else if (head === 'hq') {
+      setSheet(null);
+      setConsole(null);
+      setOpenDoc(null);
+      setSel(null);
+      setHqCompany(id || null);
+      setWin('hq');
     } else if (head === 'mia' || head === 'fleet' || head === 'insights' || head === 'library') {
       setSheet(null);
       setConsole(null);
@@ -211,12 +221,13 @@ export default function App() {
     else if (sheet === 'settings') h = 'settings';
     else if (openDoc) h = `doc/${openDoc.id}`;
     else if (sel) h = `agent/${sel}`;
+    else if (win === 'hq' && hqCompany) h = `hq/${hqCompany}`;
     else if (win) h = win;
     const want = withHash(h);
     if (location.pathname + location.search + location.hash !== want) {
       history.replaceState(null, '', want);
     }
-  }, [tvOn, carOn, console_, sheet, openDoc, sel, win]);
+  }, [tvOn, carOn, console_, sheet, openDoc, sel, win, hqCompany]);
 
   // ---- Mia drives the panel ------------------------------------------------
   // `mia panel …` frames (lib/panelCommands.js does the resolving and the
@@ -297,11 +308,12 @@ export default function App() {
         else if (sheet) closeLaunch();
         else if (openDoc) setOpenDoc(null);
         else if (sel) setSel(null);
+        else if (win === 'hq' && hqCompany) setHqCompany(null);
         else if (win) setWin(null);
         return;
       }
       if (typing() || e.metaKey || e.ctrlKey || e.altKey) return;
-      const jump = { 1: 'home', 2: 'fleet', 3: 'insights', 4: 'library', 5: 'mia' }[e.key];
+      const jump = { 1: 'home', 2: 'fleet', 3: 'insights', 4: 'library', 5: 'mia', 6: 'hq' }[e.key];
       if (jump) {
         e.preventDefault();
         nav(jump);
@@ -309,20 +321,20 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [tvOn, carOn, palette, console_, composer, sheet, openDoc, sel, win, nav, closeLaunch]);
+  }, [tvOn, carOn, palette, console_, composer, sheet, openDoc, sel, win, hqCompany, nav, closeLaunch]);
 
   // ---- window composition ------------------------------------------------
   const mainKind = openDoc
     ? 'doc'
     : sel
       ? 'agent'
-      : win === 'insights' || win === 'library' || win === 'mia'
+      : win === 'insights' || win === 'library' || win === 'mia' || win === 'hq'
         ? win
         : null;
   // Desktop keeps at most two large windows: a 360px column plus one main.
   const leftKind = desktop && !openDoc && (win === 'fleet' || sel) ? 'fleet' : desktop && openDoc && win === 'library' ? 'library' : null;
   const phoneKind = mainKind || (win === 'fleet' ? 'fleet' : null);
-  const dockActive = sel || win === 'fleet' ? 'fleet' : win === 'insights' || win === 'library' || win === 'mia' ? win : 'home';
+  const dockActive = sel || win === 'fleet' ? 'fleet' : win === 'insights' || win === 'library' || win === 'mia' || win === 'hq' ? win : 'home';
 
   const fleetWindow = (size) => (
     <Window
@@ -385,6 +397,18 @@ export default function App() {
           <Mia onOpenAgent={openAgent} onClose={() => nav('home')} focusTask={miaFocus} />
         </Window>
       );
+    if (kind === 'hq')
+      return (
+        <Window key="hq" size={size} onClose={() => nav('home')}>
+          <HQ
+            onClose={() => nav('home')}
+            companyId={hqCompany}
+            onCompany={setHqCompany}
+            onOpenDoc={(id) => setOpenDoc({ id, edit: false })}
+            onOpenTask={(id) => panelApi.current.openTask(id)}
+          />
+        </Window>
+      );
     if (kind === 'fleet') return fleetWindow(size);
     return null;
   };
@@ -397,7 +421,8 @@ export default function App() {
         onLaunch={() => setSheet('launch')}
         onMia={() => nav('mia')}
       />
-      <div className="flex-none pb-4">
+      {/* Many cards scroll here rather than run on under the dock. */}
+      <div className="min-h-0 flex-shrink overflow-y-auto overscroll-contain pb-4 pt-2">
         <AttentionCards onOpen={openAgent} onOpenMia={() => nav('mia')} />
       </div>
     </div>
