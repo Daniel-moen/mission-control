@@ -866,7 +866,7 @@ def cmd_status(args):
 # recently active panel (docs/mia.md §8.2). Fire-and-forget: if no panel is
 # open or the target isn't found, an [MC] event says so.
 
-PANEL_VIEWS = ["home", "fleet", "library", "mia", "insights", "settings"]
+PANEL_VIEWS = ["home", "hq", "fleet", "library", "mia", "insights", "settings"]
 PANEL_SCROLLS = ["down", "up", "top", "bottom"]
 
 
@@ -976,7 +976,7 @@ HELP = """mia — Mia's line to Daniel and the Mission Control task list.
                                                     open a Library doc on Daniel's panel
   mia panel open-task <id>                          show a task on Mia's board
   mia panel open-agent <name|session-id>            open an agent's window
-  mia panel view <home|fleet|library|mia|insights|settings>
+  mia panel view <home|hq|fleet|library|mia|insights|settings>
   mia panel open-url <https-url>                    open a link on the iPad (Zoom/Meet/Teams…)
   mia panel search "<text>"                         open search with this text
   mia panel scroll-to "<heading or text>"           scroll the open doc/page to it (forgiving match)
@@ -996,12 +996,24 @@ HELP = """mia — Mia's line to Daniel and the Mission Control task list.
                                                     (default: the max age below)
   mia question max-age [<48h|3d|never>]             show/set when open questions count as old
                                                     (old = hidden from Daniel; never deleted)
+  mia jarvis <show|set-level|metric|finding|pause|resume|…>
+                                                    the HQ registry (mia jarvis help)
   mia status [--all]                                tasks, open questions, reminders
                                                     (--all: old questions too)
   mia help
 
 Statuses: queued, asking, running, checking, done, failed, cancelled.
 State lives in $MIA_DIR (default ~/.mission-control/mia)."""
+
+
+def cmd_jarvis(args):
+    """The Jarvis registry (HQ view) lives in its own script beside this one."""
+    me = os.environ.get("MIA_SELF") or ""
+    for c in (os.path.join(os.path.dirname(os.path.realpath(me)), "mia-jarvis") if me else "",
+              os.path.expanduser("~/.mission-control/bin/mia-jarvis")):
+        if c and os.path.isfile(c):
+            os.execvp("python3", ["python3", c] + list(args))
+    die("mia-jarvis is not installed next to mia (update Mission Control)")
 
 
 def main(argv):
@@ -1013,7 +1025,7 @@ def main(argv):
              "dispatch": cmd_dispatch, "tell": cmd_tell, "remind": cmd_remind,
              "heartbeat": cmd_heartbeat, "inbox": cmd_inbox, "status": cmd_status,
              "panel": cmd_panel, "uploads": cmd_uploads,
-             "question": cmd_question, "questions": cmd_question}
+             "question": cmd_question, "questions": cmd_question, "jarvis": cmd_jarvis}
     if cmd not in table:
         die("unknown command: %s (try: mia help)" % cmd)
     table[cmd](rest)
@@ -1022,4 +1034,6 @@ def main(argv):
 main(sys.argv[1:])
 PY
 
+MIA_SELF="${BASH_SOURCE[0]:-$0}"
+export MIA_SELF
 exec python3 -c "$MIA_PY" "$@"

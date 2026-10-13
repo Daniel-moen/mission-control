@@ -25,6 +25,7 @@
 
 const zlib = require('zlib');
 const { createThumbs } = require('./thumbs');
+const { createJarvis } = require('./jarvis');
 
 const MAX_BODY = 2 * 1024 * 1024; // doc bodies travel through here
 const ACK_TIMEOUT_MS = 15000;
@@ -46,6 +47,7 @@ function createApi({
   pollerExtras = () => ({}),
   onPanelDone = () => {},
   thumbs = createThumbs(),
+  jarvis = createJarvis(),
 }) {
   // ---------------------------------------------------------------------------
   // Assembled terminal screens for HTTP pollers: sessionId → { seq, text, at }.
@@ -236,6 +238,10 @@ function createApi({
       'POST /api/v1/mia/answer {questionId, text}': 'answer one of Mia\'s pending questions',
       'POST /api/v1/mia/dismiss {questionId | questionIds[] | old:true}': 'close Mia\'s questions without answering (old:true = every one past the max age); Mia is told',
       'POST /api/v1/mia/tasks {title, detail?, dir?, priority?}': 'queue a task for Mia (priority 1 = highest, default 3)',
+      'GET  /api/v1/jarvis': 'Jarvis HQ: the registry the Mac last pushed (companies, projects, health, metrics, findings, tasks) + controls not yet applied',
+      'POST /api/v1/jarvis/control {action, project?, level?, value?}': 'queue an HQ change for the Mac: level (0-3) | pause | resume | pitch (quieter|louder) | scout',
+      'GET  /api/v1/jarvis/controls': 'the queued HQ changes (the Mac pulls these)',
+      'PUT  /api/v1/jarvis/state {registry, findings, tasks, applied[]}': 'the Mac pushes its registry view; applied control ids leave the queue',
     },
   };
 
@@ -545,6 +551,12 @@ function createApi({
         }
         return sendAndAck(res, 'miaTaskAdd', payload);
       }
+    }
+
+    // ---- Jarvis HQ (jarvis.js, task 0199) -----------------------------------
+    if (route[0] === 'jarvis') {
+      const r = jarvis.route(route.slice(1), m, body);
+      if (r) return json(res, r.status, r.body);
     }
 
     return json(res, 404, { ok: false, error: `no route ${m} ${pathname} — GET /api/v1 lists the API` });

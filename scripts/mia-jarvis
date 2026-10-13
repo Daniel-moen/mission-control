@@ -1,0 +1,1222 @@
+#!/usr/bin/env python3
+# mia-jarvis — the Jarvis registry behind Mission Control's HQ view (task 0199).
+#
+# Reached as `mia jarvis …` (scripts/mia hands the arguments over). One file on
+# the Mac is the source of truth: $MIA_DIR/jarvis/registry.json — companies →
+# projects, each with links, a health check, metrics, an autonomy level and
+# standing permissions. Mia maintains it with this CLI; the HQ panel changes it
+# through the relay (`sync` pulls those changes and applies them here). The
+# schema is documented in $MIA_DIR/jarvis/README.md (written by `seed`).
+#
+#   findings.jsonl   what Mia found / fixed / shipped, health changes, controls
+#   sync.json        the sync loop's bookkeeping (last push, applied controls)
+#
+# Repo source of truth: scripts/mia-jarvis. ToolingInstaller.swift embeds a
+# byte-for-byte copy next to `mia` in ~/.mission-control/bin. Needs only
+# python3 (stdlib). Never prints or pushes a secret: the relay token is read
+# from MC_TOKEN or the app's defaults and only ever sent as a bearer header.
+
+import sys, os, json, time, re, fcntl, tempfile, datetime, subprocess, threading
+import urllib.request, urllib.error
+
+D = os.path.abspath(os.path.expanduser(os.environ.get("MIA_DIR") or "~/.mission-control/mia"))
+J = os.path.join(D, "jarvis")
+REG = os.path.join(J, "registry.json")
+FINDINGS = os.path.join(J, "findings.jsonl")
+SYNC = os.path.join(J, "sync.json")
+README = os.path.join(J, "README.md")
+TASKS = os.path.join(D, "tasks")
+SCHED = os.path.join(D, "schedule.json")
+HERE = os.path.dirname(os.path.realpath(__file__))
+
+LEVELS = ["off", "watch", "suggest", "fix"]
+LEVEL_NAMES = {0: "Off", 1: "Watch", 2: "Suggest", 3: "Fix with undo"}
+# Pitch frequency steps, quietest first ("quieter"/"louder" move one step).
+PITCH_STEPS = [0.14, 0.5, 1, 2, 3]
+PITCH_NAMES = {0.14: "about once a week", 0.5: "every other day", 1: "once a day", 2: "twice a day", 3: "three a day"}
+FINDING_KINDS = ["found", "fixed", "shipped", "health", "control", "scout", "note"]
+HISTORY_MAX = 120  # points kept per metric
+RECENT_MAX = 300  # health samples kept per project (~3 days at 15 min)
+UA = "MissionControl-Jarvis/1 (health check; +https://oblivionestate.com)"
+
+
+def die(msg, code=1):
+    sys.stderr.write("mia: %s\n" % msg)
+    sys.exit(code)
+
+
+def now_iso():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_iso(v):
+    try:
+        return datetime.datetime.strptime(str(v), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+class Lock(object):
+    """Exclusive flock on the registry (the panel sync and Mia share it)."""
+    def __enter__(self):
+        os.makedirs(J, exist_ok=True)
+        self.fd = os.open(os.path.join(J, ".lock"), os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(self.fd, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        fcntl.flock(self.fd, fcntl.LOCK_UN)
+        os.close(self.fd)
+        return False
+
+
+def write_atomic(path, text):
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".jarvis.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def read_text(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except (IOError, OSError):
+        return ""
+
+
+def read_json(path, default=None):
+    t = read_text(path)
+    if not t.strip():
+        return default
+    try:
+        return json.loads(t)
+    except ValueError:
+        return default
+
+
+def write_json(path, obj):
+    write_atomic(path, json.dumps(obj, indent=2, ensure_ascii=False) + "\n")
+
+
+def read_jsonl(path):
+    out = []
+    for line in read_text(path).splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            pass
+    return out
+
+
+def append_jsonl(path, obj):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+def parse(args, spec):
+    """spec: {"--flag": takes_value(bool)}. Returns (positionals, opts)."""
+    pos, opts = [], {}
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            pos.extend(args[i + 1:])
+            break
+        if a.startswith("--") and len(a) > 2:
+            name, eq, val = a.partition("=")
+            if name not in spec:
+                die("unknown option: %s" % name)
+            if spec[name]:
+                if not eq:
+                    i += 1
+                    if i >= len(args):
+                        die("%s needs a value" % name)
+                    val = args[i]
+                opts[name] = val
+            else:
+                opts[name] = True
+        else:
+            pos.append(a)
+        i += 1
+    return pos, opts
+
+
+# ---------------------------------------------------------------------------
+# The seed: every company and project Mia manages, as of 14 Oct 2026 (from
+# memory/*.md and the task list). `seed` writes it once; Mia owns it after.
+
+def P(pid, name, company, summary, links=(), check=None, dirs=(), keywords=(), fallback=(), notes="", probes=(), autonomy=2):
+    return {
+        "id": pid, "name": name, "company": company, "summary": summary,
+        "links": [{"label": l, "url": u, "kind": k} for (l, u, k) in links],
+        "healthcheck": check, "probes": list(probes),
+        "metrics": [], "autonomy": autonomy, "notes": notes,
+        "match": {"dirs": list(dirs), "keywords": list(keywords), "fallbackDirs": list(fallback)},
+        "docs": [], "permissions": [],
+    }
+
+
+def http(url, expect=None, slow_ms=4000):
+    c = {"type": "http", "target": url, "slowMs": slow_ms}
+    if expect:
+        c["expect"] = list(expect)
+    return c
+
+
+SEED_COMPANIES = [
+    {"id": "oblivion", "name": "Oblivion Estates", "tagline": "Cape Town luxury property: prospecting, mandates, the website", "photo": "hq/oblivion.jpg"},
+    {"id": "klear", "name": "Klear", "tagline": "The fund: Penny for customers, Houston for research", "photo": "hq/klear.jpg"},
+    {"id": "dryager", "name": "Dry-ager", "tagline": "Dry-ager sales pipeline and lead panel", "photo": "hq/dryager.jpg"},
+    {"id": "games", "name": "Games", "tagline": "Roblox studio: one live game, three in the oven", "photo": "hq/games.jpg"},
+    {"id": "video", "name": "YouTube & video", "tagline": "Bodycam and history channels, narration pipelines", "photo": "hq/video.jpg"},
+    {"id": "propiq", "name": "PropIQ", "tagline": "Who sells next: a LOOM competitor in the making", "photo": "hq/propiq.jpg"},
+    {"id": "civentropy", "name": "CivEntropy", "tagline": "Civilisation game with an AI diplomat", "photo": "hq/civentropy.jpg"},
+    {"id": "mission-control", "name": "Mission Control", "tagline": "Mia, the panel, the relay and the Mac app", "photo": "hq/mission-control.jpg"},
+]
+
+SEED_PROJECTS = [
+    P("prospect-engine", "Prospect engine", "oblivion",
+      "Crawls listings, finds owners and runs the lead pipeline (VPS).",
+      [("Dashboard", "https://209-159-148-182.sslip.io", "live"), ("Railway copy", "https://prospect-engine-production-2170.up.railway.app", "admin")],
+      http("https://209-159-148-182.sslip.io", [200, 204, 301, 302, 401, 403]),
+      ["~/prospecting-auto"], ["prospect", "prospecting", "lead pipeline", "leads", "erf", "owner pull", "loom", "property24"],
+      notes="Prod is the VPS (Caddy → gunicorn). Railway copy lags behind."),
+    P("oblivion-site", "oblivionestate.com", "oblivion",
+      "The public website: listings, enquiries, SEO.",
+      [("Website", "https://oblivionestate.com", "live")],
+      http("https://oblivionestate.com"),
+      ["~/Oblivion-estates"], ["oblivionestate", "oblivion estates website", "website", "seo", "site"],
+      notes="v3b live from ~/Oblivion-estates-release (Cloudflare-fronted)."),
+    P("penny", "Penny", "klear",
+      "Customer chat bot for the fund.",
+      [("Playground", "https://klear-production.up.railway.app/playground", "live")],
+      http("https://klear-production.up.railway.app/playground", [200, 301, 302, 401, 403]),
+      ["~/Klear"], ["penny", "klear"],
+      notes="Deploy `railway up --service klear --detach` (not GitHub-linked)."),
+    P("houston", "Houston research desk", "klear",
+      "Research desk writing investment theses.",
+      [("Research desk", "https://research-klear.up.railway.app", "live")],
+      http("https://research-klear.up.railway.app", [200, 301, 302, 401, 403]),
+      ["~/Klear-research"], ["houston", "research desk", "thesis", "theses"],
+      notes="AI runs through the Mac bridge LaunchAgent; Mac must be awake."),
+    P("dryager-panel", "Dry-ager panel", "dryager",
+      "Lead pipeline for dry-ager sales.",
+      [("Panel", "https://dryager-panel.up.railway.app", "live")],
+      http("https://dryager-panel.up.railway.app", [200, 301, 302, 401, 403]),
+      ["~/dryager-panel", "~/.mission-control/mia/research/dryager"], ["dry-ager", "dryager", "dry ager"],
+      notes="SQLite on /data, no off-site backup."),
+    P("crystal-garden", "Crystal Garden", "games",
+      "Public on Roblox since 7 Oct.",
+      [("Roblox page", "https://www.roblox.com/games/88007603886231", "live")],
+      http("https://www.roblox.com/games/88007603886231"),
+      ["~/CrystalGarden"], ["crystal garden", "crystalgarden"],
+      probes=[{"type": "roblox", "universeId": "10769738529"}],
+      notes="Live updates only when Daniel publishes from Studio."),
+    P("empire-clash", "Empire Clash", "games", "AoE-style 4-player RTS (unpublished).",
+      dirs=["~/EmpireClash"], keywords=["empire clash", "empireclash", "pocket empires"]),
+    P("flip-this-house", "Flip This House", "games", "Daniel's favourite: grid walls and layout appraisal (unpublished).",
+      dirs=["~/FlipThisHouse"], keywords=["flip this house", "flipthishouse"]),
+    P("crime-scene-cleaners", "Crime Scene Cleaners", "games", "v2: one big realistic house (unpublished).",
+      dirs=["~/CrimeSceneCleaners"], keywords=["crime scene"]),
+    P("bodycam", "Bodycam channel", "video", "Bodycam breakdown videos with narration.",
+      dirs=["~/bodycam-pipeline"], keywords=["bodycam", "youtube", "video"]),
+    P("history", "History pipeline", "video", "History explainers and narration (voice lab).",
+      dirs=["~/history-pipeline", "~/voice-lab"], keywords=["history", "narration", "voice lab", "tts"]),
+    P("propiq", "PropIQ", "propiq", "Who-sells-next predictions; needs DeedsWeb pricing.",
+      dirs=["~/PropIQ"], keywords=["propiq", "erfsight", "deedsweb"],
+      notes="Name pending (Erfsight recommended)."),
+    P("civentropy-game", "CivEntropy", "civentropy", "The game.",
+      [("Play", "https://frontend-production-89b0.up.railway.app", "live")],
+      http("https://frontend-production-89b0.up.railway.app"),
+      ["~/CivEntropy"], ["civentropy"]),
+    P("diplomat", "Diplomat API", "civentropy", "The AI diplomat behind the game.",
+      [("API", "https://civentropy-production.up.railway.app/diplomat/", "live")],
+      http("https://civentropy-production.up.railway.app/diplomat/", [200, 301, 302, 401, 403, 404, 405]),
+      keywords=["diplomat"], notes="Kill switch DIPLOMAT_RUNS_PER_DAY=0."),
+    P("mc-panel", "Panel & relay", "mission-control", "The iPad panel and the Railway relay.",
+      [("Panel", "https://mission-control-remote-production.up.railway.app", "live")],
+      http("https://mission-control-remote-production.up.railway.app/health"),
+      keywords=["mission control", "panel", "relay", "dock", "hq", "library", "voice", "talk mode"],
+      fallback=["~/widget-claude"]),
+    P("mia", "Mia", "mission-control", "The assistant herself: heartbeats, scouting, tasks.",
+      keywords=["mia", "jarvis", "scout", "heartbeat", "imessage", "mac mini", "memory"],
+      fallback=["~/.mission-control/mia"]),
+]
+
+
+def seed_registry():
+    return {
+        "version": 1,
+        "updatedAt": now_iso(),
+        "jarvis": {"paused": False, "pausedAt": None, "pausedHeartbeats": [],
+                   "proactiveHeartbeats": ["hb_scout", "hb_health", "hb_crystal"],
+                   "pitchesPerDay": 1, "healthEveryMinutes": 15},
+        "companies": json.loads(json.dumps(SEED_COMPANIES)),
+        "projects": json.loads(json.dumps(SEED_PROJECTS)),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Registry access
+
+def load(required=True):
+    r = read_json(REG)
+    if not isinstance(r, dict):
+        if required:
+            die("no registry yet at %s (run: mia jarvis seed)" % REG)
+        return None
+    r.setdefault("jarvis", {})
+    j = r["jarvis"]
+    j.setdefault("paused", False)
+    j.setdefault("pitchesPerDay", 1)
+    j.setdefault("healthEveryMinutes", 15)
+    j.setdefault("proactiveHeartbeats", ["hb_scout", "hb_health", "hb_crystal"])
+    j.setdefault("pausedHeartbeats", [])
+    r.setdefault("companies", [])
+    r.setdefault("projects", [])
+    for p in r["projects"]:
+        p.setdefault("metrics", [])
+        p.setdefault("links", [])
+        p.setdefault("docs", [])
+        p.setdefault("permissions", [])
+        p.setdefault("autonomy", 2)
+        p.setdefault("match", {})
+    return r
+
+
+def save(r):
+    r["updatedAt"] = now_iso()
+    write_json(REG, r)
+
+
+class Bad(ValueError):
+    """A bad project/level from the panel: skip that control, keep syncing."""
+
+
+def lookup(r, q):
+    """By id, then case-insensitive name, then a unique prefix/substring."""
+    q0 = (q or "").strip().lower()
+    if not q0:
+        raise Bad("which project? (mia jarvis show lists them)")
+    ps = r["projects"]
+    for p in ps:
+        if p["id"].lower() == q0:
+            return p
+    for p in ps:
+        if p.get("name", "").lower() == q0:
+            return p
+    hits = [p for p in ps if p["id"].lower().startswith(q0) or p.get("name", "").lower().startswith(q0)]
+    if len(hits) == 1:
+        return hits[0]
+    hits = hits or [p for p in ps if q0 in p["id"].lower() or q0 in p.get("name", "").lower()]
+    if len(hits) == 1:
+        return hits[0]
+    if hits:
+        raise Bad("'%s' matches several projects: %s" % (q, ", ".join(p["id"] for p in hits)))
+    raise Bad("no project '%s' (ids: %s)" % (q, ", ".join(p["id"] for p in ps)))
+
+
+def find_project(r, q):
+    try:
+        return lookup(r, q)
+    except Bad as e:
+        die(str(e))
+
+
+def level_of(v):
+    s = str(v).strip().lower()
+    if s.isdigit() and 0 <= int(s) <= 3:
+        return int(s)
+    alias = {"off": 0, "watch": 1, "suggest": 2, "fix": 3, "fix-with-undo": 3, "fix with undo": 3, "auto": 3}
+    if s in alias:
+        return alias[s]
+    raise Bad("level must be 0-3 or off|watch|suggest|fix")
+
+
+def parse_level(v):
+    try:
+        return level_of(v)
+    except Bad as e:
+        die(str(e))
+
+
+def level_label(n):
+    return "%s (%d)" % (LEVEL_NAMES.get(n, "?"), n)
+
+
+def pitch_label(v):
+    return PITCH_NAMES.get(v, "%g a day" % v)
+
+
+def step_pitch(cur, how):
+    try:
+        cur = float(cur)
+    except (TypeError, ValueError):
+        cur = 1
+    idx = min(range(len(PITCH_STEPS)), key=lambda i: abs(PITCH_STEPS[i] - cur))
+    if how == "quieter":
+        idx = max(0, idx - 1)
+    elif how == "louder":
+        idx = min(len(PITCH_STEPS) - 1, idx + 1)
+    return PITCH_STEPS[idx]
+
+
+def add_finding(project, kind, text, by="mia", **extra):
+    f = {"id": "f_%d" % int(time.time() * 1000), "at": now_iso(), "project": project or "", "kind": kind, "text": text, "by": by}
+    f.update(extra)
+    append_jsonl(FINDINGS, f)
+    return f
+
+
+# ---------------------------------------------------------------------------
+# Heartbeats (pause/resume). Through the `mia` CLI so schedule.json keeps one
+# writer protocol (its own lock, shared with the app).
+
+def mia_bin():
+    for c in (os.path.join(HERE, "mia"), os.path.expanduser("~/.mission-control/bin/mia")):
+        if os.path.isfile(c):
+            return c
+    return "mia"
+
+
+def heartbeats():
+    s = read_json(SCHED, {}) or {}
+    return {h.get("id"): h.get("enabled", True) for h in s.get("heartbeats", []) if isinstance(h, dict)}
+
+
+def set_heartbeat(hid, on):
+    try:
+        subprocess.run([mia_bin(), "heartbeat", "enable" if on else "disable", hid],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20,
+                       env=dict(os.environ, MIA_DIR=D))
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def do_pause(r):
+    j = r["jarvis"]
+    if j.get("paused"):
+        return False
+    hb = heartbeats()
+    off = [h for h in j.get("proactiveHeartbeats", []) if hb.get(h)]
+    for h in off:
+        set_heartbeat(h, False)
+    j["paused"] = True
+    j["pausedAt"] = now_iso()
+    j["pausedHeartbeats"] = off
+    return True
+
+
+def do_resume(r):
+    j = r["jarvis"]
+    if not j.get("paused"):
+        return False
+    for h in j.get("pausedHeartbeats", []):
+        set_heartbeat(h, True)
+    j["paused"] = False
+    j["pausedAt"] = None
+    j["pausedHeartbeats"] = []
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Metrics
+
+def num(v):
+    try:
+        f = float(str(v).replace(",", "").replace("%", "").strip())
+    except ValueError:
+        die("metric value must be a number (got %r)" % v)
+    return int(f) if f.is_integer() and abs(f) < 1e15 else f
+
+
+def put_metric(p, name, value, label=None, unit=None, better=None, source="mia", at=None):
+    key = re.sub(r"[^a-z0-9_]+", "_", name.strip().lower()).strip("_") or "metric"
+    m = next((x for x in p["metrics"] if x.get("name") == key), None)
+    if m is None:
+        m = {"name": key, "label": label or name.strip(), "unit": unit or "", "better": better or "up", "source": source, "history": []}
+        p["metrics"].append(m)
+    if label:
+        m["label"] = label
+    if unit is not None:
+        m["unit"] = unit
+    if better in ("up", "down"):
+        m["better"] = better
+    at = at or now_iso()
+    m["value"] = value
+    m["at"] = at
+    h = m.setdefault("history", [])
+    h.append({"t": at, "v": value})
+    del h[:-HISTORY_MAX]
+    return m
+
+
+# ---------------------------------------------------------------------------
+# Health + probes
+
+def fetch(url, timeout=12, accept="*/*"):
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": accept})
+    t0 = time.time()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read(200000)
+            return resp.status, int((time.time() - t0) * 1000), body, ""
+    except urllib.error.HTTPError as e:
+        return e.code, int((time.time() - t0) * 1000), b"", ""
+    except Exception as e:  # noqa — any network failure is a "down"
+        return 0, int((time.time() - t0) * 1000), b"", (str(getattr(e, "reason", "")) or e.__class__.__name__)[:160]
+
+
+def check_one(p):
+    c = p.get("healthcheck") or {}
+    t = c.get("type")
+    if t in ("http", "railway"):
+        code, ms, _, err = fetch(c.get("target", ""))
+        expect = c.get("expect") or []
+        good = (code in expect) if expect else (200 <= code < 400)
+        if not good:
+            return {"status": "down", "code": code, "ms": ms, "error": err or ("HTTP %d" % code)}
+        slow = int(c.get("slowMs") or 4000)
+        return {"status": "slow" if ms > slow else "up", "code": code, "ms": ms, "error": ""}
+    if t == "ssh":
+        cmd = c.get("command") or "true"
+        t0 = time.time()
+        try:
+            res = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", c.get("target", ""), cmd],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=25)
+            ms = int((time.time() - t0) * 1000)
+            if res.returncode == 0:
+                return {"status": "up", "code": 0, "ms": ms, "error": ""}
+            return {"status": "down", "code": res.returncode, "ms": ms, "error": (res.stderr.decode("utf-8", "replace").strip() or "exit %d" % res.returncode)[:160]}
+        except (OSError, subprocess.SubprocessError) as e:
+            return {"status": "down", "code": -1, "ms": int((time.time() - t0) * 1000), "error": str(e)[:160]}
+    return None
+
+
+def run_probe(pr):
+    """Public, unauthenticated numbers. Returns [(name, label, value, unit, better)]."""
+    if pr.get("type") == "roblox" and pr.get("universeId"):
+        code, _, body, _ = fetch("https://games.roblox.com/v1/games?universeIds=%s" % pr["universeId"], accept="application/json")
+        if code != 200:
+            return []
+        try:
+            g = (json.loads(body.decode("utf-8")).get("data") or [{}])[0]
+        except ValueError:
+            return []
+        out = []
+        if g.get("visits") is not None:
+            out.append(("visits", "Visits", int(g["visits"]), "", "up"))
+        if g.get("playing") is not None:
+            out.append(("playing", "Playing now", int(g["playing"]), "", "up"))
+        if g.get("favoritedCount") is not None:
+            out.append(("favorites", "Favourites", int(g["favoritedCount"]), "", "up"))
+        return out
+    return []
+
+
+def gather_health(projects):
+    """Run every check and probe in parallel. No registry access: callers hold
+    no lock while this waits on the network."""
+    results = {}
+
+    def work(p):
+        try:
+            results[p["id"]] = (check_one(p), [m for pr in p.get("probes", []) for m in run_probe(pr)])
+        except Exception as e:  # noqa
+            results[p["id"]] = ({"status": "unknown", "code": 0, "ms": 0, "error": str(e)[:160]}, [])
+
+    threads = [threading.Thread(target=work, args=(p,)) for p in projects]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(40)
+    return dict(results)
+
+
+def apply_health(r, results, quiet=False):
+    """Fold gathered results into the (freshly locked) registry; log changes."""
+    at = now_iso()
+    lines = []
+    for p in r["projects"]:
+        if p["id"] not in results:
+            continue
+        res, probe = results[p["id"]]
+        for (name, label, value, unit, better) in probe:
+            put_metric(p, name, value, label=label, unit=unit, better=better, source="probe", at=at)
+        if res is None:
+            continue
+        prev = p.get("health") or {}
+        h = {"status": res["status"], "code": res["code"], "ms": res["ms"], "error": res["error"], "checkedAt": at,
+             "since": prev.get("since") if prev.get("status") == res["status"] else at,
+             "recent": (prev.get("recent") or [])[-(RECENT_MAX - 1):] + [[at, res["ms"] if res["status"] != "down" else -1]]}
+        was = prev.get("status")
+        if was and was != res["status"]:
+            if res["status"] == "down":
+                add_finding(p["id"], "health", "Went down: %s" % (res["error"] or "no answer"), by="checker")
+            elif was == "down":
+                gone = (parse_iso(at) or 0) - (parse_iso(prev.get("since")) or parse_iso(at) or 0)
+                add_finding(p["id"], "health", "Back up after %s" % fmt_dur(gone), by="checker")
+        p["health"] = h
+        lines.append("%-22s %-5s %4s %6dms %s" % (p["id"], h["status"], h["code"], h["ms"], h["error"]))
+    r["jarvis"]["lastHealthAt"] = at
+    if not quiet:
+        for l in lines:
+            print(l)
+
+
+def fmt_dur(s):
+    s = max(0, int(s))
+    if s < 90:
+        return "%ds" % s
+    if s < 5400:
+        return "%d min" % round(s / 60)
+    if s < 172800:
+        return "%.1f h" % (s / 3600)
+    return "%d days" % round(s / 86400)
+
+
+# ---------------------------------------------------------------------------
+# Tasks → projects
+
+def expand(d):
+    return os.path.abspath(os.path.expanduser(d)) if d else ""
+
+
+def matcher(r):
+    rules = []
+    for p in r["projects"]:
+        m = p.get("match") or {}
+        rules.append((p["id"], [expand(d) for d in m.get("dirs", [])], [k.lower() for k in m.get("keywords", []) if k],
+                      [expand(d) for d in m.get("fallbackDirs", [])]))
+
+    def dir_hit(tdir, d):
+        return tdir == d or tdir.startswith(d + "/") or tdir.startswith(d + "-")
+
+    def kw_hit(title, k):
+        return re.search(r"(?<![a-z0-9])" + re.escape(k) + r"(?![a-z0-9])", title) is not None
+
+    def match(task):
+        tdir = expand(task.get("dir") or "")
+        title = (task.get("title") or "").lower()
+        best, score = None, 0
+        for pid, dirs, kws, fb in rules:
+            s = 0
+            for d in dirs:
+                if tdir and dir_hit(tdir, d):
+                    s = max(s, 100 + len(d))
+            for k in kws:
+                if kw_hit(title, k):
+                    s = max(s, 50 + len(k))
+            for d in fb:
+                if tdir and dir_hit(tdir, d):
+                    s = max(s, 10)
+            if s > score:
+                best, score = pid, s
+        return best
+    return match
+
+
+def all_tasks():
+    out = []
+    try:
+        names = sorted(os.listdir(TASKS))
+    except OSError:
+        return out
+    for n in names:
+        if n.endswith(".json"):
+            t = read_json(os.path.join(TASKS, n))
+            if isinstance(t, dict) and t.get("id"):
+                out.append(t)
+    return out
+
+
+def slim_tasks(r, days=45):
+    match = matcher(r)
+    cut = time.time() - days * 86400
+    out = []
+    for t in all_tasks():
+        upd = parse_iso(t.get("updatedAt")) or parse_iso(t.get("createdAt")) or 0
+        open_ = t.get("status") in ("queued", "asking", "running", "checking")
+        if upd < cut and not open_:
+            continue
+        res = t.get("result")
+        out.append({"id": t["id"], "title": (t.get("title") or "")[:160], "status": t.get("status", ""),
+                    "project": match(t), "createdAt": t.get("createdAt"), "updatedAt": t.get("updatedAt"),
+                    "result": (res if isinstance(res, str) else "")[:240]})
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Relay sync
+
+def relay_conf():
+    if os.environ.get("MC_JARVIS_NO_SYNC") == "1":
+        return None, None
+    url = os.environ.get("MC_RELAY_URL", "").strip()
+    tok = os.environ.get("MC_TOKEN", "").strip()
+    if (not url or not tok) and os.environ.get("MC_DOC_NO_DEFAULTS") != "1":
+        def dflt(k):
+            try:
+                return subprocess.run(["defaults", "read", "com.agentwidget.mission-control", k], stdout=subprocess.PIPE,
+                                      stderr=subprocess.DEVNULL, timeout=10).stdout.decode().strip()
+            except (OSError, subprocess.SubprocessError):
+                return ""
+        url = url or dflt("remoteURL")
+        tok = tok or dflt("remoteToken")
+    url = url.rstrip("/")
+    if url.startswith("ws"):
+        url = "http" + url[2:]
+    return (url, tok) if url and tok else (None, None)
+
+
+def relay(method, path, body=None, timeout=20):
+    url, tok = relay_conf()
+    if not url:
+        raise RuntimeError("no relay configured")
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = urllib.request.Request(url + path, data=data, method=method,
+                                 headers={"Authorization": "Bearer " + tok, "Content-Type": "application/json", "User-Agent": UA})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as e:
+        raise RuntimeError("relay said HTTP %d" % e.code)
+    except urllib.error.URLError as e:
+        raise RuntimeError("relay unreachable (%s)" % getattr(e, "reason", e))
+
+
+def public_registry(r):
+    """What the panel may see: no ssh targets, no private notes fields."""
+    out = json.loads(json.dumps(r))
+    for p in out["projects"]:
+        c = p.get("healthcheck") or None
+        if c:
+            p["healthcheck"] = {"type": c.get("type")}
+            if c.get("type") in ("http", "railway"):
+                p["healthcheck"]["target"] = c.get("target")
+        p.pop("probes", None)
+    out["jarvis"].pop("pausedHeartbeats", None)
+    return out
+
+
+def build_state(r, applied):
+    return {
+        "version": 1,
+        "at": now_iso(),
+        "home": os.path.expanduser("~"),  # so the panel can match live task folders
+        "registry": public_registry(r),
+        "findings": read_jsonl(FINDINGS)[-300:],
+        "tasks": slim_tasks(r),
+        "applied": applied,
+    }
+
+
+def apply_control(r, c):
+    """One panel control → registry change + a findings line. Returns a summary."""
+    a = c.get("action")
+    who = "daniel"
+    if a == "level":
+        p = lookup(r, c.get("project"))
+        lv = level_of(c.get("level"))
+        old = p.get("autonomy", 2)
+        p["autonomy"] = lv
+        add_finding(p["id"], "control", "Autonomy %s → %s" % (LEVEL_NAMES.get(old), LEVEL_NAMES.get(lv)), by=who, control=c.get("id"))
+        return "%s autonomy %s" % (p["id"], level_label(lv))
+    if a == "pause":
+        do_pause(r)
+        add_finding("", "control", "Jarvis paused", by=who, control=c.get("id"))
+        return "paused"
+    if a == "resume":
+        do_resume(r)
+        add_finding("", "control", "Jarvis resumed", by=who, control=c.get("id"))
+        return "resumed"
+    if a == "pitch":
+        v = c.get("value")
+        new = step_pitch(r["jarvis"].get("pitchesPerDay", 1), v) if v in ("quieter", "louder") else step_pitch(v, "")
+        r["jarvis"]["pitchesPerDay"] = new
+        add_finding("", "control", "Pitches: %s" % pitch_label(new), by=who, control=c.get("id"))
+        return "pitch %s" % pitch_label(new)
+    if a == "scout":
+        p = lookup(r, c.get("project"))
+        p["scoutRequestedAt"] = now_iso()
+        add_finding(p["id"], "scout", "Scout requested from HQ", by=who, control=c.get("id"))
+        return "scout %s" % p["id"]
+    raise ValueError("unknown control action %r" % a)
+
+
+def sync_once(force_health=False, quiet=False):
+    st = read_json(SYNC, {}) or {}
+    applied_ids = st.get("appliedIds", [])
+    applied_now = []
+    err = ""
+    controls = []
+    url, _ = relay_conf()
+    if url:
+        try:
+            controls = relay("GET", "/api/v1/jarvis/controls").get("controls") or []
+        except RuntimeError as e:
+            err = str(e)
+    r0 = load(required=False)
+    if r0 is None:
+        return "no registry (run: mia jarvis seed)"
+    every = float(r0["jarvis"].get("healthEveryMinutes") or 15) * 60
+    last = parse_iso(r0["jarvis"].get("lastHealthAt")) or 0
+    health = gather_health(r0["projects"]) if (force_health or time.time() - last >= every) else None
+    with Lock():
+        r = load(required=False)
+        if r is None:
+            return "no registry (run: mia jarvis seed)"
+        changed = False
+        for c in controls:
+            cid = c.get("id")
+            if not cid:
+                continue
+            if cid in applied_ids:
+                applied_now.append(cid)  # applied before, the relay just hasn't heard
+                continue
+            try:
+                msg = apply_control(r, c)
+                if not quiet:
+                    print("applied %s: %s" % (cid, msg))
+            except ValueError as e:
+                if not quiet:
+                    print("skipped %s: %s" % (cid, e))
+            applied_now.append(cid)
+            applied_ids.append(cid)
+            changed = True
+        if health is not None:
+            apply_health(r, health, quiet=True)
+            changed = True
+        if changed:
+            save(r)
+        state = build_state(r, applied_now)
+    if url and not err:
+        try:
+            relay("PUT", "/api/v1/jarvis/state", state, timeout=30)
+            st["lastPushAt"] = now_iso()
+        except RuntimeError as e:
+            err = str(e)
+    st["appliedIds"] = applied_ids[-500:]
+    st["lastSyncAt"] = now_iso()
+    st["lastError"] = err
+    write_json(SYNC, st)
+    return err or ("pushed" if url else "no relay configured: registry updated locally")
+
+
+# ---------------------------------------------------------------------------
+# Commands
+
+def cmd_seed(args):
+    pos, o = parse(args, {"--force": False})
+    with Lock():
+        if os.path.exists(REG) and not o.get("--force"):
+            die("registry already exists at %s (use --force to start over; it is Mia's now)" % REG)
+        r = seed_registry()
+        save(r)
+        write_atomic(README, README_TEXT)
+    print("seeded %s (%d companies, %d projects)" % (REG, len(r["companies"]), len(r["projects"])))
+
+
+def cmd_show(args):
+    pos, o = parse(args, {"--json": False})
+    r = load()
+    if pos:
+        p = find_project(r, " ".join(pos))
+        if o.get("--json"):
+            print(json.dumps(p, indent=2, ensure_ascii=False))
+            return
+        h = p.get("health") or {}
+        print("%s — %s (%s)" % (p["id"], p.get("name"), p.get("company")))
+        print("  autonomy: %s" % level_label(p.get("autonomy", 2)))
+        print("  health:   %s%s" % (h.get("status", "unchecked"), (" (%s, %sms, %s)" % (h.get("code"), h.get("ms"), h.get("checkedAt"))) if h else ""))
+        for l in p.get("links", []):
+            print("  link:     %s %s" % (l.get("label"), l.get("url")))
+        for m in p.get("metrics", []):
+            print("  metric:   %s = %s%s (%s)" % (m.get("label"), m.get("value"), m.get("unit") or "", m.get("at")))
+        for i, s in enumerate(p.get("permissions", []), 1):
+            print("  permit %d: %s" % (i, s))
+        if p.get("notes"):
+            print("  notes:    %s" % p["notes"])
+        fs = [f for f in read_jsonl(FINDINGS) if f.get("project") == p["id"]][-5:]
+        for f in fs:
+            print("  %s %-7s %s" % (f.get("at"), f.get("kind"), f.get("text")))
+        return
+    if o.get("--json"):
+        print(json.dumps(r, indent=2, ensure_ascii=False))
+        return
+    j = r["jarvis"]
+    print("Jarvis: %s · pitches %s · health every %s min" % (
+        "PAUSED since %s" % j.get("pausedAt") if j.get("paused") else "on", pitch_label(j.get("pitchesPerDay", 1)), j.get("healthEveryMinutes")))
+    for c in r["companies"]:
+        print("\n%s" % c["name"])
+        for p in [p for p in r["projects"] if p.get("company") == c["id"]]:
+            h = (p.get("health") or {}).get("status", "-")
+            print("  %-22s %-14s %-6s %s" % (p["id"], LEVEL_NAMES.get(p.get("autonomy", 2)), h, p.get("name")))
+
+
+def cmd_set_level(args):
+    if len(args) != 2:
+        die("usage: mia jarvis set-level <project> <off|watch|suggest|fix|0-3>")
+    with Lock():
+        r = load()
+        p = find_project(r, args[0])
+        lv = parse_level(args[1])
+        old = p.get("autonomy", 2)
+        p["autonomy"] = lv
+        save(r)
+        if old != lv:
+            add_finding(p["id"], "control", "Autonomy %s → %s" % (LEVEL_NAMES.get(old), LEVEL_NAMES.get(lv)), by="mia")
+    print("%s: %s" % (p["id"], level_label(lv)))
+
+
+def cmd_metric(args):
+    pos, o = parse(args, {"--label": True, "--unit": True, "--better": True})
+    if len(pos) != 3:
+        die("usage: mia jarvis metric <project> <name> <value> [--label L] [--unit U] [--better up|down]")
+    if o.get("--better") not in (None, "up", "down"):
+        die("--better must be up or down")
+    with Lock():
+        r = load()
+        p = find_project(r, pos[0])
+        m = put_metric(p, pos[1], num(pos[2]), label=o.get("--label"), unit=o.get("--unit"), better=o.get("--better"))
+        save(r)
+    print("%s: %s = %s%s" % (p["id"], m["label"], m["value"], m.get("unit") or ""))
+
+
+def cmd_finding(args):
+    pos, o = parse(args, {"--kind": True})
+    if len(pos) < 2:
+        die('usage: mia jarvis finding <project|-> "<text>" [--kind found|fixed|shipped|note]')
+    kind = o.get("--kind", "found")
+    if kind not in FINDING_KINDS:
+        die("--kind must be one of %s" % "|".join(FINDING_KINDS))
+    text = " ".join(pos[1:]).strip()
+    with Lock():
+        r = load()
+        pid = "" if pos[0] in ("-", "all", "") else find_project(r, pos[0])["id"]
+        f = add_finding(pid, kind, text)
+    print("logged %s (%s) %s" % (f["id"], kind, pid or "overall"))
+
+
+def cmd_pause(args, on):
+    with Lock():
+        r = load()
+        moved = do_pause(r) if on else do_resume(r)
+        save(r)
+        if moved:
+            add_finding("", "control", "Jarvis paused" if on else "Jarvis resumed", by="mia")
+    j = r["jarvis"]
+    if on:
+        print("Jarvis paused%s" % ((" (heartbeats off: %s)" % ", ".join(j["pausedHeartbeats"])) if j.get("pausedHeartbeats") else ""))
+    else:
+        print("Jarvis on")
+
+
+def cmd_pitch(args):
+    if len(args) != 1:
+        die("usage: mia jarvis pitch <quieter|louder|per-day number>")
+    with Lock():
+        r = load()
+        v = args[0]
+        new = step_pitch(r["jarvis"].get("pitchesPerDay", 1), v) if v in ("quieter", "louder") else step_pitch(num(v), "")
+        r["jarvis"]["pitchesPerDay"] = new
+        save(r)
+    print("pitches: %s" % pitch_label(new))
+
+
+def cmd_permit(args, add):
+    if add and len(args) < 2:
+        die('usage: mia jarvis permit <project> "<kind of fix>"')
+    if not add and len(args) != 2:
+        die("usage: mia jarvis revoke <project> <number from show>")
+    with Lock():
+        r = load()
+        p = find_project(r, args[0])
+        if add:
+            text = " ".join(args[1:]).strip()
+            p["permissions"].append(text)
+            add_finding(p["id"], "control", "Standing permission: %s" % text, by="mia")
+        else:
+            try:
+                text = p["permissions"].pop(int(args[1]) - 1)
+            except (ValueError, IndexError):
+                die("no permission %s on %s" % (args[1], p["id"]))
+            add_finding(p["id"], "control", "Permission revoked: %s" % text, by="mia")
+        save(r)
+    print("%s: %d standing permission(s)" % (p["id"], len(p["permissions"])))
+
+
+def cmd_set(args):
+    fields = ("name", "summary", "notes", "company")
+    if len(args) < 3 or args[1] not in fields + ("link", "doc", "check"):
+        die("usage: mia jarvis set <project> <name|summary|notes|company> <value>\n"
+            "       mia jarvis set <project> link <label> <url> [live|admin|repo]   (url '-' removes)\n"
+            "       mia jarvis set <project> doc <library-id>                       (prefix '-' removes)\n"
+            "       mia jarvis set <project> check <http-url|ssh:user@host|none>")
+    with Lock():
+        r = load()
+        p = find_project(r, args[0])
+        f = args[1]
+        if f in fields:
+            v = " ".join(args[2:]).strip()
+            if f == "company" and v not in [c["id"] for c in r["companies"]]:
+                die("no company '%s' (ids: %s)" % (v, ", ".join(c["id"] for c in r["companies"])))
+            p[f] = v
+        elif f == "link":
+            if len(args) < 4:
+                die("usage: mia jarvis set <project> link <label> <url> [kind]")
+            label, url = args[2], args[3]
+            p["links"] = [l for l in p["links"] if l.get("label") != label]
+            if url != "-":
+                if not re.match(r"^https?://", url):
+                    die("link must be an http(s) URL")
+                p["links"].append({"label": label, "url": url, "kind": args[4] if len(args) > 4 else "live"})
+        elif f == "doc":
+            d = re.sub(r"\.md$", "", args[2])
+            if d.startswith("-"):
+                p["docs"] = [x for x in p["docs"] if x != d[1:]]
+            elif d not in p["docs"]:
+                p["docs"].append(d)
+        elif f == "check":
+            v = args[2]
+            if v == "none":
+                p["healthcheck"] = None
+            elif v.startswith("ssh:"):
+                p["healthcheck"] = {"type": "ssh", "target": v[4:], "command": " ".join(args[3:]) or "true"}
+            elif re.match(r"^https?://", v):
+                p["healthcheck"] = http(v)
+            else:
+                die("check must be an http(s) URL, ssh:user@host [command], or none")
+        save(r)
+    print("%s: %s updated" % (p["id"], f))
+
+
+def cmd_health(args):
+    pos, o = parse(args, {"--json": False})
+    r0 = load()
+    only = find_project(r0, pos[0])["id"] if pos else None
+    results = gather_health([p for p in r0["projects"] if only is None or p["id"] == only])
+    with Lock():
+        r = load()
+        apply_health(r, results, quiet=bool(o.get("--json")))
+        save(r)
+    if o.get("--json"):
+        print(json.dumps({p["id"]: p.get("health") for p in r["projects"] if p.get("health")}, indent=2))
+
+
+def cmd_sync(args):
+    pos, o = parse(args, {"--loop": True, "--health": False, "--quiet": False})
+    if "--loop" not in o:
+        print(sync_once(force_health=bool(o.get("--health")), quiet=bool(o.get("--quiet"))))
+        return
+    every = max(10, int(num(o["--loop"])))
+    while True:
+        try:
+            msg = sync_once(quiet=True)
+            if msg != "pushed":
+                sys.stderr.write("%s jarvis sync: %s\n" % (now_iso(), msg))
+                sys.stderr.flush()
+        except Exception as e:  # noqa — the loop must outlive one bad pass
+            sys.stderr.write("%s jarvis sync failed: %s\n" % (now_iso(), e))
+            sys.stderr.flush()
+        time.sleep(every)
+
+
+AGENT_LABEL = "com.missioncontrol.jarvis"
+AGENT_PLIST = os.path.expanduser("~/Library/LaunchAgents/%s.plist" % AGENT_LABEL)
+
+
+def cmd_agent(args, install):
+    uid = os.getuid()
+    if not install:
+        subprocess.run(["launchctl", "bootout", "gui/%d/%s" % (uid, AGENT_LABEL)], stderr=subprocess.DEVNULL)
+        try:
+            os.unlink(AGENT_PLIST)
+        except OSError:
+            pass
+        print("removed %s" % AGENT_LABEL)
+        return
+    pos, o = parse(args, {"--every": True})
+    every = str(int(num(o.get("--every", 60))))
+    mia = os.path.expanduser("~/.mission-control/bin/mia")
+    log = os.path.expanduser("~/Library/Logs/mission-control-jarvis.log")
+    plist = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>%s</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/bash</string><string>%s</string><string>jarvis</string><string>sync</string><string>--loop</string><string>%s</string></array>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>%s</string>
+  <key>StandardErrorPath</key><string>%s</string>
+</dict>
+</plist>
+""" % (AGENT_LABEL, mia, every, log, log)
+    write_atomic(AGENT_PLIST, plist)
+    subprocess.run(["launchctl", "bootout", "gui/%d/%s" % (uid, AGENT_LABEL)], stderr=subprocess.DEVNULL)
+    res = subprocess.run(["launchctl", "bootstrap", "gui/%d" % uid, AGENT_PLIST])
+    if res.returncode != 0:
+        die("launchctl bootstrap failed (plist written to %s)" % AGENT_PLIST)
+    print("installed %s: sync every %ss, log %s" % (AGENT_LABEL, every, log))
+
+
+def cmd_status(args):
+    st = read_json(SYNC, {}) or {}
+    url, _ = relay_conf()
+    print("registry:  %s" % (REG if os.path.exists(REG) else "(none — mia jarvis seed)"))
+    print("relay:     %s" % (url or "(none configured)"))
+    print("last sync: %s%s" % (st.get("lastSyncAt", "never"), ("  error: " + st["lastError"]) if st.get("lastError") else ""))
+    print("last push: %s" % st.get("lastPushAt", "never"))
+    print("agent:     %s" % ("installed" if os.path.exists(AGENT_PLIST) else "not installed (mia jarvis install-agent)"))
+
+
+HELP = """mia jarvis — the registry behind Mission Control's HQ view.
+
+  mia jarvis show [<project>] [--json]           every company/project (or one in detail)
+  mia jarvis set-level <project> <level>         off|watch|suggest|fix (0-3)
+  mia jarvis metric <project> <name> <value> [--label L] [--unit U] [--better up|down]
+  mia jarvis finding <project|-> "<text>" [--kind found|fixed|shipped|note]
+  mia jarvis pause | resume                      everything proactive off/on (heartbeats too)
+  mia jarvis pitch <quieter|louder|N>            how often to pitch (N per day)
+  mia jarvis permit <project> "<kind of fix>"    add a standing permission
+  mia jarvis revoke <project> <n>                remove permission n (numbers from show)
+  mia jarvis set <project> <field> <value…>      name|summary|notes|company|link|doc|check
+  mia jarvis health [<project>] [--json]         run the health checks now
+  mia jarvis sync [--health] [--loop SECONDS]    apply HQ changes from the relay, push state
+  mia jarvis install-agent [--every 60]          run the sync loop as a LaunchAgent
+  mia jarvis uninstall-agent
+  mia jarvis status                              sync/relay/agent state
+  mia jarvis seed [--force]                      write the starting registry + README
+
+Projects are named by id, name or a unique prefix. Registry:
+$MIA_DIR/jarvis/registry.json (schema in README.md next to it)."""
+
+
+README_TEXT = """\
+# Jarvis registry (Mission Control HQ)
+
+`registry.json` here is the single source of truth for HQ, the control centre
+view in the Mission Control panel. Mia maintains it with `mia jarvis …` (see
+`mia jarvis help`); Daniel changes it from HQ, and those changes arrive through
+the relay and are applied by `mia jarvis sync`. Edit by hand only with the
+sync agent stopped, and keep it valid JSON.
+
+## Files
+
+| File | What |
+|---|---|
+| `registry.json` | companies, projects, autonomy, metrics, health, Jarvis switches |
+| `findings.jsonl` | one line per thing found / fixed / shipped, health changes, control changes |
+| `sync.json` | sync bookkeeping (last push, applied control ids, last error) |
+
+## registry.json
+
+```json
+{
+  "version": 1,
+  "updatedAt": "2026-10-14T09:00:00Z",
+  "jarvis": {
+    "paused": false,               // Jarvis pause: nothing proactive
+    "pausedAt": null,
+    "proactiveHeartbeats": ["hb_scout", "hb_health", "hb_crystal"],
+    "pausedHeartbeats": [],        // the ones pause switched off (resume turns them back on)
+    "pitchesPerDay": 1,            // 0.14 | 0.5 | 1 | 2 | 3  (quieter/louder steps)
+    "healthEveryMinutes": 15,
+    "lastHealthAt": "…"
+  },
+  "companies": [
+    { "id": "oblivion", "name": "Oblivion Estates", "tagline": "…",
+      "photo": "hq/oblivion.jpg" }  // a bundled panel image, or an https:// image URL
+  ],
+  "projects": [
+    {
+      "id": "dryager-panel",       // stable, lowercase, used by the CLI and HQ
+      "name": "Dry-ager panel",
+      "company": "dryager",        // a companies[].id
+      "summary": "one line",
+      "links": [{ "label": "Panel", "url": "https://…", "kind": "live|admin|repo" }],
+      "healthcheck": { "type": "http|railway|ssh", "target": "https://… | user@host",
+                       "expect": [200, 401], "slowMs": 4000, "command": "ssh only" },
+      "probes": [{ "type": "roblox", "universeId": "…" }],   // public numbers, fetched with health
+      "health": { "status": "up|slow|down|unknown", "code": 200, "ms": 340,
+                  "checkedAt": "…", "since": "…", "error": "", "recent": [["…", 340]] },
+      "metrics": [{ "name": "stale_leads", "label": "Stale leads", "unit": "", "better": "down",
+                    "value": 12, "at": "…", "source": "mia|probe",
+                    "history": [{ "t": "…", "v": 12 }] }],
+      "autonomy": 2,               // 0 Off · 1 Watch · 2 Suggest (default) · 3 Fix with undo
+      "notes": "free text for Mia",
+      "match": { "dirs": ["~/dryager-panel"], "keywords": ["dry-ager"], "fallbackDirs": [] },
+      "docs": ["library-doc-id"],  // pinned Library docs (HQ also matches by keyword)
+      "permissions": ["Restart the service when it is down"],
+      "scoutRequestedAt": null     // set when Daniel taps "Scout this now"
+    }
+  ]
+}
+```
+
+Autonomy rules (roadmap §3): never automatic at any level: money, messaging
+anyone new, deleting anything, publishing to the public, legal/POPIA.
+
+`match` decides which tasks belong to a project: a task whose folder is under
+one of `dirs` (or a `-suffix` worktree of it) wins; then the longest keyword
+found in the task title; `fallbackDirs` only when nothing else matches.
+
+## findings.jsonl
+
+`{"id": "f_…", "at": "…", "project": "dryager-panel" | "", "kind": "found|fixed|shipped|health|control|scout|note", "text": "…", "by": "mia|daniel|checker"}`
+
+HQ's activity feed shows these together with finished tasks.
+
+## How HQ changes reach Mia
+
+Every control Daniel taps in HQ does two things: the panel sends Mia an
+`[MC] Daniel: HQ: …` chat line (so she knows at once), and it queues the
+change on the relay. `mia jarvis sync` (the `com.missioncontrol.jarvis`
+LaunchAgent, every 60 s) applies queued changes here, runs the health checks
+every `healthEveryMinutes`, and pushes the public view of this file (no ssh
+targets, no probes) plus findings and recent tasks back to the relay.
+
+Pause/resume also switch the `proactiveHeartbeats` off/on in schedule.json.
+"""
+
+
+def main(argv):
+    if not argv or argv[0] in ("help", "-h", "--help"):
+        print(HELP)
+        return
+    cmd, rest = argv[0], argv[1:]
+    table = {
+        "show": cmd_show, "list": cmd_show, "set-level": cmd_set_level, "level": cmd_set_level,
+        "metric": cmd_metric, "finding": cmd_finding, "pitch": cmd_pitch, "set": cmd_set,
+        "pause": lambda a: cmd_pause(a, True), "resume": lambda a: cmd_pause(a, False),
+        "permit": lambda a: cmd_permit(a, True), "revoke": lambda a: cmd_permit(a, False),
+        "health": cmd_health, "sync": cmd_sync, "seed": cmd_seed, "status": cmd_status,
+        "install-agent": lambda a: cmd_agent(a, True), "uninstall-agent": lambda a: cmd_agent(a, False),
+    }
+    if cmd not in table:
+        die("unknown jarvis command: %s (try: mia jarvis help)" % cmd)
+    table[cmd](rest)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
