@@ -421,7 +421,8 @@ export default function App() {
         onLaunch={() => setSheet('launch')}
         onMia={() => nav('mia')}
       />
-      <div className="flex-none pb-4">
+      {/* Many cards scroll here rather than run on under the dock. */}
+      <div className="min-h-0 flex-shrink overflow-y-auto overscroll-contain pb-4 pt-2">
         <AttentionCards onOpen={openAgent} onOpenMia={() => nav('mia')} />
       </div>
     </div>
