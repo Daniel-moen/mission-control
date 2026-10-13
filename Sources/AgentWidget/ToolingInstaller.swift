@@ -2448,11 +2448,15 @@ def save(r):
     write_json(REG, r)
 
 
-def find_project(r, q):
+class Bad(ValueError):
+    """A bad project/level from the panel: skip that control, keep syncing."""
+
+
+def lookup(r, q):
     """By id, then case-insensitive name, then a unique prefix/substring."""
     q0 = (q or "").strip().lower()
     if not q0:
-        die("which project? (mia jarvis show lists them)")
+        raise Bad("which project? (mia jarvis show lists them)")
     ps = r["projects"]
     for p in ps:
         if p["id"].lower() == q0:
@@ -2467,18 +2471,32 @@ def find_project(r, q):
     if len(hits) == 1:
         return hits[0]
     if hits:
-        die("'%s' matches several projects: %s" % (q, ", ".join(p["id"] for p in hits)))
-    die("no project '%s' (ids: %s)" % (q, ", ".join(p["id"] for p in ps)))
+        raise Bad("'%s' matches several projects: %s" % (q, ", ".join(p["id"] for p in hits)))
+    raise Bad("no project '%s' (ids: %s)" % (q, ", ".join(p["id"] for p in ps)))
 
 
-def parse_level(v):
+def find_project(r, q):
+    try:
+        return lookup(r, q)
+    except Bad as e:
+        die(str(e))
+
+
+def level_of(v):
     s = str(v).strip().lower()
     if s.isdigit() and 0 <= int(s) <= 3:
         return int(s)
     alias = {"off": 0, "watch": 1, "suggest": 2, "fix": 3, "fix-with-undo": 3, "fix with undo": 3, "auto": 3}
     if s in alias:
         return alias[s]
-    die("level must be 0-3 or off|watch|suggest|fix")
+    raise Bad("level must be 0-3 or off|watch|suggest|fix")
+
+
+def parse_level(v):
+    try:
+        return level_of(v)
+    except Bad as e:
+        die(str(e))
 
 
 def level_label(n):
@@ -2857,8 +2875,8 @@ def apply_control(r, c):
     a = c.get("action")
     who = "daniel"
     if a == "level":
-        p = find_project(r, c.get("project"))
-        lv = parse_level(c.get("level"))
+        p = lookup(r, c.get("project"))
+        lv = level_of(c.get("level"))
         old = p.get("autonomy", 2)
         p["autonomy"] = lv
         add_finding(p["id"], "control", "Autonomy %s → %s" % (LEVEL_NAMES.get(old), LEVEL_NAMES.get(lv)), by=who, control=c.get("id"))
@@ -2878,7 +2896,7 @@ def apply_control(r, c):
         add_finding("", "control", "Pitches: %s" % pitch_label(new), by=who, control=c.get("id"))
         return "pitch %s" % pitch_label(new)
     if a == "scout":
-        p = find_project(r, c.get("project"))
+        p = lookup(r, c.get("project"))
         p["scoutRequestedAt"] = now_iso()
         add_finding(p["id"], "scout", "Scout requested from HQ", by=who, control=c.get("id"))
         return "scout %s" % p["id"]
@@ -2919,7 +2937,7 @@ def sync_once(force_health=False, quiet=False):
                 msg = apply_control(r, c)
                 if not quiet:
                     print("applied %s: %s" % (cid, msg))
-            except (ValueError, SystemExit) as e:
+            except ValueError as e:
                 if not quiet:
                     print("skipped %s: %s" % (cid, e))
             applied_now.append(cid)
