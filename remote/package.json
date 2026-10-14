@@ -25,6 +25,7 @@
     "test:docassets-panel": "node test/docassets-panel-e2e.mjs",
     "test:jarvis": "node test/jarvis-test.mjs",
     "test:jarvis-cli": "node test/jarvis-cli-test.mjs",
+    "test:routing-cli": "node test/routing-cli-test.mjs",
     "test:hq-model": "node test/hq-model-test.mjs",
     "test:hq-panel": "node test/hq-panel-e2e.mjs",
     "test:docpages": "node test/docpages-test.mjs",
