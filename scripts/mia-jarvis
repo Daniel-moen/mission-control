@@ -34,7 +34,7 @@ LEVEL_NAMES = {0: "Off", 1: "Watch", 2: "Suggest", 3: "Fix with undo"}
 # Pitch frequency steps, quietest first ("quieter"/"louder" move one step).
 PITCH_STEPS = [0.14, 0.5, 1, 2, 3]
 PITCH_NAMES = {0.14: "about once a week", 0.5: "every other day", 1: "once a day", 2: "twice a day", 3: "three a day"}
-FINDING_KINDS = ["found", "fixed", "shipped", "health", "control", "scout", "note"]
+FINDING_KINDS = ["found", "fixed", "shipped", "health", "control", "scout", "note", "action"]
 HISTORY_MAX = 120  # points kept per metric
 RECENT_MAX = 300  # health samples kept per project (~3 days at 15 min)
 UA = "MissionControl-Jarvis/1 (health check; +https://oblivionestate.com)"
@@ -260,7 +260,7 @@ SEED_PROJECTS = [
 
 
 def seed_registry():
-    return {
+    r = {
         "version": 1,
         "updatedAt": now_iso(),
         "jarvis": {"paused": False, "pausedAt": None, "pausedHeartbeats": [],
@@ -269,6 +269,8 @@ def seed_registry():
         "companies": json.loads(json.dumps(SEED_COMPANIES)),
         "projects": json.loads(json.dumps(SEED_PROJECTS)),
     }
+    ensure_v2(r)
+    return r
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +298,7 @@ def load(required=True):
         p.setdefault("permissions", [])
         p.setdefault("autonomy", 2)
         p.setdefault("match", {})
+    ensure_v2(r)
     return r
 
 
@@ -597,12 +600,12 @@ def expand(d):
     return os.path.abspath(os.path.expanduser(d)) if d else ""
 
 
-def matcher(r):
+def matcher(r, fallback=True):
     rules = []
     for p in r["projects"]:
         m = p.get("match") or {}
         rules.append((p["id"], [expand(d) for d in m.get("dirs", [])], [k.lower() for k in m.get("keywords", []) if k],
-                      [expand(d) for d in m.get("fallbackDirs", [])]))
+                      [expand(d) for d in m.get("fallbackDirs", [])] if fallback else []))
 
     def dir_hit(tdir, d):
         return tdir == d or tdir.startswith(d + "/") or tdir.startswith(d + "-")
@@ -655,10 +658,359 @@ def slim_tasks(r, days=45):
         if upd < cut and not open_:
             continue
         res = t.get("result")
+        # Filed by hand (`mia task add --company`) beats the match rules.
+        own = resolve_owner(r, t.get("project") or "") or resolve_owner(r, t.get("company") or "")
+        pid = own[1] if own else None
+        if not own:
+            pid = match(t)
+        company = own[0] if own else company_of(r, pid) if pid else ""
+        rt = t.get("routing") if isinstance(t.get("routing"), dict) else {}
         out.append({"id": t["id"], "title": (t.get("title") or "")[:160], "status": t.get("status", ""),
-                    "project": match(t), "createdAt": t.get("createdAt"), "updatedAt": t.get("updatedAt"),
-                    "result": (res if isinstance(res, str) else "")[:240]})
+                    "project": pid, "company": company, "createdAt": t.get("createdAt"), "updatedAt": t.get("updatedAt"),
+                    "result": (res if isinstance(res, str) else "")[:240],
+                    "tier": rt.get("tier") or None, "model": rt.get("model") or ((t.get("executor") or {}).get("model") if isinstance(t.get("executor"), dict) else None)})
     return out
+
+
+# ---------------------------------------------------------------------------
+# Company-centric data (task 0204): actions, the Library filed by company,
+# and what Mia knows about each company with its source. All additive: a
+# registry without these keys still works, and an older sync agent keeps them
+# untouched (it rewrites the whole JSON it read).
+
+LIB = os.path.abspath(os.path.expanduser(os.environ.get("MC_LIBRARY") or "~/.mission-control/library"))
+MEMORY = os.path.join(D, "memory")
+ACTION_TIERS = ("cheap", "mid", "smart")
+
+
+def A(aid, label, prompt, icon="sparkles", inputs=(), project=None, tier=None, hint=""):
+    a = {"id": aid, "label": label, "icon": icon, "prompt": prompt, "inputs": [dict(i) for i in inputs]}
+    if project:
+        a["project"] = project
+    if tier:
+        a["tier"] = tier
+    if hint:
+        a["hint"] = hint
+    return a
+
+
+def I(name, label, placeholder="", required=True, kind="text"):
+    return {"name": name, "label": label, "placeholder": placeholder, "required": required, "kind": kind}
+
+
+def scout_action(name):
+    return A("scout", "Scout now", "Scout %s now: check every project's health and numbers, compare with last week, and tell me the one thing worth doing." % name,
+             icon="scout", tier="cheap", hint="Health and numbers, one finding")
+
+
+# The seeded buttons per company. Prompts are what Mia receives (as an [MC]
+# line from Daniel); {name} placeholders are filled from the inputs.
+SEED_ACTIONS = {
+    "video": [
+        A("new-video", "Make a new video", "Make a new bodycam video on {topic}. Follow the bodycam style rules in memory/video.md (let the footage play, cut back to explain), run the full pipeline (script, narration, edit, thumbnail), keep the files on the Mac only, and send me the cut to review. Do not upload.",
+          icon="video", inputs=[I("topic", "Topic", "e.g. the 2019 Phoenix traffic stop")], project="bodycam", tier="smart", hint="Script → narration → edit → thumbnail"),
+        A("upload-latest", "Upload latest video", "Get the latest finished bodycam video ready to upload: title, description, tags and thumbnail, then ask me before anything goes public.",
+          icon="upload", project="bodycam", tier="mid", hint="Prepared, then asks before publishing"),
+    ],
+    "games": [
+        A("propose-crystal", "Propose improvements", "Propose 3 improvements for Crystal Garden based on its latest numbers (visits, retention, favourites) and what players do. Evidence for each, effort, and which one you'd build first.",
+          icon="sparkles", project="crystal-garden", tier="mid", hint="Three pitches with evidence"),
+    ],
+    "oblivion": [
+        A("mandate-targets", "Find mandate targets", "Find mandate targets in {area}: properties over R10m that look likely to sell, with address and erf for each (no LOOM pulls, no owner contact). File the report in the Library under Oblivion.",
+          icon="search", inputs=[I("area", "Area", "e.g. Bantry Bay, Fresnaye")], project="prospect-engine", tier="mid", hint="Address + erf, filed in the Library"),
+    ],
+}
+
+# Which memory files describe which company. other-projects.md holds a bit of
+# everything: its lines are filed by the projects' match rules.
+SEED_MEMORY = {
+    "oblivion": ["oblivion.md"], "klear": ["klear.md"], "games": ["roblox.md"],
+    "video": ["video.md"], "mission-control": ["mission-control.md"],
+}
+SHARED_MEMORY = ["other-projects.md"]
+
+# Company-wide words for filing Library docs that name no project.
+SEED_KEYWORDS = {
+    "oblivion": ["oblivion", "mandate", "mandates", "buyer", "buyers", "buyer briefs", "owner letter", "dossier", "dossiers",
+                 "listing", "listings", "fresnaye", "bantry bay", "camps bay", "clifton", "sea point", "green point",
+                 "kommetjie", "foreign buyers", "game farm", "game farms", "glamping", "virtual agent", "estate agency"],
+    "games": ["roblox", "game ideas", "garden build mode", "mother crystals", "perfect breed", "gear shop", "black market",
+              "friend boost", "clean all the leaves", "hybrids"],
+    "video": ["youtube", "faceless", "clipping", "bodycam", "raw incident"],
+    "klear": ["klear", "investment report", "thesis"],
+    "dryager": ["dry-ager", "dryager", "restaurants"],
+    "propiq": ["propiq", "deeds"],
+    "civentropy": ["civentropy", "diplomat"],
+    "mission-control": ["mission control", "mia", "jarvis"],
+}
+
+
+def ensure_v2(r):
+    """Give an older registry the 0204 keys (never overwrites). True if changed."""
+    changed = False
+    for c in r["companies"]:
+        if "actions" not in c:
+            c["actions"] = json.loads(json.dumps(SEED_ACTIONS.get(c["id"], []))) + [scout_action(c.get("name") or c["id"])]
+            changed = True
+        if "memory" not in c:
+            c["memory"] = list(SEED_MEMORY.get(c["id"], []))
+            changed = True
+        if "keywords" not in c:
+            c["keywords"] = list(SEED_KEYWORDS.get(c["id"], []))
+            changed = True
+    for k in ("library", "libraryOverrides"):
+        if not isinstance(r.get(k), dict):
+            r[k] = {}
+            changed = True
+    if not isinstance(r.get("sharedMemory"), list):
+        r["sharedMemory"] = list(SHARED_MEMORY)
+        changed = True
+    return changed
+
+
+def company_of(r, pid):
+    for p in r["projects"]:
+        if p["id"] == pid:
+            return p.get("company") or ""
+    return ""
+
+
+def resolve_owner(r, v):
+    """A company or project id → (company, project|None), or None."""
+    v = (v or "").strip()
+    if not v:
+        return None
+    for c in r["companies"]:
+        if c["id"] == v:
+            return (v, None)
+    for p in r["projects"]:
+        if p["id"] == v:
+            return (p.get("company") or "", p["id"])
+    return None
+
+
+# ---- the Library ------------------------------------------------------------
+
+def frontmatter(text):
+    if not text.startswith("---\n"):
+        return {}, text
+    end = text.find("\n---", 4)
+    if end < 0:
+        return {}, text
+    f = {}
+    for line in text[4:end].splitlines():
+        k, sep, v = line.partition(":")
+        if sep:
+            f[k.strip()] = v.strip()
+    return f, text[end + 4:].lstrip("\n")
+
+
+MD_STRIP = [(re.compile(r"!\[[^\]]*\]\([^)]*\)"), ""), (re.compile(r"\[([^\]]+)\]\([^)]*\)"), r"\1"),
+            (re.compile(r"[*_`]{1,3}"), ""), (re.compile(r"^#+\s*"), ""), (re.compile(r"\s+"), " ")]
+
+
+def plain(s):
+    for rx, rep in MD_STRIP:
+        s = rx.sub(rep, s)
+    return s.strip()
+
+
+def doc_summary(body):
+    """The answer-first line of a doc: '**Answer:** …' / '**In one line:** …', else the first paragraph."""
+    paras = [p.strip() for p in re.split(r"\n\s*\n", body) if p.strip()]
+    pick = ""
+    for p in paras[:8]:
+        if re.match(r"^\*\*(the\s+)?(short\s+)?(answer|in one line|tl;?dr|summary|bottom line)[^*]*\*\*", p, re.I):
+            pick = re.sub(r"^\*\*[^*]+\*\*\s*:?\s*", "", p)
+            break
+    if not pick:
+        for p in paras:
+            if p.startswith(("#", ":::", "|", "!", "-", "*   ", "```", ">")) or len(plain(p)) < 40:
+                continue
+            pick = p
+            break
+    s = re.sub(r"^[-*]\s+", "", plain(pick))
+    return s if len(s) <= 300 else s[:297].rsplit(" ", 1)[0] + "…"
+
+
+def library_docs():
+    out = []
+    try:
+        names = sorted(os.listdir(LIB))
+    except OSError:
+        return out
+    for n in names:
+        if not n.endswith(".md") or n.startswith("."):
+            continue
+        path = os.path.join(LIB, n)
+        text = read_text(path)
+        f, body = frontmatter(text)
+        m = re.search(r"^#\s+(.+)$", body, re.M)
+        try:
+            mt = os.path.getmtime(path)
+        except OSError:
+            mt = 0
+        out.append({
+            "id": n[:-3], "title": plain(m.group(1)) if m else n[:-3], "kind": f.get("kind", ""), "status": f.get("status", ""),
+            "subject": f.get("subject", ""), "tags": [t.strip() for t in f.get("tags", "").split(",") if t.strip()],
+            "dir": f.get("dir", ""), "company": f.get("company", ""), "created": f.get("created", ""),
+            "updatedAt": datetime.datetime.fromtimestamp(mt, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if mt else "",
+            "summary": doc_summary(body),
+        })
+    return out
+
+
+def doc_matcher(r):
+    """Like matcher() but for docs → (company, project|None) or None: folder,
+    then a project keyword or name in the title, subject and tags, then a
+    company keyword. No fallback folders: Mia writes docs from her own dir."""
+    match = matcher(r, fallback=False)
+    ckw = [(c["id"], k.lower()) for c in r["companies"] for k in (c.get("keywords") or []) if k]
+    names = []
+    for p in r["projects"]:
+        if len(p.get("name") or "") >= 4:
+            names.append((p["id"], p["name"].lower()))
+    for c in r["companies"]:
+        for p in r["projects"]:
+            if p.get("company") == c["id"] and len(c.get("name") or "") >= 4:
+                names.append((p["id"], c["name"].lower()))
+                break
+
+    def m(d):
+        hay = " ".join([d.get("title", ""), d.get("subject", ""), " ".join(d.get("tags", []))])
+        best = match({"dir": d.get("dir", ""), "title": hay})
+        if best:
+            return (company_of(r, best), best)
+        low = hay.lower()
+        hit = lambda k: re.search(r"(?<![a-z0-9])" + re.escape(k) + r"(?![a-z0-9])", low)
+        for pid, n in names:
+            if hit(n):
+                return (company_of(r, pid), pid)
+        best, score = None, 0
+        for cid, k in ckw:
+            if len(k) > score and hit(k):
+                best, score = cid, len(k)
+        return (best, None) if best else None
+    return m
+
+
+def classify_library(r, docs=None):
+    """Recompute r['library'] = {doc id: {company, project, by}}. True if changed."""
+    docs = library_docs() if docs is None else docs
+    m = doc_matcher(r)
+    pins = {}
+    for p in r["projects"]:
+        for d in p.get("docs") or []:
+            pins.setdefault(re.sub(r"\.md$", "", str(d)), p["id"])
+    over = r.get("libraryOverrides") or {}
+    lib = {}
+    for d in docs:
+        did = d["id"]
+        own, by = None, ""
+        if did in over:
+            own, by = resolve_owner(r, over[did]) or ("", None), "manual"
+        elif d.get("company") and resolve_owner(r, d["company"]):
+            own, by = resolve_owner(r, d["company"]), "frontmatter"
+        elif did in pins:
+            own, by = (company_of(r, pins[did]), pins[did]), "pinned"
+        else:
+            own = m(d)
+            by = "rule" if own else ""
+        if own and own[0]:
+            lib[did] = {"company": own[0], "project": own[1], "by": by}
+        else:
+            lib[did] = {"company": "", "project": None, "by": by or "none"}
+    changed = lib != r.get("library")
+    r["library"] = lib
+    return changed
+
+
+# ---- what Mia knows -----------------------------------------------------------
+# Memory bullets, filed by company, each with file + line. Contact details,
+# addresses of machines and anything that looks like a secret are cut before a
+# fact leaves the Mac: the panel shows what Mia knows, not how to reach anyone.
+
+REDACT = [
+    (re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+"), "‹email›"),
+    (re.compile(r"\b\d{1,3}(\.\d{1,3}){3}\b"), "‹ip›"),
+    (re.compile(r"\b\d{1,3}(-\d{1,3}){3}\.sslip\.io\b"), "‹host›"),
+    (re.compile(r"\+\d{1,3}[\d ()-]{7,}\d"), "‹number›"),
+    (re.compile(r"\b0\d{2}[ -]?\d{3}[ -]?\d{4}\b"), "‹number›"),
+    (re.compile(r"\b\d{10,}\b"), "‹number›"),
+    (re.compile(r"(?i)\b(password|passwd|token|secret|api[_ -]?key|bearer)\b(\s*[:=]\s*|\s+)([^\s,;)]+)"), r"\1 ‹hidden›"),
+    (re.compile(r"\b(sk|pk|rk|ghp|xox[bp])[-_][A-Za-z0-9_-]{8,}"), "‹hidden›"),
+]
+
+
+def redact(s):
+    for rx, rep in REDACT:
+        s = rx.sub(rep, s)
+    return s
+
+
+def memory_facts(fname):
+    """[(line number, section, text)] for the bullets of one memory file."""
+    out, section = [], ""
+    for i, line in enumerate(read_text(os.path.join(MEMORY, fname)).splitlines(), 1):
+        s = line.strip()
+        if s.startswith("#"):
+            section = plain(s)
+            continue
+        if s.startswith(("- ", "* ")):
+            t = plain(s[2:])
+            if len(t) >= 12:
+                out.append((i, section, t))
+    return out
+
+
+def knowledge(r, docs=None, per_company_docs=12):
+    """{company id: [fact]}; fact = {text, section, project, source: {kind, file, line} | {kind, id, title}}."""
+    match = matcher(r)
+    out = {c["id"]: [] for c in r["companies"]}
+
+    def proj(text, company):
+        pid = match({"title": text.lower()})
+        return pid if pid and company_of(r, pid) == company else None
+
+    for c in r["companies"]:
+        for fname in c.get("memory") or []:
+            for line, section, text in memory_facts(fname):
+                out[c["id"]].append({"text": redact(text), "section": section, "project": proj(text, c["id"]),
+                                     "source": {"kind": "memory", "file": fname, "line": line}})
+    for fname in r.get("sharedMemory") or []:
+        for line, section, text in memory_facts(fname):
+            pid = match({"title": text.lower()})
+            if pid and company_of(r, pid) in out:
+                out[company_of(r, pid)].append({"text": redact(text), "section": section, "project": pid,
+                                                "source": {"kind": "memory", "file": fname, "line": line}})
+    docs = library_docs() if docs is None else docs
+    lib = r.get("library") or {}
+    for cid in out:
+        mine = [d for d in docs if (lib.get(d["id"]) or {}).get("company") == cid and d.get("summary")]
+        mine.sort(key=lambda d: d.get("updatedAt", ""), reverse=True)
+        for d in mine[:per_company_docs]:
+            out[cid].append({"text": redact(d["summary"]), "section": d.get("kind") or "doc", "project": (lib.get(d["id"]) or {}).get("project"),
+                             "source": {"kind": "doc", "id": d["id"], "title": d["title"], "at": d.get("updatedAt", "")}})
+    return out
+
+
+def find_action(r, company, aid):
+    for c in r["companies"]:
+        if c["id"] == company:
+            for a in c.get("actions") or []:
+                if a.get("id") == aid:
+                    return c, a
+            raise Bad("no action '%s' on %s" % (aid, company))
+    raise Bad("no company '%s'" % company)
+
+
+def render_action(a, inputs):
+    vals = {k: str(v).strip() for k, v in (inputs or {}).items()}
+    for i in a.get("inputs") or []:
+        if i.get("required", True) and not vals.get(i["name"]):
+            raise Bad("%s needs %s" % (a.get("label"), i.get("label") or i["name"]))
+    return re.sub(r"\{(\w+)\}", lambda m: vals.get(m.group(1), m.group(0)), a.get("prompt") or "")
 
 
 # ---------------------------------------------------------------------------
@@ -714,9 +1066,19 @@ def public_registry(r):
     return out
 
 
-def build_state(r, applied):
+def build_state(r, applied, docs=None):
+    docs = library_docs() if docs is None else docs
+    lib = r.get("library") or {}
+    index = []
+    for d in docs:
+        own = lib.get(d["id"]) or {}
+        index.append({k: d[k] for k in ("id", "title", "kind", "status", "subject", "tags", "updatedAt", "summary")})
+        index[-1].update({"company": own.get("company") or "", "project": own.get("project"), "filedBy": own.get("by") or ""})
     return {
         "version": 1,
+        "schema": 2,  # 0204: docs (filed by company) + knowledge; older panels ignore both
+        "docs": index,
+        "knowledge": knowledge(r, docs),
         "at": now_iso(),
         "home": os.path.expanduser("~"),  # so the panel can match live task folders
         "registry": public_registry(r),
@@ -751,6 +1113,12 @@ def apply_control(r, c):
         r["jarvis"]["pitchesPerDay"] = new
         add_finding("", "control", "Pitches: %s" % pitch_label(new), by=who, control=c.get("id"))
         return "pitch %s" % pitch_label(new)
+    if a == "action":
+        co, act = find_action(r, c.get("company"), c.get("actionId"))
+        text = render_action(act, c.get("inputs"))
+        add_finding(act.get("project") or "", "action", "%s: %s" % (act.get("label"), text), by=who, control=c.get("id"),
+                    company=co["id"], action=act.get("id"), inputs=c.get("inputs") or {}, told=bool(c.get("told")))
+        return "action %s/%s" % (co["id"], act.get("id"))
     if a == "scout":
         p = lookup(r, c.get("project"))
         p["scoutRequestedAt"] = now_iso()
@@ -777,6 +1145,7 @@ def sync_once(force_health=False, quiet=False):
     every = float(r0["jarvis"].get("healthEveryMinutes") or 15) * 60
     last = parse_iso(r0["jarvis"].get("lastHealthAt")) or 0
     health = gather_health(r0["projects"]) if (force_health or time.time() - last >= every) else None
+    docs = library_docs()
     with Lock():
         r = load(required=False)
         if r is None:
@@ -802,9 +1171,11 @@ def sync_once(force_health=False, quiet=False):
         if health is not None:
             apply_health(r, health, quiet=True)
             changed = True
+        if classify_library(r, docs):
+            changed = True
         if changed:
             save(r)
-        state = build_state(r, applied_now)
+        state = build_state(r, applied_now, docs)
     if url and not err:
         try:
             relay("PUT", "/api/v1/jarvis/state", state, timeout=30)
@@ -1080,6 +1451,152 @@ def cmd_agent(args, install):
     print("installed %s: sync every %ss, log %s" % (AGENT_LABEL, every, log))
 
 
+def cmd_file(args):
+    if len(args) != 2:
+        die("usage: mia jarvis file <library-doc-id> <company|project|->   ('-' = back to the match rules)")
+    did = re.sub(r"\.md$", "", os.path.basename(args[0]))
+    with Lock():
+        r = load()
+        if args[1] in ("-", "auto"):
+            r["libraryOverrides"].pop(did, None)
+        else:
+            if not resolve_owner(r, args[1]):
+                die("no company or project '%s' (companies: %s)" % (args[1], ", ".join(c["id"] for c in r["companies"])))
+            r["libraryOverrides"][did] = args[1]
+        classify_library(r)
+        save(r)
+    own = r["library"].get(did)
+    if not own:
+        die("no Library doc '%s' in %s (filed anyway once it exists)" % (did, LIB), 2)
+    print("%s → %s%s (%s)" % (did, own["company"] or "unfiled", ("/" + own["project"]) if own.get("project") else "", own["by"]))
+
+
+def cmd_library(args):
+    pos, o = parse(args, {"--company": True, "--unfiled": False, "--json": False})
+    r = load()
+    docs = library_docs()
+    classify_library(r, docs)
+    rows = []
+    for d in docs:
+        own = r["library"].get(d["id"]) or {}
+        if o.get("--unfiled") and own.get("company"):
+            continue
+        if o.get("--company") and own.get("company") != o["--company"]:
+            continue
+        rows.append({"id": d["id"], "title": d["title"], "company": own.get("company") or "", "project": own.get("project"), "by": own.get("by")})
+    if o.get("--json"):
+        print(json.dumps(rows, indent=2, ensure_ascii=False))
+        return
+    for x in rows:
+        print("%s\t%s\t%s\t%s\t%s" % (x["id"], x["company"] or "-", x["project"] or "-", x["by"], x["title"]))
+
+
+def cmd_knowledge(args):
+    pos, o = parse(args, {"--json": False})
+    r = load()
+    docs = library_docs()
+    classify_library(r, docs)
+    k = knowledge(r, docs)
+    if pos:
+        if pos[0] not in k:
+            die("no company '%s' (ids: %s)" % (pos[0], ", ".join(k)))
+        k = {pos[0]: k[pos[0]]}
+    if o.get("--json"):
+        print(json.dumps(k, indent=2, ensure_ascii=False))
+        return
+    for cid, facts in k.items():
+        print("%s (%d)" % (cid, len(facts)))
+        for f in facts:
+            s = f["source"]
+            src = "%s:%s" % (s["file"], s["line"]) if s["kind"] == "memory" else "doc %s" % s["id"]
+            print("  - %s  [%s]" % (f["text"][:140], src))
+
+
+def cmd_actions(args):
+    """mia jarvis actions [<company>] | action add|remove …"""
+    pos, o = parse(args, {"--json": False})
+    r = load()
+    cs = [c for c in r["companies"] if not pos or c["id"] == pos[0]]
+    if pos and not cs:
+        die("no company '%s'" % pos[0])
+    if o.get("--json"):
+        print(json.dumps({c["id"]: c.get("actions") or [] for c in cs}, indent=2, ensure_ascii=False))
+        return
+    for c in cs:
+        for a in c.get("actions") or []:
+            ins = ",".join(i["name"] for i in a.get("inputs") or [])
+            print("%s\t%s\t%s\t%s%s" % (c["id"], a["id"], a.get("tier") or "-", a.get("label"), (" {%s}" % ins) if ins else ""))
+
+
+def cmd_action(args):
+    if not args or args[0] not in ("add", "remove"):
+        die('usage: mia jarvis action add <company> <id> --label L --prompt "… {topic} …" [--input name:Label[:placeholder]]… [--project p] [--tier cheap|mid|smart] [--icon i] [--hint h]\n'
+            "       mia jarvis action remove <company> <id>")
+    sub, rest = args[0], args[1:]
+    if sub == "remove":
+        if len(rest) != 2:
+            die("usage: mia jarvis action remove <company> <id>")
+        with Lock():
+            r = load()
+            c = next((c for c in r["companies"] if c["id"] == rest[0]), None)
+            if not c:
+                die("no company '%s'" % rest[0])
+            before = len(c["actions"])
+            c["actions"] = [a for a in c["actions"] if a.get("id") != rest[1]]
+            if len(c["actions"]) == before:
+                die("no action '%s' on %s" % (rest[1], rest[0]))
+            save(r)
+        print("removed %s/%s" % (rest[0], rest[1]))
+        return
+    # add: --input may repeat, so split it out before parse()
+    inputs, clean = [], []
+    i = 0
+    while i < len(rest):
+        if rest[i] == "--input" and i + 1 < len(rest):
+            name, _, more = rest[i + 1].partition(":")
+            label, _, ph = more.partition(":")
+            if not re.match(r"^\w+$", name):
+                die("--input name must be a word (got %r)" % name)
+            inputs.append(I(name, label or name, ph))
+            i += 2
+            continue
+        clean.append(rest[i])
+        i += 1
+    pos, o = parse(clean, {"--label": True, "--prompt": True, "--project": True, "--tier": True, "--icon": True, "--hint": True})
+    if len(pos) != 2 or not o.get("--label") or not o.get("--prompt"):
+        die("action add needs <company> <id> --label and --prompt")
+    if o.get("--tier") and o["--tier"] not in ACTION_TIERS:
+        die("--tier must be cheap, mid or smart")
+    if not re.match(r"^[a-z0-9][a-z0-9-]*$", pos[1]):
+        die("action id: lowercase letters, digits and dashes")
+    missing = set(re.findall(r"\{(\w+)\}", o["--prompt"])) - {x["name"] for x in inputs}
+    if missing:
+        die("the prompt uses {%s} but no --input defines it" % ", ".join(sorted(missing)))
+    with Lock():
+        r = load()
+        c = next((c for c in r["companies"] if c["id"] == pos[0]), None)
+        if not c:
+            die("no company '%s'" % pos[0])
+        if o.get("--project") and company_of(r, lookup(r, o["--project"])["id"]) != c["id"]:
+            die("project %s is not in %s" % (o["--project"], c["id"]))
+        a = A(pos[1], o["--label"], o["--prompt"], icon=o.get("--icon") or "sparkles", inputs=inputs,
+              project=lookup(r, o["--project"])["id"] if o.get("--project") else None, tier=o.get("--tier"), hint=o.get("--hint") or "")
+        c["actions"] = [x for x in c["actions"] if x.get("id") != a["id"]] + [a]
+        save(r)
+    print("%s/%s: %s" % (c["id"], a["id"], a["label"]))
+
+
+def cmd_upgrade(args):
+    """Add the 0204 keys (actions, memory map, Library filing) to an existing registry."""
+    with Lock():
+        r = load()
+        classify_library(r)
+        save(r)
+    filed = sum(1 for v in r["library"].values() if v.get("company"))
+    print("registry upgraded: %d companies with actions, %d/%d Library docs filed" % (
+        sum(1 for c in r["companies"] if c.get("actions")), filed, len(r["library"])))
+
+
 def cmd_status(args):
     st = read_json(SYNC, {}) or {}
     url, _ = relay_conf()
@@ -1102,6 +1619,13 @@ HELP = """mia jarvis — the registry behind Mission Control's HQ view.
   mia jarvis revoke <project> <n>                remove permission n (numbers from show)
   mia jarvis set <project> <field> <value…>      name|summary|notes|company|link|doc|check
   mia jarvis health [<project>] [--json]         run the health checks now
+  mia jarvis file <doc-id> <company|project|->   file a Library doc by hand ('-' = back to the rules)
+  mia jarvis library [--company c] [--unfiled]   where every Library doc is filed (and why)
+  mia jarvis knowledge [<company>] [--json]      what HQ shows as known, with sources
+  mia jarvis actions [<company>]                 the action buttons on each company page
+  mia jarvis action add <company> <id> --label L --prompt "…{x}…" [--input x:Label[:hint]]
+                    [--project p] [--tier cheap|mid|smart]   (action remove <company> <id>)
+  mia jarvis upgrade                             add actions/memory/Library filing to an old registry
   mia jarvis sync [--health] [--loop SECONDS]    apply HQ changes from the relay, push state
   mia jarvis install-agent [--every 60]          run the sync loop as a LaunchAgent
   mia jarvis uninstall-agent
@@ -1146,8 +1670,21 @@ sync agent stopped, and keep it valid JSON.
   },
   "companies": [
     { "id": "oblivion", "name": "Oblivion Estates", "tagline": "…",
-      "photo": "hq/oblivion.jpg" }  // a bundled panel image, or an https:// image URL
+      "photo": "hq/oblivion.jpg",   // a bundled panel image, or an https:// image URL
+      "memory": ["oblivion.md"],    // memory/*.md files about this company (Knowledge tab)
+      "keywords": ["mandate"],      // files Library docs that name no project
+      "actions": [{                 // buttons on the company page; a tap sends Mia the prompt
+        "id": "mandate-targets", "label": "Find mandate targets", "icon": "search",
+        "prompt": "Find mandate targets in {area}: …",   // {name} = an input below
+        "inputs": [{ "name": "area", "label": "Area", "placeholder": "e.g. Bantry Bay", "required": true }],
+        "project": "prospect-engine",   // optional: files the job under a project
+        "tier": "cheap|mid|smart",      // optional: the model tier Mia should dispatch on
+        "hint": "one line under the label" }] }
   ],
+  "sharedMemory": ["other-projects.md"],  // memory files whose lines are filed by match rules
+  "library": { "doc-id": { "company": "oblivion", "project": "prospect-engine|null",
+               "by": "manual|frontmatter|pinned|rule|none" } },   // recomputed every sync
+  "libraryOverrides": { "doc-id": "company-or-project-id" },      // mia jarvis file
   "projects": [
     {
       "id": "dryager-panel",       // stable, lowercase, used by the CLI and HQ
@@ -1179,11 +1716,24 @@ anyone new, deleting anything, publishing to the public, legal/POPIA.
 
 `match` decides which tasks belong to a project: a task whose folder is under
 one of `dirs` (or a `-suffix` worktree of it) wins; then the longest keyword
-found in the task title; `fallbackDirs` only when nothing else matches.
+found in the task title; `fallbackDirs` only when nothing else matches. A task
+filed by hand (`mia task add --company <company|project>`) skips the rules.
+
+Library docs are filed the same way (folder in `dir:`, then keywords or the
+project/company name in title, subject and tags), after, in order: a manual
+`mia jarvis file`, a `company:` line in the doc's frontmatter (`mc-doc new
+--company`), a project's pinned `docs`.
+
+Knowledge (pushed, not stored): every bullet of a company's `memory` files and
+the answer line of its newest docs, each with its source (file + line, or doc
+id). Emails, phone numbers, IPs and anything that looks like a secret are
+replaced before it leaves the Mac.
 
 ## findings.jsonl
 
-`{"id": "f_…", "at": "…", "project": "dryager-panel" | "", "kind": "found|fixed|shipped|health|control|scout|note", "text": "…", "by": "mia|daniel|checker"}`
+`{"id": "f_…", "at": "…", "project": "dryager-panel" | "", "kind": "found|fixed|shipped|health|control|scout|note|action", "text": "…", "by": "mia|daniel|checker"}`
+
+An `action` line (a company-page button) also has `company`, `action` and `inputs`.
 
 HQ's activity feed shows these together with finished tasks.
 
@@ -1211,6 +1761,8 @@ def main(argv):
         "pause": lambda a: cmd_pause(a, True), "resume": lambda a: cmd_pause(a, False),
         "permit": lambda a: cmd_permit(a, True), "revoke": lambda a: cmd_permit(a, False),
         "health": cmd_health, "sync": cmd_sync, "seed": cmd_seed, "status": cmd_status,
+        "file": cmd_file, "library": cmd_library, "knowledge": cmd_knowledge,
+        "actions": cmd_actions, "action": cmd_action, "upgrade": cmd_upgrade,
         "install-agent": lambda a: cmd_agent(a, True), "uninstall-agent": lambda a: cmd_agent(a, False),
     }
     if cmd not in table:

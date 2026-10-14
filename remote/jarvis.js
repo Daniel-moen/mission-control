@@ -7,7 +7,8 @@
 //   GET  /api/v1/jarvis           the panel reads it, plus the controls still
 //                                 waiting for the Mac (it overlays those itself)
 //   POST /api/v1/jarvis/control   the panel queues one change (autonomy level,
-//                                 pause/resume, pitch, scout) for the Mac
+//                                 pause/resume, pitch, scout, a company
+//                                 action button) for the Mac
 //   GET  /api/v1/jarvis/controls  the Mac pulls the queue
 //
 // The relay never decides anything: the registry on the Mac is the truth, the
@@ -23,7 +24,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { dataFile } = require('./datafile');
 
-const ACTIONS = new Set(['level', 'pause', 'resume', 'pitch', 'scout']);
+const ACTIONS = new Set(['level', 'pause', 'resume', 'pitch', 'scout', 'action']);
 const MAX_PENDING = 200;
 const MAX_STATE_BYTES = 1.5 * 1024 * 1024;
 
@@ -68,6 +69,20 @@ function createJarvis({ file, log = console } = {}) {
     if (action === 'pitch') {
       c.value = str(b.value, 16);
       if (c.value !== 'quieter' && c.value !== 'louder') return 'pitch value must be quieter or louder';
+    }
+    if (action === 'action') {
+      // A company-page button (task 0204): which one, and what Daniel typed
+      // into its inputs. The Mac renders the prompt from its own registry.
+      c.company = str(b.company, 64);
+      c.actionId = str(b.actionId, 64);
+      if (!/^[a-z0-9][a-z0-9._-]*$/i.test(c.company)) return 'company id missing or malformed';
+      if (!/^[a-z0-9][a-z0-9._-]*$/i.test(c.actionId)) return 'actionId missing or malformed';
+      const inputs = b.inputs && typeof b.inputs === 'object' && !Array.isArray(b.inputs) ? b.inputs : {};
+      c.inputs = {};
+      for (const [k, v] of Object.entries(inputs).slice(0, 8)) {
+        if (/^\w{1,32}$/.test(k) && typeof v === 'string') c.inputs[k] = v.trim().slice(0, 400);
+      }
+      c.label = str(b.label, 80);
     }
     c.told = b.told === true; // the panel also sent Mia the [MC] line
     return c;
