@@ -7,7 +7,7 @@ import {
   Terminal, Trash2, TriangleAlert, Tv, User, Users, X, Zap, Microscope, FileText,
   Sparkle, Bell, BellRing, BellOff, Ban, RotateCcw, ListTodo, MessageSquare,
   Download, Share, FileCode2, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen,
-  Ear, EarOff, Paperclip, File, FileImage, FileAudio, FileSpreadsheet, Presentation,
+  Ear, EarOff, Paperclip, File, FileImage, FileAudio, FileSpreadsheet, Presentation, AppWindow,
   Building2, Pause, Telescope, ExternalLink, TrendingUp, TrendingDown, Undo2, ShieldCheck,
   Volume1, Volume2, Wrench, Eye, CircleOff, Lightbulb,
 } from 'lucide-react';
@@ -30,6 +30,7 @@ const MAP = {
   plan: ClipboardList,
   research: Microscope,
   note: StickyNote,
+  page: AppWindow,
   doc: FileText,
   play: Play,
   stop: Square,

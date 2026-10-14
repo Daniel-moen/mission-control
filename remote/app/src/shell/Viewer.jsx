@@ -7,6 +7,7 @@ import { useDocImages, loadImage, imgEndpoint } from '../lib/thumbs.js';
 import { sheetUp } from '../lib/motion.js';
 import IconButton from '../ui/IconButton.jsx';
 import Button from '../ui/Button.jsx';
+import PageFrame, { isPageDoc } from '../views/library/PageFrame.jsx';
 
 // What Mia is showing Daniel over the panel (`mia panel show-url|show-doc`,
 // docs/mia.md §8.2): a page, a card for a page that won't be framed, or a
@@ -131,6 +132,7 @@ function Frame({ v, onFail }) {
 
 function DocBody({ v }) {
   const doc = useMC((s) => s.docDocs[v.docId] || null);
+  const meta = useMC((s) => s.docs.find((d) => d.id === v.docId) || null);
   const link = useMC((s) => s.link);
   const lastSnapshotAt = useMC((s) => s.lastSnapshotAt);
   const lastReq = useRef(0);
@@ -145,6 +147,14 @@ function DocBody({ v }) {
   const html = useMemo(() => (doc ? renderMarkdown(doc.content, { docId: v.docId }) : ''), [doc, v.docId]);
   const [article, setArticle] = useState(null);
   useDocImages(article, html);
+  // A Library page (task 0126): full-bleed in its sandboxed frame.
+  if (isPageDoc(meta)) {
+    return (
+      <div className="min-h-0 flex-1 pb-[env(safe-area-inset-bottom)]" data-reader="viewer-page" data-doc-id={v.docId}>
+        <PageFrame docId={v.docId} title={v.title} updatedAt={meta?.updatedAt} stub={doc?.content} />
+      </div>
+    );
+  }
   return (
     <div className="noscroll min-h-0 flex-1 overflow-y-auto" data-reader="viewer" data-doc-id={v.docId}>
       {doc ? (

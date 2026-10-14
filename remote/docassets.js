@@ -256,4 +256,6 @@ function createDocAssets({ tokenOk, dir, maxFileBytes = 12 * MB, maxFiles = 400,
   return { handle, root, info: () => ({ bytes: total, dir: root }) };
 }
 
-module.exports = { createDocAssets, parsePath, okName, okStem };
+const mimeOf = (name) => (TYPES[extOf(name)] || {}).mime || 'application/octet-stream';
+
+module.exports = { createDocAssets, parsePath, okName, okStem, mimeOf };

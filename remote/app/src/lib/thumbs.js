@@ -58,7 +58,11 @@ export function loadImage(endpoint) {
         const r = await fetch(endpoint, { headers: { Authorization: `Bearer ${getMC().token}` } });
         if (r.status === 200 && /^image\//.test(r.headers.get('content-type') || '')) out = URL.createObjectURL(await r.blob());
         // Transient trouble (relay down, 5xx) isn't remembered: next open tries again.
-        if (out || r.status === 204 || r.status === 400 || r.status === 404) remember(endpoint, out);
+        // A doc's own image that isn't on the relay YET (mc-doc is still
+        // pushing it) is never remembered as "none": that pinned a broken
+        // figure for the life of an installed panel. Next open tries again.
+        const asset = endpoint.startsWith('/api/v1/doc-assets/');
+        if (out || (!asset && (r.status === 204 || r.status === 400 || r.status === 404))) remember(endpoint, out);
       } catch {}
       resolve(out);
     });

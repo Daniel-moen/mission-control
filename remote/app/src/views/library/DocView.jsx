@@ -11,6 +11,7 @@ import Button from '../../ui/Button.jsx';
 import IconButton from '../../ui/IconButton.jsx';
 import Icon from '../../ui/Icon.jsx';
 import DownloadButton from './Download.jsx';
+import PageFrame, { isPageDoc } from './PageFrame.jsx';
 
 // The document workspace: rendered markdown by default, a raw editor on demand,
 // and a calm metadata bar for the frontmatter (kind / status / subject / tags /
@@ -33,6 +34,7 @@ const TONE = {
   plan: { icon: 'plan', text: 'text-accent', ring: 'border-accent/35 bg-accent/12 text-accent' },
   research: { icon: 'research', text: 'text-mgr', ring: 'border-mgr/35 bg-mgr/12 text-mgr' },
   note: { icon: 'note', text: 'text-ink2', ring: 'border-glass-line bg-white/[0.07] text-ink2' },
+  page: { icon: 'page', text: 'text-s4', ring: 'border-s4/35 bg-s4/12 text-s4' },
 };
 const STATUS_CHIP = {
   draft: 'border-glass-line text-ink3',
@@ -65,6 +67,9 @@ export default function DocView({ docId, startEditing = false, onClose, onLaunch
   const kind = meta?.kind || doc?.kind || 'note';
   const tone = TONE[kind] || TONE.note;
   const isActive = meta?.status === 'active';
+  // A page (task 0126) is a full HTML page: shown full-bleed in a sandboxed
+  // frame, no markdown editor or metadata bar (mc-doc owns it).
+  const page = isPageDoc(meta) || kind === 'page';
 
   // Fetch the body when it's missing — on open, and again whenever a snapshot
   // invalidates the cached copy (the file changed on the Mac; this is how a
@@ -170,6 +175,10 @@ export default function DocView({ docId, startEditing = false, onClose, onLaunch
     <Button variant="primary" icon="check" onClick={save} className="flex-none">
       Save
     </Button>
+  ) : page ? (
+    <Button variant="primary" icon={launchIcon} onClick={doLaunch} disabled={!meta} className="flex-none">
+      {launchLabel}
+    </Button>
   ) : (
     <>
       <DownloadButton docId={docId} meta={meta} title={title} compact={!wide} disabled={!meta} />
@@ -212,7 +221,7 @@ export default function DocView({ docId, startEditing = false, onClose, onLaunch
               )}
               {meta?.folder && <span className="truncate">· {meta.folder}</span>}
               {meta && <span className="flex-none">· {ago(meta.updatedAt, now)}</span>}
-              {meta?.words ? <span className="tnum flex-none">· {meta.words.toLocaleString()} words</span> : null}
+              {meta?.words && !page ? <span className="tnum flex-none">· {meta.words.toLocaleString()} words</span> : null}
             </div>
           </div>
           {wide && <div className="flex flex-none items-center gap-2">{actions}</div>}
@@ -222,6 +231,11 @@ export default function DocView({ docId, startEditing = false, onClose, onLaunch
 
       {/* Below 1024 this window is a full-screen sheet with the dock floating
           over it — content must clear the dock. */}
+      {page && !editing ? (
+        <div className="min-h-0 flex-1 pb-24 lg:pb-0" data-reader="page" data-doc-id={docId}>
+          <PageFrame docId={docId} title={title} updatedAt={meta?.updatedAt} stub={doc?.content} />
+        </div>
+      ) : (
       <div className="noscroll min-h-0 flex-1 overflow-y-auto pb-24 lg:pb-0" data-reader="doc" data-doc-id={docId}>
         <AnimatePresence mode="wait" initial={false}>
           {editing ? (
@@ -334,6 +348,7 @@ export default function DocView({ docId, startEditing = false, onClose, onLaunch
           )}
         </AnimatePresence>
       </div>
+      )}
     </div>
   );
 }

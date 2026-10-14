@@ -26,7 +26,9 @@
     "test:jarvis": "node test/jarvis-test.mjs",
     "test:jarvis-cli": "node test/jarvis-cli-test.mjs",
     "test:hq-model": "node test/hq-model-test.mjs",
-    "test:hq-panel": "node test/hq-panel-e2e.mjs"
+    "test:hq-panel": "node test/hq-panel-e2e.mjs",
+    "test:docpages": "node test/docpages-test.mjs",
+    "test:docpages-panel": "node test/docpages-panel-e2e.mjs"
   },
   "engines": {
     "node": ">=20"

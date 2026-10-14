@@ -68,6 +68,7 @@ const { createRealtime } = require('./realtime');
 const { createTts } = require('./tts');
 const { createUpload } = require('./upload');
 const { createDocAssets } = require('./docassets');
+const { createDocPages } = require('./docpages');
 
 const PORT = process.env.PORT || 8080;
 const TOKEN = process.env.MC_TOKEN || '';
@@ -127,6 +128,18 @@ const MIME = {
   '.map': 'application/json; charset=utf-8',
 };
 
+// The live panel build (dist/version.json, written by vite.config.mjs).
+let buildCache = { at: 0, id: '' };
+function panelBuild() {
+  if (Date.now() - buildCache.at < 10000) return buildCache.id;
+  let id = '';
+  try {
+    id = JSON.parse(fs.readFileSync(path.join(DIST, 'version.json'), 'utf8')).build || '';
+  } catch {}
+  buildCache = { at: Date.now(), id };
+  return id;
+}
+
 function serveFile(res, filePath, { immutable = false } = {}) {
   fs.readFile(filePath, (err, buf) => {
     if (err) {
@@ -156,7 +169,28 @@ const server = http.createServer((req, res) => {
 
   if (pathname === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, host: host !== null, viewers: viewers.size, pollers: pollers.size, pushSubscriptions: push.count(), stt: stt.info().provider, realtime: realtime.info(), tts: tts.info(), uploads: upload.info(), docAssets: docAssets.info().bytes }));
+    res.end(JSON.stringify({ ok: true, host: host !== null, viewers: viewers.size, pollers: pollers.size, pushSubscriptions: push.count(), stt: stt.info().provider, realtime: realtime.info(), tts: tts.info(), uploads: upload.info(), docAssets: docAssets.info().bytes, docPages: docPages.info().bytes, panelBuild: panelBuild(), viewerBuilds: [...viewers].map((v) => v.build || 'legacy') }));
+    return;
+  }
+
+  // HTML pages in the Library: the token-auth API, and the sandboxed page
+  // itself under a per-page capability — see docpages.js.
+  if (url.pathname.startsWith('/api/v1/doc-pages/')) {
+    docPages.handleApi(req, res, url).catch((err) => {
+      console.error('doc-pages error:', err);
+      if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'internal error' }));
+    });
+    return;
+  }
+  if (url.pathname.startsWith('/p/')) {
+    try {
+      docPages.handlePublic(req, res, url);
+    } catch (err) {
+      console.error('doc-page error:', err);
+      if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain' });
+      res.end('internal error');
+    }
     return;
   }
 
@@ -406,6 +440,15 @@ const docAssets = createDocAssets({
     (process.env.RAILWAY_VOLUME_MOUNT_PATH ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'doc-assets') : undefined),
   maxTotalBytes: (Number(process.env.DOC_ASSETS_MB) || 2048) * 1024 * 1024,
 });
+// Library pages (docpages.js): HTML next to the doc assets, served sandboxed
+// under /p/<capability>/… — never with the panel's token.
+const docPages = createDocPages({
+  tokenOk,
+  secret: TOKEN,
+  dir: process.env.DOC_PAGES || path.join(path.dirname(docAssets.root), 'doc-pages'),
+  assetsRoot: docAssets.root,
+  linkHours: Number(process.env.PAGE_LINK_HOURS) || 24 * 7,
+});
 
 const api = createApi({
   tokenOk,
@@ -502,7 +545,7 @@ setInterval(() => {
   if (host === null && viewers.size) tellViewersHostState();
 }, 10000);
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
   ws.on('pong', () => {
     ws.isAlive = true;
   });
@@ -565,6 +608,9 @@ wss.on('connection', (ws) => {
   // Viewer.
   ws.seq = ++wsSeq;
   ws.connectedAt = Date.now();
+  // Which panel build this is (task 0126) — /health lists them, so a stale
+  // installed PWA shows up. Panels from before the build id send nothing.
+  ws.build = String(new URL(req.url, 'http://x').searchParams.get('build') || '').replace(/[^A-Za-z0-9._-]/g, '').slice(0, 40) || 'legacy';
   viewers.add(ws);
   console.log(`viewer connected (${viewers.size})`);
   sendTo(ws, { type: 'hostState', online: host !== null });
