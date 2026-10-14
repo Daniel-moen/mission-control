@@ -73,7 +73,9 @@ enum ToolingInstaller {
 # Byte-for-byte compatibility with DocLibrary.write matters: a file is
 #   "---\n" + frontmatter-lines + "\n---\n" + body(with one trailing "\n")
 # and frontmatter keys are written in the order kind, status, subject, tags,
-# dir, session, created — with subject/tags/dir/session omitted when empty.
+# company, dir, session, created — with subject/tags/company/dir/session
+# omitted when empty. (company — a Jarvis registry company/project id — is
+# mc-doc's own key; the app reads it but does not write it yet.)
 
 set -eu
 
@@ -179,6 +181,9 @@ normalize_tags() {
 
 trim() { printf '%s' "$1" | sed -e 's/^[[:blank:]]*//' -e 's/[[:blank:]]*$//'; }
 
+# A frontmatter value on one line (a newline would forge a key), trimmed.
+one_line() { trim "$(printf '%s' "$1" | tr '\n\r' '  ')"; }
+
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 # Guarantee exactly one trailing newline on the body file, as DocLibrary.write does.
@@ -196,6 +201,7 @@ emit_doc() {
   printf 'status: %s\n' "$F_status"
   [ -n "$F_subject" ] && printf 'subject: %s\n' "$F_subject"
   [ -n "$F_tags" ] && printf 'tags: %s\n' "$F_tags"
+  [ -n "${F_company:-}" ] && printf 'company: %s\n' "$F_company"
   [ -n "$F_dir" ] && printf 'dir: %s\n' "$F_dir"
   [ -n "$F_session" ] && printf 'session: %s\n' "$F_session"
   printf 'created: %s\n' "$F_created"
@@ -214,7 +220,7 @@ replace_file() {
 require_val() { [ $# -ge 2 ] && [ -n "${2:-}" ] || die "$1 needs a value"; }
 
 cmd_new() {
-  local kind="" title="" subject="" tags="" dir="" bodyfile="" stdin=0 base=""
+  local kind="" title="" subject="" tags="" company="" dir="" bodyfile="" stdin=0 base="" html="" summary=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --assets-from) require_val "$1" "${2:-}"; base=$2; shift 2 ;;
@@ -222,21 +228,55 @@ cmd_new() {
       --title) require_val "$1" "${2:-}"; title=$2; shift 2 ;;
       --subject) subject=${2:-}; shift 2 ;;
       --tags) tags=${2:-}; shift 2 ;;
+      --company) company=${2:-}; shift 2 ;;
       --dir) dir=${2:-}; shift 2 ;;
       --body-file) require_val "$1" "${2:-}"; bodyfile=$2; shift 2 ;;
       --stdin) stdin=1; shift ;;
+      --html) require_val "$1" "${2:-}"; html=$2; shift 2 ;;
+      --summary) summary=${2:-}; shift 2 ;;
       *) die "unknown flag: $1" ;;
     esac
   done
   [ -n "$kind" ] || die "new needs --kind"
   [ -n "$title" ] || die "new needs --title"
-  case "$kind" in plan|research|note) ;; *) die "kind must be plan|research|note" ;; esac
+  case "$kind" in plan|research|note|page) ;; *) die "kind must be plan|research|note|page" ;; esac
+  if [ "$kind" = page ]; then
+    [ -n "$bodyfile" ] && die "a page takes --html <file> (or --stdin), not --body-file"
+    [ -n "$html" ] || [ "$stdin" -eq 1 ] || die "new --kind page needs --html <file> (or --stdin)"
+  else
+    [ -z "$html" ] || die "--html is for --kind page"
+  fi
 
   ensure_root
   local slug id n
   slug=$(slugify "$title")
   id="$slug.md"; n=2
   while [ -e "$LIB/$id" ]; do id="$slug-$n.md"; n=$((n+1)); done
+
+  if [ "$kind" = page ]; then
+    local src_tmp=""
+    if [ -z "$html" ]; then src_tmp=$(mktemp); cat >"$src_tmp"; html=$src_tmp; fi
+    [ -n "$base" ] || { [ -n "$src_tmp" ] && base=$PWD || base=$(dirname "$html"); }
+    F_kind=page
+    F_status=done
+    F_subject=$(trim "$subject")
+    F_tags=$(with_page_tag "$tags")
+    F_company=$(one_line "$company")
+    F_dir=$(trim "$dir")
+    F_session=""
+    F_created=$(now_iso)
+    # Reserve the id first (the stub), then import the page into it.
+    local stub; stub=$(mktemp)
+    printf '# %s\n' "$title" >"$stub"
+    emit_doc "$stub" | replace_file "$id"
+    rm -f "$stub"
+    # (in a subshell: a failed import exits it, and we clean the stub up)
+    ( page_import "$id" "$html" "$base" "$title" "$summary" ) || { rm -rf "$LIB/$id" "$LIB/${id%.md}.html" "$LIB/${id%.md}.assets"; [ -z "$src_tmp" ] || rm -f "$src_tmp"; exit 1; }
+    [ -z "$src_tmp" ] || rm -f "$src_tmp"
+    sync_assets "$id"
+    printf '%s\n' "$LIB/$id"
+    return 0
+  fi
 
   local body_tmp; body_tmp=$(mktemp)
   # shellcheck disable=SC2064
@@ -258,6 +298,7 @@ cmd_new() {
   F_status=draft
   F_subject=$(trim "$subject")
   F_tags=$(normalize_tags "$tags")
+  F_company=$(one_line "$company")
   F_dir=$(trim "$dir")
   F_session=""
   F_created=$(now_iso)
@@ -328,6 +369,7 @@ cmd_set() {
   F_status=$(front_val "$id" status)
   F_subject=$(front_val "$id" subject)
   F_tags=$(front_val "$id" tags)
+  F_company=$(front_val "$id" company)
   F_dir=$(front_val "$id" dir)
   F_session=$(front_val "$id" session)
   F_created=$(front_val "$id" created)
@@ -336,12 +378,15 @@ cmd_set() {
   [ -n "$F_created" ] || F_created=$(now_iso)
 
   case "$key" in
-    kind)   case "$value" in plan|research|note) ;; *) die "kind must be plan|research|note" ;; esac; F_kind=$value ;;
+    kind)   case "$value" in plan|research|note|page) ;; *) die "kind must be plan|research|note|page" ;; esac
+            if [ "$value" = page ] && [ ! -f "$LIB/${id%.md}.html" ]; then die "no page HTML for $id (use: mc-doc page $id --html <file>)"; fi
+            F_kind=$value ;;
     status) case "$value" in draft|active|done|archived) ;; *) die "status must be draft|active|done|archived" ;; esac; F_status=$value ;;
     subject) F_subject=$(trim "$value") ;;
     tags)    F_tags=$(normalize_tags "$value") ;;
+    company) F_company=$(one_line "$value") ;;
     dir)     F_dir=$(trim "$value") ;;
-    *) die "cannot set '$key' (only kind, status, subject, tags, dir)" ;;
+    *) die "cannot set '$key' (only kind, status, subject, tags, company, dir)" ;;
   esac
   emit_doc "$body_tmp" | replace_file "$id"
 }
@@ -349,6 +394,7 @@ cmd_set() {
 cmd_write() {
   local id="${1:-}"; shift || true
   require_id "$id"
+  is_page "$id" && die "$id is a page: update it with  mc-doc page $id --html <file>"
   local bodyfile="" stdin=0 base=""
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -506,6 +552,18 @@ relay_conf() {
 sync_assets() {
   local id="$1" strict="${2:-}"
   [ "${MC_DOC_NO_SYNC:-0}" = 1 ] && return 0
+  # A page's images go first, then its HTML (sync_page), so the page never
+  # reaches the relay before the pictures it points at.
+  if is_page "$id"; then
+    sync_assets_only "$id" "$strict" || return 1
+    sync_page "$id" "$strict"
+    return $?
+  fi
+  sync_assets_only "$id" "$strict"
+}
+
+sync_assets_only() {
+  local id="$1" strict="${2:-}"
   local adir; adir=$(assets_dir "$id")
   [ -d "$adir" ] || return 0
   if ! relay_conf; then
@@ -703,6 +761,229 @@ cmd_detach() {
   done
 }
 
+# ---------------------------------------------------------------------------
+# Pages (task 0126). A page is a full, self-contained HTML page — the kind of
+# thing a Claude artifact is — shown full-bleed in the panel inside a sandboxed
+# frame. On disk:
+#   <stem>.md      a stub (kind: page, tag "page", "# Title" + a summary) so
+#                  the Mac app, `list` and the panel's Library see it like any doc;
+#   <stem>.html    the page itself, local refs rewritten to assets/<name>;
+#   <stem>.assets/ its images, through the same attach pipeline as markdown docs.
+# The HTML and the images are pushed to the relay, which serves the page from
+# /p/<capability>/<stem>/ with a strict CSP (see remote/docpages.js).
+
+PAGE_MAX_BYTES=2097152   # the relay's cap: put images in assets, not data: URIs
+
+page_file() { printf '%s/%s.html' "$LIB" "${1%.md}"; }
+is_page() { [ -f "$(page_file "$1")" ]; }
+
+# "a, b" → "page, a, b" (once).
+with_page_tag() {
+  local t; t=$(normalize_tags "$1")
+  case ", $t, " in *", page, "*) printf '%s' "$t" ;; *) normalize_tags "page, $t" ;; esac
+}
+
+# The python half of page import: list the local files an HTML page refers to
+# (mode=scan) or rewrite those refs to assets/<name> (mode=rewrite). Looks at
+# src/href/poster/data-src, srcset lists and CSS url(...). Web, data:, blob:,
+# #anchor and already-assets/ refs are left alone.
+page_refs_py() {
+  python3 - "$@" <<'PY'
+import os, re, sys
+from urllib.parse import unquote
+mode, html, base, adir = sys.argv[1:5]
+mp = {}
+if mode == 'rewrite':
+    for line in open(sys.argv[5], encoding='utf-8'):
+        k, _, v = line.rstrip('\n').partition('\t')
+        if k: mp[k] = v
+IMG_EXT = re.compile(r'\.(jpe?g|png|gif|webp|heic|heif|tiff?|avif|bmp)$', re.I)
+text = open(html, encoding='utf-8', errors='surrogateescape').read()
+seen, warned = [], set()
+def resolve(ref):
+    r = ref.strip()
+    if not r or re.match(r'^(?:[a-z][a-z0-9+.-]*:|#|//|\{)', r, re.I): return None
+    r = r.split('#')[0].split('?')[0]
+    if not r: return None
+    r2 = re.sub(r'^\./', '', r)
+    if r2.startswith('assets/'):
+        if mode == 'scan' and not os.path.isfile(os.path.join(adir, r2[7:])) and r2 not in warned:
+            warned.add(r2); sys.stderr.write('mc-doc: warning: %s is not attached to this page\n' % r2)
+        return None
+    for cand in (r, unquote(r)):
+        p = os.path.expanduser(cand)
+        p = os.path.realpath(p if os.path.isabs(p) else os.path.join(base, p))
+        if os.path.isfile(p):
+            if IMG_EXT.search(p): return p
+            if mode == 'scan' and p not in warned:
+                warned.add(p); sys.stderr.write('mc-doc: warning: %s is a local file the page cannot load; inline it (only images become assets)\n' % r)
+            return None
+    if mode == 'scan' and r not in warned and IMG_EXT.search(r):
+        warned.add(r); sys.stderr.write('mc-doc: warning: image not found: %s\n' % r)
+    return None
+def one(ref):
+    p = resolve(ref)
+    if p is None: return ref
+    if mode == 'scan':
+        if p not in seen: seen.append(p)
+        return ref
+    name = mp.get(p)
+    return 'assets/' + name if name else ref
+ATTR = re.compile(r'(\b(?:src|href|poster|data-src|data-full|xlink:href)\s*=\s*)(["\'])(.*?)\2', re.I | re.S)
+SRCSET = re.compile(r'(\b(?:srcset|data-srcset)\s*=\s*)(["\'])(.*?)\2', re.I | re.S)
+URL = re.compile(r'(url\(\s*)(["\']?)([^"\')]+)\2(\s*\))', re.I)
+def srcset(m):
+    parts = []
+    for item in m.group(3).split(','):
+        bits = item.strip().split(None, 1)
+        if not bits: continue
+        bits[0] = one(bits[0])
+        parts.append(' '.join(bits))
+    return m.group(1) + m.group(2) + ', '.join(parts) + m.group(2)
+text = SRCSET.sub(srcset, text)
+text = ATTR.sub(lambda m: m.group(1) + m.group(2) + one(m.group(3)) + m.group(2), text)
+text = URL.sub(lambda m: m.group(1) + m.group(2) + one(m.group(3)) + m.group(2) + m.group(4), text)
+if mode == 'scan':
+    for p in seen: print(p)
+else:
+    open(html, 'w', encoding='utf-8', errors='surrogateescape').write(text)
+PY
+}
+
+# A one-paragraph plain-text summary of a page: <meta name=description>, else
+# its first <p>, else "" — for the stub (the Library card's preview line).
+page_summary_py() {
+  python3 - "$1" <<'PY'
+import html, re, sys
+t = open(sys.argv[1], encoding='utf-8', errors='replace').read()
+t = re.sub(r'(?is)<(script|style|template)\b.*?</\1\s*>', ' ', t)
+m = re.search(r'(?is)<meta\s+[^>]*name\s*=\s*["\']description["\'][^>]*content\s*=\s*["\'](.*?)["\']', t)
+s = m.group(1) if m else ''
+if not s:
+    m = re.search(r'(?is)<p\b[^>]*>(.*?)</p\s*>', t)
+    s = m.group(1) if m else ''
+s = html.unescape(re.sub(r'(?s)<[^>]+>', ' ', s))
+s = re.sub(r'\s+', ' ', s).strip()
+if len(s) > 320: s = s[:317].rsplit(' ', 1)[0] + '…'
+print(s)
+PY
+}
+
+# The asset name for page image $1, numbered past names in $2 (" a.jpg b.jpg ")
+# — two files can slug to the same name (long names are cut at 40 chars).
+page_asset_name() {
+  local p="$1" used="$2" stem n=2 cand
+  stem=$(slugify "$(basename "${p%.*}")")
+  cand=$stem
+  while case "$used" in *" $cand."*) true ;; *) false ;; esac; do
+    cand="$(printf '%s' "$stem" | cut -c1-36)-$n"; n=$((n+1))
+  done
+  printf '%s' "$cand"
+}
+
+# Import HTML file $2 as page doc $1: attach its local images, rewrite refs to
+# assets/<name>, write <stem>.html, refresh the stub. $3 base dir for relative
+# refs, $4 title ("" = keep the stub's), $5 summary ("" = from the page).
+page_import() {
+  local id="$1" src="$2" base="$3" title="$4" summary="$5"
+  [ -f "$src" ] || die "no such HTML file: $src"
+  command -v python3 >/dev/null 2>&1 || die "pages need python3"
+  local work; work=$(mktemp)
+  cat "$src" >"$work"
+  grep -qi '<[a-z!]' "$work" || { rm -f "$work"; die "that doesn't look like HTML: $src"; }
+  local adir; adir=$(assets_dir "$id")
+  local srcs; srcs=$(page_refs_py scan "$work" "$base" "$adir") || { rm -f "$work"; die "could not read $src"; }
+  if [ -n "$srcs" ]; then
+    local map used=" " p name count=0
+    map=$(mktemp)
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      name=$(attach_one "$id" "$p" "$(page_asset_name "$p" "$used")") || { rm -f "$map" "$work"; exit 1; }
+      used="$used$name "
+      count=$((count+1))
+      printf '%s\t%s\n' "$p" "$name" >>"$map"
+    done <<SRCS
+$srcs
+SRCS
+    page_refs_py rewrite "$work" "$base" "$adir" "$map"
+    rm -f "$map"
+    printf 'mc-doc: attached %s image(s) to the page\n' "$count" >&2
+  fi
+  [ "$(file_bytes "$work")" -le "$PAGE_MAX_BYTES" ] || { rm -f "$work"; die "page HTML over 2 MB (keep images as files next to it, not data: URIs)"; }
+  local pf; pf=$(page_file "$id")
+  local tmp; tmp=$(mktemp "$LIB/.mc-doc.XXXXXX")
+  cat "$work" >"$tmp"; mv "$tmp" "$pf"; chmod 644 "$pf"
+  [ -n "$summary" ] || summary=$(page_summary_py "$work")
+  rm -f "$work"
+  [ -n "$title" ] || title=$(doc_title "$id")
+  # The stub: what the Mac app, `list` and the Library card read.
+  local stub; stub=$(mktemp)
+  {
+    printf '# %s\n\n' "$title"
+    if [ -n "$summary" ]; then printf '%s\n\n' "$summary"; fi
+    printf '<!-- mc-doc page: the content is %s next to this file and opens full-bleed in the Mission Control panel. Update it with: mc-doc page %s --html <file> -->\n' "$(basename "$pf")" "$id"
+  } >"$stub"
+  { get_head "$id"; cat "$stub"; } | replace_file "$id"
+  rm -f "$stub"
+}
+
+# Push page $1's HTML to the relay (after its images).
+sync_page() {
+  local id="$1" strict="${2:-}"
+  [ "${MC_DOC_NO_SYNC:-0}" = 1 ] && return 0
+  if ! relay_conf; then
+    [ -n "$strict" ] && die "no relay configured (set MC_RELAY_URL and MC_TOKEN, or the app's Remote settings)"
+    printf 'mc-doc: page kept on this Mac only (no relay configured)\n' >&2
+    return 0
+  fi
+  if curl -sS --fail --max-time 60 -X PUT --data-binary @"$(page_file "$id")" -H "Authorization: Bearer $R_TOKEN" \
+       -H 'Content-Type: text/html; charset=utf-8' "$R_URL/api/v1/doc-pages/${id%.md}" >/dev/null 2>&1; then
+    printf 'mc-doc: pushed the page to the relay\n' >&2
+    return 0
+  fi
+  printf 'mc-doc: could not push the page to the relay; it is safe on this Mac. Run: mc-doc sync %s\n' "$id" >&2
+  [ -n "$strict" ] && return 1
+  return 0
+}
+
+# mc-doc page <id>                    → the page's HTML path
+# mc-doc page <id> --html <file> [--assets-from <dir>] [--summary s] [--title t]
+#                                     → replace the page (and re-sync)
+cmd_page() {
+  local id="${1:-}"; shift || true
+  require_id "$id"
+  local html="" base="" summary="" title="" stdin=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --html) require_val "$1" "${2:-}"; html=$2; shift 2 ;;
+      --stdin) stdin=1; shift ;;
+      --assets-from) require_val "$1" "${2:-}"; base=$2; shift 2 ;;
+      --summary) summary=${2:-}; shift 2 ;;
+      --title) require_val "$1" "${2:-}"; title=$2; shift 2 ;;
+      *) die "unknown flag: $1" ;;
+    esac
+  done
+  if [ -z "$html" ] && [ "$stdin" -eq 0 ]; then
+    is_page "$id" || die "$id is not a page"
+    printf '%s\n' "$(page_file "$id")"
+    return 0
+  fi
+  if ! is_page "$id" && [ "$(front_val "$id" kind)" != page ]; then
+    die "$id is a markdown doc, not a page (make one with: mc-doc new --kind page --title … --html file.html)"
+  fi
+  local src_tmp=""
+  if [ -z "$html" ]; then src_tmp=$(mktemp); cat >"$src_tmp"; html=$src_tmp; fi
+  [ -n "$base" ] || { [ -n "$src_tmp" ] && base=$PWD || base=$(dirname "$html"); }
+  ( page_import "$id" "$html" "$base" "$title" "$summary" ) || { [ -z "$src_tmp" ] || rm -f "$src_tmp"; exit 1; }
+  [ -z "$src_tmp" ] || rm -f "$src_tmp"
+  # Keep the managed frontmatter honest: kind page + the page tag (an older
+  # Mission Control app may have rewritten the kind to note).
+  local tags; tags=$(front_val "$id" tags)
+  case ", $tags, " in *", page, "*) ;; *) (cmd_set "$id" tags "$(with_page_tag "$tags")") ;; esac
+  [ "$(front_val "$id" kind)" = page ] || (cmd_set "$id" kind page)
+  sync_assets "$id"
+}
+
 cmd_help() {
   cat <<'EOF'
 mc-doc — command-line handle on the Mission Control document library.
@@ -710,9 +991,19 @@ mc-doc — command-line handle on the Mission Control document library.
 Library root: ${MC_LIBRARY:-$HOME/.mission-control/library}
 
   mc-doc new --kind <plan|research|note> --title <t>
-             [--subject <s>] [--tags a,b] [--dir <path>]
+             [--subject <s>] [--tags a,b] [--company <id>] [--dir <path>]
              [--body-file <f> | --stdin] [--assets-from <dir>]
         Create a doc; prints its absolute path (and nothing else).
+        --company: the Jarvis company/project id it belongs to (HQ grouping).
+
+  mc-doc new --kind page --title <t> --html <file.html> [--assets-from <dir>]
+             [--subject <s>] [--tags a,b] [--company <id>] [--summary <s>]
+        Publish a full HTML page (shown full-bleed in the panel, sandboxed).
+        Stores <stem>.html + <stem>.assets/ and a .md stub; local images the
+        page refers to are attached and rewritten to assets/<name>.
+  mc-doc page <id> --html <file> [--assets-from <dir>] [--summary s] [--title t]
+                                   Replace a page's HTML (and re-sync).
+  mc-doc page <id>                 Print the page's HTML path.
 
   mc-doc path <id>                 Absolute path of <id> (exit 1 if missing).
   mc-doc list [--kind k] [--status s] [--tag t]
@@ -720,7 +1011,8 @@ Library root: ${MC_LIBRARY:-$HOME/.mission-control/library}
   mc-doc get  <id>                 Print the body (frontmatter stripped).
   mc-doc write <id> [--stdin | --body-file f] [--assets-from <dir>]
                                    Replace the body, keep frontmatter verbatim.
-  mc-doc set  <id> <key> <value>   Rewrite one of kind|status|subject|tags|dir.
+  mc-doc set  <id> <key> <value>   Rewrite one of kind|status|subject|tags|company|dir
+                                   (an empty value clears subject/tags/company/dir).
 
 Images (stored in <stem>.assets/ next to the doc, pushed to the relay):
   mc-doc attach <id> <file>... [--name n] [--caption c] [--tag t] [--no-sync]
@@ -728,7 +1020,7 @@ Images (stored in <stem>.assets/ next to the doc, pushed to the relay):
                                    JPEG, plus an 800 px thumb) and print the
                                    markdown to paste: ![c](assets/x.jpg "t | c")
   mc-doc assets <id>               "name<TAB>bytes<TAB>WxH<TAB>assets/name" per image.
-  mc-doc sync   <id>               Push the doc's images to the relay again.
+  mc-doc sync   <id>               Push the doc's images (and a page's HTML) to the relay again.
   mc-doc detach <id> <name>...     Remove images (here and on the relay).
   new/write also accept local image refs — ![x](./photo.jpg), ![x](~/Desktop/a.png):
   they are attached and rewritten to assets/… (relative to the body file's
@@ -762,6 +1054,7 @@ main() {
     assets) cmd_assets "$@" ;;
     sync)  cmd_sync "$@" ;;
     detach) cmd_detach "$@" ;;
+    page)  cmd_page "$@" ;;
     help|-h|--help) cmd_help ;;
     *) die "unknown command: $cmd (try: mc-doc help)" ;;
   esac
@@ -812,14 +1105,15 @@ Use the tool for everything.
 
 `~/.mission-control/bin/mc-doc` is a self-contained CLI. Commands:
 
-- `mc-doc new --kind <plan|research|note> --title <t> [--subject <s>] [--tags a,b] [--dir <path>] [--stdin | --body-file <f>]`
+- `mc-doc new --kind <plan|research|note> --title <t> [--subject <s>] [--tags a,b] [--company <id>] [--dir <path>] [--stdin | --body-file <f>]`
   — creates the doc and prints its absolute path (and nothing else). New docs
   start at `status: draft`. There is no `--status` flag; set status with `set`.
 - `mc-doc list [--kind k] [--status s] [--tag t]` — one `id<TAB>kind<TAB>status<TAB>title` per line.
 - `mc-doc path <id>` — absolute path of a doc (exit 1 if it does not exist).
 - `mc-doc get <id>` — print the body (frontmatter stripped).
 - `mc-doc write <id> [--stdin | --body-file f]` — replace the body, keep frontmatter.
-- `mc-doc set <id> <key> <value>` — rewrite one of `kind`, `status`, `subject`, `tags`, `dir`.
+- `mc-doc set <id> <key> <value>` — rewrite one of `kind`, `status`, `subject`, `tags`, `company`, `dir` (empty value clears).
+- `--company` / `company` is the Jarvis company or project id the doc belongs to (`mia jarvis show` lists them), so HQ can group it.
 - `mc-doc attach <id> <file>... [--name n] [--caption c] [--tag t]` — copy images into the doc
   (see **Images** below) and print the markdown line to paste for each one.
 - `mc-doc assets <id>` — the doc's images: `name<TAB>bytes<TAB>WxH<TAB>assets/name`.
@@ -1033,6 +1327,8 @@ EVENTS = os.path.join(D, "events.jsonl")
 SCHED = os.path.join(D, "schedule.json")
 STATE = os.path.join(D, "state.json")
 UPLOADS = os.path.join(D, "uploads.jsonl")
+ROUTING = os.path.join(D, "routing.json")
+REGISTRY = os.path.join(D, "jarvis", "registry.json")
 STATUSES = ["queued", "asking", "running", "checking", "done", "failed", "cancelled"]
 DEFAULT_SCHEDULE = {
     "heartbeats": [
@@ -1263,6 +1559,137 @@ def message(kind, text, task=None, **extra):
     return m
 
 
+# ---- model routing (task 0204) ---------------------------------------------
+# A dispatch can name a tier (cheap/mid/smart) or a kind of work that maps to
+# one; the tier picks the model id the app launches `claude --model` with.
+# $MIA_DIR/routing.json may override either table: {"tiers": {...}, "kinds": {...}}.
+
+TIERS = ["cheap", "mid", "smart"]
+DEFAULT_TIER_MODELS = {"cheap": "claude-haiku-5-5", "mid": "claude-sonnet-5-5",
+                       "smart": "claude-opus-5-5"}
+DEFAULT_KINDS = {}
+for _tier, _kinds in (("cheap", "scout summary triage classify stats health"),
+                      ("mid", "research fix docs content refresh"),
+                      ("smart", "build design release verify review")):
+    for _k in _kinds.split():
+        DEFAULT_KINDS[_k] = _tier
+
+
+def warn(msg):
+    sys.stderr.write("mia: warning: %s\n" % msg)
+
+
+def load_routing():
+    """(tier -> model, kind -> tier): the defaults with routing.json merged over."""
+    tiers, kinds = dict(DEFAULT_TIER_MODELS), dict(DEFAULT_KINDS)
+    if not os.path.exists(ROUTING):
+        return tiers, kinds
+    try:
+        with open(ROUTING, "r", encoding="utf-8") as f:
+            r = json.load(f)
+        if not isinstance(r, dict):
+            raise ValueError("not an object")
+        rt, rk = r.get("tiers") or {}, r.get("kinds") or {}
+        if not isinstance(rt, dict) or not isinstance(rk, dict):
+            raise ValueError("tiers/kinds must be objects")
+    except (IOError, OSError, ValueError) as e:
+        warn("ignoring malformed %s (%s)" % (ROUTING, e))
+        return tiers, kinds
+    for k, v in rt.items():
+        if k not in TIERS:
+            warn("routing.json: unknown tier %r ignored" % k)
+        elif not isinstance(v, str) or not v.strip():
+            warn("routing.json: tier %r needs a model id" % k)
+        else:
+            tiers[k] = v.strip()
+    for k, v in rk.items():
+        if v not in TIERS:
+            warn("routing.json: kind %r -> %r is not a tier; ignored" % (k, v))
+        else:
+            kinds[str(k).strip()] = v
+    return tiers, kinds
+
+
+def resolve_route(model=None, tier=None, kind=None):
+    """(tier, kind, model). --model wins, then --tier, then --kind."""
+    model = (model or "").strip() or None
+    if tier is None and kind is None:
+        return None, None, model
+    tiers, kinds = load_routing()
+    if tier is not None and tier not in tiers:
+        die("unknown tier: %s (tiers: %s)" % (tier, ", ".join(TIERS)))
+    if kind is not None:
+        if kind not in kinds:
+            die("unknown kind: %s (kinds: %s)" % (kind, ", ".join(sorted(kinds))))
+        if tier is None:
+            tier = kinds[kind]
+    return tier, kind, model or tiers[tier]
+
+
+def dispatch_locked(t, brief, d, tier=None, kind=None, model=None):
+    """Write the brief + dispatch request for task t. Caller holds Lock()."""
+    tid = t["id"]
+    if not d:
+        die("task %s has no folder; pass --dir" % tid)
+    if not os.path.isdir(d):
+        die("no such folder: %s" % d)
+    brief_path = os.path.join(BRIEFS, tid + ".md")
+    write_atomic(brief_path, brief.rstrip("\n") + "\n")
+    req = {"taskId": tid, "dir": d, "model": model or None,
+           "brief": brief_path, "at": now_iso()}
+    if tier or kind:
+        req["tier"] = tier
+        req["kind"] = kind
+    write_json(os.path.join(DISPATCH, tid + ".json"), req)
+    t["dir"] = d
+    line = "Dispatch requested in " + d
+    if tier:
+        line += " (%s \u00b7 %s)" % (tier, model)
+        prev = t.get("routing") if isinstance(t.get("routing"), dict) else {}
+        t["routing"] = {"tier": tier, "kind": kind, "model": model,
+                        "verify": "smart" if tier == "cheap" else None}
+        if prev.get("verifiedBy"):
+            t["routing"]["verifiedBy"] = prev["verifiedBy"]
+    t.setdefault("log", []).append({"at": req["at"], "text": line})
+    save_task(t)
+    return d
+
+
+# ---- Jarvis registry lookups -------------------------------------------------
+
+def resolve_company(value):
+    """A company or project id -> (company, project). Checked against the Jarvis
+    registry when there is one; without it the value is kept as a company id."""
+    v = (value or "").strip()
+    if not v:
+        return None, None
+    reg = read_json(REGISTRY)
+    if not isinstance(reg, dict):
+        if os.path.exists(REGISTRY):
+            warn("cannot read %s; keeping %r as given" % (REGISTRY, v))
+        return v, None
+    companies = [c.get("id") for c in reg.get("companies") or []
+                 if isinstance(c, dict) and c.get("id")]
+    projects = dict((p.get("id"), p) for p in reg.get("projects") or []
+                    if isinstance(p, dict) and p.get("id"))
+    if v in companies:
+        return v, None
+    if v in projects:
+        return projects[v].get("company") or None, v
+    die("unknown company or project: %s\n  companies: %s\n  projects: %s"
+        % (v, ", ".join(companies) or "-", ", ".join(sorted(projects)) or "-"))
+
+
+def apply_company(t, value):
+    c, p = resolve_company(value)
+    t.pop("company", None)
+    t.pop("project", None)
+    if c:
+        t["company"] = c
+    if p:
+        t["project"] = p
+
+
 # ---- commands -------------------------------------------------------------
 
 def speak_extra(o):
@@ -1330,7 +1757,8 @@ def cmd_task(args):
             die("usage: mia task show <id>")
         print(json.dumps(load_task(norm_id(pos[0])), indent=2, ensure_ascii=False))
     elif sub == "add":
-        pos, o = parse(rest, {"--detail": True, "--stdin": False, "--dir": True, "--priority": True})
+        pos, o = parse(rest, {"--detail": True, "--stdin": False, "--dir": True, "--priority": True,
+                              "--company": True})
         title = text_arg(pos, "title")
         detail = o.get("--detail", "")
         if o.get("--stdin"):
@@ -1348,11 +1776,16 @@ def cmd_task(args):
             t = {"id": tid, "title": title, "detail": detail, "dir": d, "status": "queued",
                  "priority": prio, "createdAt": at, "updatedAt": at, "questions": [],
                  "executor": None, "log": [{"at": at, "text": "Created"}], "result": None}
+            if o.get("--company", "").strip():
+                apply_company(t, o["--company"])
             write_json(task_path(tid), t)
         print(tid)
     elif sub == "set":
         if len(rest) < 3:
-            die("usage: mia task set <id> <status|dir|priority|result|title> <value>")
+            if len(rest) == 2 and rest[1] == "company":
+                rest = rest + [""]
+            else:
+                die("usage: mia task set <id> <status|dir|priority|result|title|company> <value>")
         tid, field, value = norm_id(rest[0]), rest[1], " ".join(rest[2:])
         with Lock():
             t = load_task(tid)
@@ -1371,10 +1804,15 @@ def cmd_task(args):
                 t["dir"] = expand_dir(value) if value.strip() else ""
             elif field in ("result", "title"):
                 t[field] = value
+            elif field == "company":
+                apply_company(t, value)
             else:
-                die("field must be one of: status, dir, priority, result, title")
+                die("field must be one of: status, dir, priority, result, title, company")
             save_task(t)
-        print("%s %s = %s" % (tid, field, t[field]))
+        shown = t.get(field, "")
+        if field == "company" and t.get("project"):
+            shown = "%s (project %s)" % (shown, t["project"])
+        print("%s %s = %s" % (tid, field, shown))
     elif sub == "note":
         if len(rest) < 2:
             die("usage: mia task note <id> \"<text>\"")
@@ -1390,10 +1828,13 @@ def cmd_task(args):
 
 
 def cmd_dispatch(args):
-    pos, o = parse(args, {"--dir": True, "--model": True, "--brief-file": True, "--stdin": False})
+    pos, o = parse(args, {"--dir": True, "--model": True, "--tier": True, "--kind": True,
+                          "--brief-file": True, "--stdin": False})
     if len(pos) != 1:
-        die("usage: mia dispatch <id> [--dir <d>] [--model <m>] --brief-file <f> | --stdin")
+        die("usage: mia dispatch <id> [--dir <d>] [--tier cheap|mid|smart] [--kind <k>] "
+            "[--model <m>] --brief-file <f> | --stdin")
     tid = norm_id(pos[0])
+    tier, kind, model = resolve_route(o.get("--model"), o.get("--tier"), o.get("--kind"))
     if o.get("--stdin"):
         brief = sys.stdin.read()
     elif o.get("--brief-file"):
@@ -1405,19 +1846,68 @@ def cmd_dispatch(args):
     with Lock():
         t = load_task(tid)
         d = expand_dir(o["--dir"]) if o.get("--dir") else (t.get("dir") or "")
+        dispatch_locked(t, brief, d, tier, kind, model)
+    print("dispatch %s queued in %s" % (tid, d))
+
+
+VERIFY_BRIEF = """Verify task {orig} ("{title}"). You are the checker, not the builder: never redo, fix or finish the work yourself.
+
+1. Read what was claimed: {report} (the executor's report), and the original task's log and result (`mia task show {orig}`).
+2. Check every claim against this repo ({dir}): `git log` / `git diff` for the commits or changes it says it made, and run its tests (whatever the repo has) to confirm they pass.
+3. Write your verdict to {out}: first line `PASS` or `FAIL`, then the reasons — what you checked, what held up, what did not.
+4. Record it on the original: mia task note {orig} "VERIFIED: PASS — <one line>" (or "VERIFIED: FAIL — <one line>").
+"""
+
+
+def cmd_verify(args):
+    pos, o = parse(args, {"--tier": True, "--dir": True})
+    if len(pos) != 1:
+        die("usage: mia verify <id> [--tier smart] [--dir <d>]")
+    orig = norm_id(pos[0])
+    tier, kind, model = resolve_route(None, o.get("--tier") or "smart", "verify")
+    with Lock():
+        ot = load_task(orig)
+        d = expand_dir(o["--dir"]) if o.get("--dir") else (ot.get("dir") or "")
         if not d:
-            die("task %s has no folder; pass --dir" % tid)
+            die("task %s has no folder; pass --dir" % orig)
         if not os.path.isdir(d):
             die("no such folder: %s" % d)
-        brief_path = os.path.join(BRIEFS, tid + ".md")
-        write_atomic(brief_path, brief.rstrip("\n") + "\n")
-        req = {"taskId": tid, "dir": d, "model": o.get("--model") or None,
-               "brief": brief_path, "at": now_iso()}
-        write_json(os.path.join(DISPATCH, tid + ".json"), req)
-        t["dir"] = d
-        t.setdefault("log", []).append({"at": req["at"], "text": "Dispatch requested in " + d})
-        save_task(t)
-    print("dispatch %s queued in %s" % (tid, d))
+        tid = next_task_id()
+        at = now_iso()
+        title = ot.get("title") or ""
+        t = {"id": tid, "title": "Verify %s: %s" % (orig, title),
+             "detail": "Independent check of task %s (%s): confirm its claimed work against the repo "
+                       "and record PASS/FAIL on %s. Do not redo the work." % (orig, title, orig),
+             "dir": d, "status": "queued", "priority": ot.get("priority", 3),
+             "createdAt": at, "updatedAt": at, "questions": [], "executor": None,
+             "log": [{"at": at, "text": "Created to verify task %s" % orig}], "result": None,
+             "verifies": orig}
+        for k in ("company", "project"):
+            if ot.get(k):
+                t[k] = ot[k]
+        write_json(task_path(tid), t)
+        brief = VERIFY_BRIEF.format(orig=orig, title=title, dir=d,
+                                    report=os.path.join(BRIEFS, orig + ".report.md"),
+                                    out=os.path.join(BRIEFS, tid + ".report.md"))
+        dispatch_locked(t, brief, d, tier, kind, model)
+        r = ot.get("routing") if isinstance(ot.get("routing"), dict) else {}
+        r["verifiedBy"] = tid
+        ot["routing"] = r
+        ot.setdefault("log", []).append({"at": now_iso(), "text": "Verification: task %s (%s \u00b7 %s)"
+                                         % (tid, tier, model)})
+        save_task(ot)
+    print(tid)
+
+
+def cmd_routing(args):
+    pos, o = parse(args, {})
+    if pos:
+        die("usage: mia routing")
+    tiers, kinds = load_routing()
+    for tier in TIERS:
+        print("tier %s\t%s" % (tier, tiers[tier]))
+    for k in sorted(kinds):
+        print("kind %s\t%s" % (k, kinds[k]))
 
 
 def cmd_tell(args):
@@ -1957,10 +2447,18 @@ HELP = """mia — Mia's line to Daniel and the Mission Control task list.
   mia task list [--status <s>]                      id<TAB>status<TAB>priority<TAB>title
   mia task show <id>                                the task JSON
   mia task add "<title>" [--detail <text>|--stdin] [--dir <d>] [--priority n]
-  mia task set <id> <status|dir|priority|result|title> <value>
+               [--company <company-or-project-id>]  (checked against the Jarvis registry)
+  mia task set <id> <status|dir|priority|result|title|company> <value>
+                                                    (company "" clears company + project)
   mia task note <id> "<text>"                       append to the task's log
-  mia dispatch <id> [--dir <d>] [--model <m>] --brief-file <f> | --stdin
-                                                    launch an executor for the task
+  mia dispatch <id> [--dir <d>] [--tier cheap|mid|smart] [--kind <k>] [--model <m>]
+               --brief-file <f> | --stdin           launch an executor for the task
+                                                    --model wins, then --tier, then --kind;
+                                                    none of them = Mia's own model
+  mia verify <id> [--tier smart] [--dir <d>]        new task that checks <id>'s claimed work
+                                                    (smart tier); prints the new id
+  mia routing                                       tier -> model and kind -> tier tables
+                                                    ($MIA_DIR/routing.json overrides)
   mia tell <id> "<text>"                            type text into the task's executor
   mia remind --at <ISO-8601|HH:MM|+2h|+30m> "<text>" [--task <id>]
   mia remind list [--all]                           pending reminders (--all: fired too)
@@ -2019,7 +2517,8 @@ def main(argv):
         return
     cmd, rest = argv[0], argv[1:]
     table = {"say": cmd_say, "notify": cmd_notify, "ask": cmd_ask, "task": cmd_task,
-             "dispatch": cmd_dispatch, "tell": cmd_tell, "remind": cmd_remind,
+             "dispatch": cmd_dispatch, "verify": cmd_verify, "routing": cmd_routing,
+             "tell": cmd_tell, "remind": cmd_remind,
              "heartbeat": cmd_heartbeat, "inbox": cmd_inbox, "status": cmd_status,
              "panel": cmd_panel, "uploads": cmd_uploads,
              "question": cmd_question, "questions": cmd_question, "jarvis": cmd_jarvis}
@@ -2058,10 +2557,12 @@ mia panel open-doc|open-task|open-agent|view|open-url|search|scroll-to|scroll|
           highlight|show-url|show-doc|close …     act on Daniel's panel (Mia only; see mia help)
 mia task list [--status <s>]                      id<TAB>status<TAB>priority<TAB>title
 mia task show <id>
-mia task add "<title>" [--detail <text>|--stdin] [--dir <d>] [--priority n]
-mia task set <id> <status|dir|priority|result|title> <value>
+mia task add "<title>" [--detail <text>|--stdin] [--dir <d>] [--priority n] [--company <company|project>]
+mia task set <id> <status|dir|priority|result|title|company> <value>
 mia task note <id> "<text>"
-mia dispatch <id> [--dir <d>] [--model <m>] --brief-file <f> | --stdin
+mia dispatch <id> [--dir <d>] [--tier cheap|mid|smart] [--kind <k>] [--model <m>] --brief-file <f> | --stdin
+mia verify <id>                                   Opus checks a finished task's work (new task)
+mia routing                                       tier → model, kind → tier
 mia tell <id> "<text>"                            type into that task's executor
 mia remind --at <ISO-8601|HH:MM|+2h|+30m> "<text>" [--task <id>]
 mia remind list [--all] | cancel <reminder-id>
@@ -2080,6 +2581,22 @@ mia question max-age [<48h|3d|never>]             when an open question counts a
 
 Statuses: `queued → asking → running → checking → done | failed | cancelled`.
 Task ids are 4-digit (`0007`); `7` works too.
+
+**Model routing (Mia)**: the dumbest model that can do the job does it, and a
+smart model checks cheap work before Daniel hears it's done.
+`--tier cheap` = Haiku (scouting, stats, triage, summaries, classifying),
+`mid` = Sonnet (routine fixes, research, docs, content), `smart` = Opus
+(builds, design, releases, verifying). `--kind scout|research|build|…` picks the
+tier for you (`mia routing`; overrides in `~/.mission-control/mia/routing.json`).
+`--model` still wins. A cheap-tier task is marked `verify: smart`: when it
+finishes, run `mia verify <id>` and report only after it says PASS.
+
+**Companies**: file every task and doc under its company —
+`mia task add … --company <company|project>`, `mc-doc new … --company <id>`
+(ids: `mia jarvis show`). HQ company pages show them, plus what you know
+(memory files) and action buttons; a tap arrives as
+`[MC] Daniel: HQ action · <company> · <label>: <the job>` — treat it as a
+request from Daniel, file the task under that company.
 
 **If you are an executor** (your prompt starts "You are executing Mission
 Control task <id>"): never ask Daniel anything. If blocked, run
@@ -2178,7 +2695,7 @@ LEVEL_NAMES = {0: "Off", 1: "Watch", 2: "Suggest", 3: "Fix with undo"}
 # Pitch frequency steps, quietest first ("quieter"/"louder" move one step).
 PITCH_STEPS = [0.14, 0.5, 1, 2, 3]
 PITCH_NAMES = {0.14: "about once a week", 0.5: "every other day", 1: "once a day", 2: "twice a day", 3: "three a day"}
-FINDING_KINDS = ["found", "fixed", "shipped", "health", "control", "scout", "note"]
+FINDING_KINDS = ["found", "fixed", "shipped", "health", "control", "scout", "note", "action"]
 HISTORY_MAX = 120  # points kept per metric
 RECENT_MAX = 300  # health samples kept per project (~3 days at 15 min)
 UA = "MissionControl-Jarvis/1 (health check; +https://oblivionestate.com)"
@@ -2404,7 +2921,7 @@ SEED_PROJECTS = [
 
 
 def seed_registry():
-    return {
+    r = {
         "version": 1,
         "updatedAt": now_iso(),
         "jarvis": {"paused": False, "pausedAt": None, "pausedHeartbeats": [],
@@ -2413,6 +2930,8 @@ def seed_registry():
         "companies": json.loads(json.dumps(SEED_COMPANIES)),
         "projects": json.loads(json.dumps(SEED_PROJECTS)),
     }
+    ensure_v2(r)
+    return r
 
 
 # ---------------------------------------------------------------------------
@@ -2440,6 +2959,7 @@ def load(required=True):
         p.setdefault("permissions", [])
         p.setdefault("autonomy", 2)
         p.setdefault("match", {})
+    ensure_v2(r)
     return r
 
 
@@ -2741,12 +3261,12 @@ def expand(d):
     return os.path.abspath(os.path.expanduser(d)) if d else ""
 
 
-def matcher(r):
+def matcher(r, fallback=True):
     rules = []
     for p in r["projects"]:
         m = p.get("match") or {}
         rules.append((p["id"], [expand(d) for d in m.get("dirs", [])], [k.lower() for k in m.get("keywords", []) if k],
-                      [expand(d) for d in m.get("fallbackDirs", [])]))
+                      [expand(d) for d in m.get("fallbackDirs", [])] if fallback else []))
 
     def dir_hit(tdir, d):
         return tdir == d or tdir.startswith(d + "/") or tdir.startswith(d + "-")
@@ -2799,10 +3319,360 @@ def slim_tasks(r, days=45):
         if upd < cut and not open_:
             continue
         res = t.get("result")
+        # Filed by hand (`mia task add --company`) beats the match rules.
+        own = resolve_owner(r, t.get("project") or "") or resolve_owner(r, t.get("company") or "")
+        pid = own[1] if own else None
+        if not own:
+            pid = match(t)
+        company = own[0] if own else company_of(r, pid) if pid else ""
+        rt = t.get("routing") if isinstance(t.get("routing"), dict) else {}
         out.append({"id": t["id"], "title": (t.get("title") or "")[:160], "status": t.get("status", ""),
-                    "project": match(t), "createdAt": t.get("createdAt"), "updatedAt": t.get("updatedAt"),
-                    "result": (res if isinstance(res, str) else "")[:240]})
+                    "project": pid, "company": company, "createdAt": t.get("createdAt"), "updatedAt": t.get("updatedAt"),
+                    "result": (res if isinstance(res, str) else "")[:240],
+                    "tier": rt.get("tier") or None, "model": rt.get("model") or ((t.get("executor") or {}).get("model") if isinstance(t.get("executor"), dict) else None)})
     return out
+
+
+# ---------------------------------------------------------------------------
+# Company-centric data (task 0204): actions, the Library filed by company,
+# and what Mia knows about each company with its source. All additive: a
+# registry without these keys still works, and an older sync agent keeps them
+# untouched (it rewrites the whole JSON it read).
+
+LIB = os.path.abspath(os.path.expanduser(os.environ.get("MC_LIBRARY") or "~/.mission-control/library"))
+MEMORY = os.path.join(D, "memory")
+ACTION_TIERS = ("cheap", "mid", "smart")
+
+
+def A(aid, label, prompt, icon="sparkles", inputs=(), project=None, tier=None, hint=""):
+    a = {"id": aid, "label": label, "icon": icon, "prompt": prompt, "inputs": [dict(i) for i in inputs]}
+    if project:
+        a["project"] = project
+    if tier:
+        a["tier"] = tier
+    if hint:
+        a["hint"] = hint
+    return a
+
+
+def I(name, label, placeholder="", required=True, kind="text"):
+    return {"name": name, "label": label, "placeholder": placeholder, "required": required, "kind": kind}
+
+
+def scout_action(name):
+    return A("scout", "Scout now", "Scout %s now: check every project's health and numbers, compare with last week, and tell me the one thing worth doing." % name,
+             icon="scout", tier="cheap", hint="Health and numbers, one finding")
+
+
+# The seeded buttons per company. Prompts are what Mia receives (as an [MC]
+# line from Daniel); {name} placeholders are filled from the inputs.
+SEED_ACTIONS = {
+    "video": [
+        A("new-video", "Make a new video", "Make a new bodycam video on {topic}. Follow the bodycam style rules in memory/video.md (let the footage play, cut back to explain), run the full pipeline (script, narration, edit, thumbnail), keep the files on the Mac only, and send me the cut to review. Do not upload.",
+          icon="video", inputs=[I("topic", "Topic", "e.g. the 2019 Phoenix traffic stop")], project="bodycam", tier="smart", hint="Script → narration → edit → thumbnail"),
+        A("upload-latest", "Upload latest video", "Get the latest finished bodycam video ready to upload: title, description, tags and thumbnail, then ask me before anything goes public.",
+          icon="upload", project="bodycam", tier="mid", hint="Prepared, then asks before publishing"),
+    ],
+    "games": [
+        A("propose-crystal", "Propose improvements", "Propose 3 improvements for Crystal Garden based on its latest numbers (visits, retention, favourites) and what players do. Evidence for each, effort, and which one you'd build first.",
+          icon="sparkles", project="crystal-garden", tier="mid", hint="Three pitches with evidence"),
+    ],
+    "oblivion": [
+        A("mandate-targets", "Find mandate targets", "Find mandate targets in {area}: properties over R10m that look likely to sell, with address and erf for each (no LOOM pulls, no owner contact). File the report in the Library under Oblivion.",
+          icon="search", inputs=[I("area", "Area", "e.g. Bantry Bay, Fresnaye")], project="prospect-engine", tier="mid", hint="Address + erf, filed in the Library"),
+    ],
+}
+
+# Which memory files describe which company. other-projects.md holds a bit of
+# everything: its lines are filed by the projects' match rules.
+SEED_MEMORY = {
+    "oblivion": ["oblivion.md"], "klear": ["klear.md"], "games": ["roblox.md"],
+    "video": ["video.md"], "mission-control": ["mission-control.md"],
+}
+SHARED_MEMORY = ["other-projects.md"]
+
+# Company-wide words for filing Library docs that name no project.
+SEED_KEYWORDS = {
+    "oblivion": ["oblivion", "mandate", "mandates", "buyer", "buyers", "buyer briefs", "owner letter", "dossier", "dossiers",
+                 "listing", "listings", "fresnaye", "bantry bay", "camps bay", "clifton", "sea point", "green point",
+                 "kommetjie", "foreign buyers", "game farm", "game farms", "glamping", "virtual agent", "estate agency"],
+    "games": ["roblox", "game ideas", "garden build mode", "mother crystals", "perfect breed", "gear shop", "black market",
+              "friend boost", "clean all the leaves", "hybrids"],
+    "video": ["youtube", "faceless", "clipping", "bodycam", "raw incident"],
+    "klear": ["klear", "investment report", "thesis"],
+    "dryager": ["dry-ager", "dryager", "restaurants"],
+    "propiq": ["propiq", "deeds"],
+    "civentropy": ["civentropy", "diplomat"],
+    "mission-control": ["mission control", "mia", "jarvis"],
+}
+
+
+def ensure_v2(r):
+    """Give an older registry the 0204 keys (never overwrites). True if changed."""
+    changed = False
+    for c in r["companies"]:
+        if "actions" not in c:
+            c["actions"] = json.loads(json.dumps(SEED_ACTIONS.get(c["id"], []))) + [scout_action(c.get("name") or c["id"])]
+            changed = True
+        if "memory" not in c:
+            c["memory"] = list(SEED_MEMORY.get(c["id"], []))
+            changed = True
+        if "keywords" not in c:
+            c["keywords"] = list(SEED_KEYWORDS.get(c["id"], []))
+            changed = True
+    for k in ("library", "libraryOverrides"):
+        if not isinstance(r.get(k), dict):
+            r[k] = {}
+            changed = True
+    if not isinstance(r.get("sharedMemory"), list):
+        r["sharedMemory"] = list(SHARED_MEMORY)
+        changed = True
+    return changed
+
+
+def company_of(r, pid):
+    for p in r["projects"]:
+        if p["id"] == pid:
+            return p.get("company") or ""
+    return ""
+
+
+def resolve_owner(r, v):
+    """A company or project id → (company, project|None), or None."""
+    v = (v or "").strip()
+    if not v:
+        return None
+    for c in r["companies"]:
+        if c["id"] == v:
+            return (v, None)
+    for p in r["projects"]:
+        if p["id"] == v:
+            return (p.get("company") or "", p["id"])
+    return None
+
+
+# ---- the Library ------------------------------------------------------------
+
+def frontmatter(text):
+    if not text.startswith("---\n"):
+        return {}, text
+    end = text.find("\n---", 4)
+    if end < 0:
+        return {}, text
+    f = {}
+    for line in text[4:end].splitlines():
+        k, sep, v = line.partition(":")
+        if sep:
+            f[k.strip()] = v.strip()
+    return f, text[end + 4:].lstrip("\n")
+
+
+MD_STRIP = [(re.compile(r"!\[[^\]]*\]\([^)]*\)"), ""), (re.compile(r"\[([^\]]+)\]\([^)]*\)"), r"\1"),
+            (re.compile(r"[*_`]{1,3}"), ""), (re.compile(r"^#+\s*"), ""), (re.compile(r"\s+"), " ")]
+
+
+def plain(s):
+    for rx, rep in MD_STRIP:
+        s = rx.sub(rep, s)
+    return s.strip()
+
+
+def doc_summary(body):
+    """The answer-first line of a doc: '**Answer:** …' / '**In one line:** …', else the first paragraph."""
+    paras = [p.strip() for p in re.split(r"\n\s*\n", body) if p.strip()]
+    pick = ""
+    for p in paras[:8]:
+        if re.match(r"^\*\*(the\s+)?(short\s+)?(answer|in one line|tl;?dr|summary|bottom line)[^*]*\*\*", p, re.I):
+            pick = re.sub(r"^\*\*[^*]+\*\*\s*:?\s*", "", p)
+            break
+    if not pick:
+        for p in paras:
+            if p.startswith(("#", ":::", "|", "!", "-", "*   ", "```", ">")) or len(plain(p)) < 40:
+                continue
+            pick = p
+            break
+    s = re.sub(r"^[-*]\s+", "", plain(pick))
+    return s if len(s) <= 300 else s[:297].rsplit(" ", 1)[0] + "…"
+
+
+def library_docs():
+    out = []
+    try:
+        names = sorted(os.listdir(LIB))
+    except OSError:
+        return out
+    for n in names:
+        if not n.endswith(".md") or n.startswith("."):
+            continue
+        path = os.path.join(LIB, n)
+        text = read_text(path)
+        f, body = frontmatter(text)
+        m = re.search(r"^#\s+(.+)$", body, re.M)
+        try:
+            mt = os.path.getmtime(path)
+        except OSError:
+            mt = 0
+        out.append({
+            "id": n[:-3], "title": plain(m.group(1)) if m else n[:-3], "kind": f.get("kind", ""), "status": f.get("status", ""),
+            "subject": f.get("subject", ""), "tags": [t.strip() for t in f.get("tags", "").split(",") if t.strip()],
+            "dir": f.get("dir", ""), "company": f.get("company", ""), "created": f.get("created", ""),
+            "updatedAt": datetime.datetime.fromtimestamp(mt, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if mt else "",
+            "summary": doc_summary(body),
+        })
+    return out
+
+
+def doc_matcher(r):
+    """Like matcher() but for docs → (company, project|None) or None: folder,
+    then a project keyword or name in the title, subject and tags, then a
+    company keyword. No fallback folders: Mia writes docs from her own dir."""
+    match = matcher(r, fallback=False)
+    ckw = [(c["id"], k.lower()) for c in r["companies"] for k in (c.get("keywords") or []) if k]
+    names = []
+    for p in r["projects"]:
+        if len(p.get("name") or "") >= 4:
+            names.append((p["id"], p["name"].lower()))
+    for c in r["companies"]:
+        for p in r["projects"]:
+            if p.get("company") == c["id"] and len(c.get("name") or "") >= 4:
+                names.append((p["id"], c["name"].lower()))
+                break
+
+    def m(d):
+        hay = " ".join([d.get("title", ""), d.get("subject", ""), " ".join(d.get("tags", []))])
+        best = match({"dir": d.get("dir", ""), "title": hay})
+        if best:
+            return (company_of(r, best), best)
+        low = hay.lower()
+        hit = lambda k: re.search(r"(?<![a-z0-9])" + re.escape(k) + r"(?![a-z0-9])", low)
+        for pid, n in names:
+            if hit(n):
+                return (company_of(r, pid), pid)
+        best, score = None, 0
+        for cid, k in ckw:
+            if len(k) > score and hit(k):
+                best, score = cid, len(k)
+        return (best, None) if best else None
+    return m
+
+
+def classify_library(r, docs=None):
+    """Recompute r['library'] = {doc id: {company, project, by}}. True if changed."""
+    docs = library_docs() if docs is None else docs
+    m = doc_matcher(r)
+    pins = {}
+    for p in r["projects"]:
+        for d in p.get("docs") or []:
+            pins.setdefault(re.sub(r"\.md$", "", str(d)), p["id"])
+    over = r.get("libraryOverrides") or {}
+    lib = {}
+    for d in docs:
+        did = d["id"]
+        own, by = None, ""
+        if did in over:
+            own, by = resolve_owner(r, over[did]) or ("", None), "manual"
+        elif d.get("company") and resolve_owner(r, d["company"]):
+            own, by = resolve_owner(r, d["company"]), "frontmatter"
+        elif did in pins:
+            own, by = (company_of(r, pins[did]), pins[did]), "pinned"
+        else:
+            own = m(d)
+            by = "rule" if own else ""
+        if own and own[0]:
+            lib[did] = {"company": own[0], "project": own[1], "by": by}
+        else:
+            lib[did] = {"company": "", "project": None, "by": by or "none"}
+    changed = lib != r.get("library")
+    r["library"] = lib
+    return changed
+
+
+# ---- what Mia knows -----------------------------------------------------------
+# Memory bullets, filed by company, each with file + line. Contact details,
+# addresses of machines and anything that looks like a secret are cut before a
+# fact leaves the Mac: the panel shows what Mia knows, not how to reach anyone.
+
+REDACT = [
+    (re.compile(r"\b[\w.-]+@\d{1,3}(\.\d{1,3}){3}\b"), "‹host›"),
+    (re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+"), "‹email›"),
+    (re.compile(r"\b\d{1,3}(\.\d{1,3}){3}\b"), "‹ip›"),
+    (re.compile(r"\b\d{1,3}(-\d{1,3}){3}\.sslip\.io\b"), "‹host›"),
+    (re.compile(r"\+\d{1,3}[\d ()-]{7,}\d"), "‹number›"),
+    (re.compile(r"\b0\d{2}[ -]?\d{3}[ -]?\d{4}\b"), "‹number›"),
+    (re.compile(r"\b\d{10,}\b"), "‹number›"),
+    (re.compile(r"(?i)\b(password|passwd|token|secret|api[_ -]?key|bearer)\b(\s*[:=]\s*|\s+)([^\s,;)]+)"), r"\1 ‹hidden›"),
+    (re.compile(r"\b(sk|pk|rk|ghp|xox[bp])[-_][A-Za-z0-9_-]{8,}"), "‹hidden›"),
+]
+
+
+def redact(s):
+    for rx, rep in REDACT:
+        s = rx.sub(rep, s)
+    return s
+
+
+def memory_facts(fname):
+    """[(line number, section, text)] for the bullets of one memory file."""
+    out, section = [], ""
+    for i, line in enumerate(read_text(os.path.join(MEMORY, fname)).splitlines(), 1):
+        s = line.strip()
+        if s.startswith("#"):
+            section = plain(s)
+            continue
+        if s.startswith(("- ", "* ")):
+            t = plain(s[2:])
+            if len(t) >= 12:
+                out.append((i, section, t))
+    return out
+
+
+def knowledge(r, docs=None, per_company_docs=12):
+    """{company id: [fact]}; fact = {text, section, project, source: {kind, file, line} | {kind, id, title}}."""
+    match = matcher(r)
+    out = {c["id"]: [] for c in r["companies"]}
+
+    def proj(text, company):
+        pid = match({"title": text.lower()})
+        return pid if pid and company_of(r, pid) == company else None
+
+    for c in r["companies"]:
+        for fname in c.get("memory") or []:
+            for line, section, text in memory_facts(fname):
+                out[c["id"]].append({"text": redact(text), "section": section, "project": proj(text, c["id"]),
+                                     "source": {"kind": "memory", "file": fname, "line": line}})
+    for fname in r.get("sharedMemory") or []:
+        for line, section, text in memory_facts(fname):
+            pid = match({"title": text.lower()})
+            if pid and company_of(r, pid) in out:
+                out[company_of(r, pid)].append({"text": redact(text), "section": section, "project": pid,
+                                                "source": {"kind": "memory", "file": fname, "line": line}})
+    docs = library_docs() if docs is None else docs
+    lib = r.get("library") or {}
+    for cid in out:
+        mine = [d for d in docs if (lib.get(d["id"]) or {}).get("company") == cid and d.get("summary")]
+        mine.sort(key=lambda d: d.get("updatedAt", ""), reverse=True)
+        for d in mine[:per_company_docs]:
+            out[cid].append({"text": redact(d["summary"]), "section": d.get("kind") or "doc", "project": (lib.get(d["id"]) or {}).get("project"),
+                             "source": {"kind": "doc", "id": d["id"], "title": d["title"], "at": d.get("updatedAt", "")}})
+    return out
+
+
+def find_action(r, company, aid):
+    for c in r["companies"]:
+        if c["id"] == company:
+            for a in c.get("actions") or []:
+                if a.get("id") == aid:
+                    return c, a
+            raise Bad("no action '%s' on %s" % (aid, company))
+    raise Bad("no company '%s'" % company)
+
+
+def render_action(a, inputs):
+    vals = {k: str(v).strip() for k, v in (inputs or {}).items()}
+    for i in a.get("inputs") or []:
+        if i.get("required", True) and not vals.get(i["name"]):
+            raise Bad("%s needs %s" % (a.get("label"), i.get("label") or i["name"]))
+    return re.sub(r"\{(\w+)\}", lambda m: vals.get(m.group(1), m.group(0)), a.get("prompt") or "")
 
 
 # ---------------------------------------------------------------------------
@@ -2858,9 +3728,19 @@ def public_registry(r):
     return out
 
 
-def build_state(r, applied):
+def build_state(r, applied, docs=None):
+    docs = library_docs() if docs is None else docs
+    lib = r.get("library") or {}
+    index = []
+    for d in docs:
+        own = lib.get(d["id"]) or {}
+        index.append({k: d[k] for k in ("id", "title", "kind", "status", "subject", "tags", "updatedAt", "summary")})
+        index[-1].update({"company": own.get("company") or "", "project": own.get("project"), "filedBy": own.get("by") or ""})
     return {
         "version": 1,
+        "schema": 2,  # 0204: docs (filed by company) + knowledge; older panels ignore both
+        "docs": index,
+        "knowledge": knowledge(r, docs),
         "at": now_iso(),
         "home": os.path.expanduser("~"),  # so the panel can match live task folders
         "registry": public_registry(r),
@@ -2895,6 +3775,12 @@ def apply_control(r, c):
         r["jarvis"]["pitchesPerDay"] = new
         add_finding("", "control", "Pitches: %s" % pitch_label(new), by=who, control=c.get("id"))
         return "pitch %s" % pitch_label(new)
+    if a == "action":
+        co, act = find_action(r, c.get("company"), c.get("actionId"))
+        text = render_action(act, c.get("inputs"))
+        add_finding(act.get("project") or "", "action", "%s: %s" % (act.get("label"), text), by=who, control=c.get("id"),
+                    company=co["id"], action=act.get("id"), inputs=c.get("inputs") or {}, told=bool(c.get("told")))
+        return "action %s/%s" % (co["id"], act.get("id"))
     if a == "scout":
         p = lookup(r, c.get("project"))
         p["scoutRequestedAt"] = now_iso()
@@ -2921,6 +3807,7 @@ def sync_once(force_health=False, quiet=False):
     every = float(r0["jarvis"].get("healthEveryMinutes") or 15) * 60
     last = parse_iso(r0["jarvis"].get("lastHealthAt")) or 0
     health = gather_health(r0["projects"]) if (force_health or time.time() - last >= every) else None
+    docs = library_docs()
     with Lock():
         r = load(required=False)
         if r is None:
@@ -2946,9 +3833,11 @@ def sync_once(force_health=False, quiet=False):
         if health is not None:
             apply_health(r, health, quiet=True)
             changed = True
+        if classify_library(r, docs):
+            changed = True
         if changed:
             save(r)
-        state = build_state(r, applied_now)
+        state = build_state(r, applied_now, docs)
     if url and not err:
         try:
             relay("PUT", "/api/v1/jarvis/state", state, timeout=30)
@@ -3224,6 +4113,152 @@ def cmd_agent(args, install):
     print("installed %s: sync every %ss, log %s" % (AGENT_LABEL, every, log))
 
 
+def cmd_file(args):
+    if len(args) != 2:
+        die("usage: mia jarvis file <library-doc-id> <company|project|->   ('-' = back to the match rules)")
+    did = re.sub(r"\.md$", "", os.path.basename(args[0]))
+    with Lock():
+        r = load()
+        if args[1] in ("-", "auto"):
+            r["libraryOverrides"].pop(did, None)
+        else:
+            if not resolve_owner(r, args[1]):
+                die("no company or project '%s' (companies: %s)" % (args[1], ", ".join(c["id"] for c in r["companies"])))
+            r["libraryOverrides"][did] = args[1]
+        classify_library(r)
+        save(r)
+    own = r["library"].get(did)
+    if not own:
+        die("no Library doc '%s' in %s (filed anyway once it exists)" % (did, LIB), 2)
+    print("%s → %s%s (%s)" % (did, own["company"] or "unfiled", ("/" + own["project"]) if own.get("project") else "", own["by"]))
+
+
+def cmd_library(args):
+    pos, o = parse(args, {"--company": True, "--unfiled": False, "--json": False})
+    r = load()
+    docs = library_docs()
+    classify_library(r, docs)
+    rows = []
+    for d in docs:
+        own = r["library"].get(d["id"]) or {}
+        if o.get("--unfiled") and own.get("company"):
+            continue
+        if o.get("--company") and own.get("company") != o["--company"]:
+            continue
+        rows.append({"id": d["id"], "title": d["title"], "company": own.get("company") or "", "project": own.get("project"), "by": own.get("by")})
+    if o.get("--json"):
+        print(json.dumps(rows, indent=2, ensure_ascii=False))
+        return
+    for x in rows:
+        print("%s\t%s\t%s\t%s\t%s" % (x["id"], x["company"] or "-", x["project"] or "-", x["by"], x["title"]))
+
+
+def cmd_knowledge(args):
+    pos, o = parse(args, {"--json": False})
+    r = load()
+    docs = library_docs()
+    classify_library(r, docs)
+    k = knowledge(r, docs)
+    if pos:
+        if pos[0] not in k:
+            die("no company '%s' (ids: %s)" % (pos[0], ", ".join(k)))
+        k = {pos[0]: k[pos[0]]}
+    if o.get("--json"):
+        print(json.dumps(k, indent=2, ensure_ascii=False))
+        return
+    for cid, facts in k.items():
+        print("%s (%d)" % (cid, len(facts)))
+        for f in facts:
+            s = f["source"]
+            src = "%s:%s" % (s["file"], s["line"]) if s["kind"] == "memory" else "doc %s" % s["id"]
+            print("  - %s  [%s]" % (f["text"][:140], src))
+
+
+def cmd_actions(args):
+    """mia jarvis actions [<company>] | action add|remove …"""
+    pos, o = parse(args, {"--json": False})
+    r = load()
+    cs = [c for c in r["companies"] if not pos or c["id"] == pos[0]]
+    if pos and not cs:
+        die("no company '%s'" % pos[0])
+    if o.get("--json"):
+        print(json.dumps({c["id"]: c.get("actions") or [] for c in cs}, indent=2, ensure_ascii=False))
+        return
+    for c in cs:
+        for a in c.get("actions") or []:
+            ins = ",".join(i["name"] for i in a.get("inputs") or [])
+            print("%s\t%s\t%s\t%s%s" % (c["id"], a["id"], a.get("tier") or "-", a.get("label"), (" {%s}" % ins) if ins else ""))
+
+
+def cmd_action(args):
+    if not args or args[0] not in ("add", "remove"):
+        die('usage: mia jarvis action add <company> <id> --label L --prompt "… {topic} …" [--input name:Label[:placeholder]]… [--project p] [--tier cheap|mid|smart] [--icon i] [--hint h]\n'
+            "       mia jarvis action remove <company> <id>")
+    sub, rest = args[0], args[1:]
+    if sub == "remove":
+        if len(rest) != 2:
+            die("usage: mia jarvis action remove <company> <id>")
+        with Lock():
+            r = load()
+            c = next((c for c in r["companies"] if c["id"] == rest[0]), None)
+            if not c:
+                die("no company '%s'" % rest[0])
+            before = len(c["actions"])
+            c["actions"] = [a for a in c["actions"] if a.get("id") != rest[1]]
+            if len(c["actions"]) == before:
+                die("no action '%s' on %s" % (rest[1], rest[0]))
+            save(r)
+        print("removed %s/%s" % (rest[0], rest[1]))
+        return
+    # add: --input may repeat, so split it out before parse()
+    inputs, clean = [], []
+    i = 0
+    while i < len(rest):
+        if rest[i] == "--input" and i + 1 < len(rest):
+            name, _, more = rest[i + 1].partition(":")
+            label, _, ph = more.partition(":")
+            if not re.match(r"^\w+$", name):
+                die("--input name must be a word (got %r)" % name)
+            inputs.append(I(name, label or name, ph))
+            i += 2
+            continue
+        clean.append(rest[i])
+        i += 1
+    pos, o = parse(clean, {"--label": True, "--prompt": True, "--project": True, "--tier": True, "--icon": True, "--hint": True})
+    if len(pos) != 2 or not o.get("--label") or not o.get("--prompt"):
+        die("action add needs <company> <id> --label and --prompt")
+    if o.get("--tier") and o["--tier"] not in ACTION_TIERS:
+        die("--tier must be cheap, mid or smart")
+    if not re.match(r"^[a-z0-9][a-z0-9-]*$", pos[1]):
+        die("action id: lowercase letters, digits and dashes")
+    missing = set(re.findall(r"\{(\w+)\}", o["--prompt"])) - {x["name"] for x in inputs}
+    if missing:
+        die("the prompt uses {%s} but no --input defines it" % ", ".join(sorted(missing)))
+    with Lock():
+        r = load()
+        c = next((c for c in r["companies"] if c["id"] == pos[0]), None)
+        if not c:
+            die("no company '%s'" % pos[0])
+        if o.get("--project") and company_of(r, lookup(r, o["--project"])["id"]) != c["id"]:
+            die("project %s is not in %s" % (o["--project"], c["id"]))
+        a = A(pos[1], o["--label"], o["--prompt"], icon=o.get("--icon") or "sparkles", inputs=inputs,
+              project=lookup(r, o["--project"])["id"] if o.get("--project") else None, tier=o.get("--tier"), hint=o.get("--hint") or "")
+        c["actions"] = [x for x in c["actions"] if x.get("id") != a["id"]] + [a]
+        save(r)
+    print("%s/%s: %s" % (c["id"], a["id"], a["label"]))
+
+
+def cmd_upgrade(args):
+    """Add the 0204 keys (actions, memory map, Library filing) to an existing registry."""
+    with Lock():
+        r = load()
+        classify_library(r)
+        save(r)
+    filed = sum(1 for v in r["library"].values() if v.get("company"))
+    print("registry upgraded: %d companies with actions, %d/%d Library docs filed" % (
+        sum(1 for c in r["companies"] if c.get("actions")), filed, len(r["library"])))
+
+
 def cmd_status(args):
     st = read_json(SYNC, {}) or {}
     url, _ = relay_conf()
@@ -3246,6 +4281,13 @@ HELP = """mia jarvis — the registry behind Mission Control's HQ view.
   mia jarvis revoke <project> <n>                remove permission n (numbers from show)
   mia jarvis set <project> <field> <value…>      name|summary|notes|company|link|doc|check
   mia jarvis health [<project>] [--json]         run the health checks now
+  mia jarvis file <doc-id> <company|project|->   file a Library doc by hand ('-' = back to the rules)
+  mia jarvis library [--company c] [--unfiled]   where every Library doc is filed (and why)
+  mia jarvis knowledge [<company>] [--json]      what HQ shows as known, with sources
+  mia jarvis actions [<company>]                 the action buttons on each company page
+  mia jarvis action add <company> <id> --label L --prompt "…{x}…" [--input x:Label[:hint]]
+                    [--project p] [--tier cheap|mid|smart]   (action remove <company> <id>)
+  mia jarvis upgrade                             add actions/memory/Library filing to an old registry
   mia jarvis sync [--health] [--loop SECONDS]    apply HQ changes from the relay, push state
   mia jarvis install-agent [--every 60]          run the sync loop as a LaunchAgent
   mia jarvis uninstall-agent
@@ -3290,8 +4332,21 @@ sync agent stopped, and keep it valid JSON.
   },
   "companies": [
     { "id": "oblivion", "name": "Oblivion Estates", "tagline": "…",
-      "photo": "hq/oblivion.jpg" }  // a bundled panel image, or an https:// image URL
+      "photo": "hq/oblivion.jpg",   // a bundled panel image, or an https:// image URL
+      "memory": ["oblivion.md"],    // memory/*.md files about this company (Knowledge tab)
+      "keywords": ["mandate"],      // files Library docs that name no project
+      "actions": [{                 // buttons on the company page; a tap sends Mia the prompt
+        "id": "mandate-targets", "label": "Find mandate targets", "icon": "search",
+        "prompt": "Find mandate targets in {area}: …",   // {name} = an input below
+        "inputs": [{ "name": "area", "label": "Area", "placeholder": "e.g. Bantry Bay", "required": true }],
+        "project": "prospect-engine",   // optional: files the job under a project
+        "tier": "cheap|mid|smart",      // optional: the model tier Mia should dispatch on
+        "hint": "one line under the label" }] }
   ],
+  "sharedMemory": ["other-projects.md"],  // memory files whose lines are filed by match rules
+  "library": { "doc-id": { "company": "oblivion", "project": "prospect-engine|null",
+               "by": "manual|frontmatter|pinned|rule|none" } },   // recomputed every sync
+  "libraryOverrides": { "doc-id": "company-or-project-id" },      // mia jarvis file
   "projects": [
     {
       "id": "dryager-panel",       // stable, lowercase, used by the CLI and HQ
@@ -3323,11 +4378,24 @@ anyone new, deleting anything, publishing to the public, legal/POPIA.
 
 `match` decides which tasks belong to a project: a task whose folder is under
 one of `dirs` (or a `-suffix` worktree of it) wins; then the longest keyword
-found in the task title; `fallbackDirs` only when nothing else matches.
+found in the task title; `fallbackDirs` only when nothing else matches. A task
+filed by hand (`mia task add --company <company|project>`) skips the rules.
+
+Library docs are filed the same way (folder in `dir:`, then keywords or the
+project/company name in title, subject and tags), after, in order: a manual
+`mia jarvis file`, a `company:` line in the doc's frontmatter (`mc-doc new
+--company`), a project's pinned `docs`.
+
+Knowledge (pushed, not stored): every bullet of a company's `memory` files and
+the answer line of its newest docs, each with its source (file + line, or doc
+id). Emails, phone numbers, IPs and anything that looks like a secret are
+replaced before it leaves the Mac.
 
 ## findings.jsonl
 
-`{"id": "f_…", "at": "…", "project": "dryager-panel" | "", "kind": "found|fixed|shipped|health|control|scout|note", "text": "…", "by": "mia|daniel|checker"}`
+`{"id": "f_…", "at": "…", "project": "dryager-panel" | "", "kind": "found|fixed|shipped|health|control|scout|note|action", "text": "…", "by": "mia|daniel|checker"}`
+
+An `action` line (a company-page button) also has `company`, `action` and `inputs`.
 
 HQ's activity feed shows these together with finished tasks.
 
@@ -3355,6 +4423,8 @@ def main(argv):
         "pause": lambda a: cmd_pause(a, True), "resume": lambda a: cmd_pause(a, False),
         "permit": lambda a: cmd_permit(a, True), "revoke": lambda a: cmd_permit(a, False),
         "health": cmd_health, "sync": cmd_sync, "seed": cmd_seed, "status": cmd_status,
+        "file": cmd_file, "library": cmd_library, "knowledge": cmd_knowledge,
+        "actions": cmd_actions, "action": cmd_action, "upgrade": cmd_upgrade,
         "install-agent": lambda a: cmd_agent(a, True), "uninstall-agent": lambda a: cmd_agent(a, False),
     }
     if cmd not in table:
