@@ -69,6 +69,9 @@ export function overlay(registry, pending = []) {
     } else if (c.action === 'pitch') {
       reg.jarvis = { ...reg.jarvis, pitchesPerDay: stepPitch(reg.jarvis.pitchesPerDay, c.value) };
       sync.pitch = true;
+    } else if (c.action === 'action') {
+      const k = `${c.company}/${c.actionId}`;
+      sync.actions = { ...(sync.actions || {}), [k]: c.at || new Date().toISOString() };
     }
   }
   reg.sync = sync;
@@ -257,11 +260,12 @@ export function docsFor(project, docs) {
 // ---- activity feed --------------------------------------------------------------
 // Findings (found / fixed / shipped / health / control / scout) and finished
 // tasks, newest first. kind decides the glyph and tone in the view.
-export function feedOf({ findings = [], tasks = [], projectIds = null, limit = 60 } = {}) {
+export function feedOf({ findings = [], tasks = [], projectIds = null, companyId = null, limit = 60 } = {}) {
   const inScope = (pid) => !projectIds || projectIds.has(pid);
   const items = [];
   for (const f of arr(findings)) {
-    if (projectIds && !inScope(f.project)) continue;
+    // A company-wide line (an action button, task 0204) carries `company`.
+    if (projectIds && !inScope(f.project) && !(companyId && f.company === companyId)) continue;
     items.push({ id: f.id || `f:${f.at}:${f.text}`, at: f.at, project: f.project || '', kind: f.kind || 'note', text: f.text || '', by: f.by || 'mia' });
   }
   for (const t of arr(tasks)) {
@@ -302,6 +306,8 @@ export function miaLine(c, reg) {
       return `HQ: ${c.value === 'quieter' ? 'quieter' : 'louder'}. Pitch ${pitchLabel(stepPitch(reg?.jarvis?.pitchesPerDay ?? 1, c.value)).toLowerCase()} from now on. Saved to the Jarvis registry.`;
     case 'scout':
       return `HQ: scout ${name} now. Look at its numbers and health and tell me what you find.`;
+    case 'action':
+      return actionLine(c, reg);
     default:
       return '';
   }
@@ -339,11 +345,13 @@ export function companyInfo(company, view, questions = [], now = Date.now()) {
   const projects = arr(view?.registry?.projects)
     .filter((p) => p.company === company.id)
     .map((p) => projectInfo(p, view, questions, now));
+  const tasks = companyTasks(company.id, projects.map((p) => p.project), view?.tasks);
   return {
     company,
     projects,
+    tasks,
     health: worstHealth(projects.map((p) => p.health)),
-    running: projects.reduce((n, p) => n + p.running.length, 0),
+    running: tasks.filter(isOpenTask).length,
     questions: projects.reduce((n, p) => n + p.questions.length, 0),
     down: projects.filter((p) => p.health.status === 'down').length,
   };
@@ -360,5 +368,170 @@ export function boardSummary(companies) {
     watched: all.filter((p) => p.health.status !== 'none').length,
     running: all.reduce((n, p) => n + p.running.length, 0),
     questions: all.reduce((n, p) => n + p.questions.length, 0),
+  };
+}
+
+
+// ---- company-centric (task 0204) ---------------------------------------------
+// The Mac (schema 2) files every Library doc and task under a company and
+// sends what Mia knows about each one with its source. An older Mac sends
+// neither: then docs come from the snapshot + docsFor() keywords, tasks from
+// their project, and Knowledge says so instead of looking empty.
+
+const stem = (id) => String(id || '').replace(/\.md$/, '');
+
+// Every doc filed under the company, newest first. macDocs: state.docs (Mac
+// index, has company/project); snapDocs: the live snapshot's list (fresher
+// titles/status, and the only source when the Mac is older).
+export function companyDocs(companyId, projects, macDocs, snapDocs) {
+  const out = new Map();
+  const snap = new Map(arr(snapDocs).map((d) => [stem(d.id), d]));
+  if (arr(macDocs).length) {
+    for (const d of arr(macDocs)) {
+      if (d.company !== companyId) continue;
+      const s = snap.get(stem(d.id));
+      out.set(stem(d.id), { ...d, ...(s ? { title: s.title || d.title, status: s.status || d.status, updatedAt: s.updatedAt || d.updatedAt, kind: s.kind || d.kind } : {}), id: s?.id || d.id });
+    }
+  } else {
+    for (const p of arr(projects)) for (const d of docsFor(p, snapDocs)) if (!out.has(stem(d.id))) out.set(stem(d.id), { ...d, company: companyId, project: p.id, filedBy: 'keyword' });
+  }
+  return [...out.values()].sort((a, b) => ts(b.updatedAt) - ts(a.updatedAt));
+}
+
+// Docs nobody has filed yet (Library "Not filed" group).
+export function unfiledDocs(macDocs) {
+  return arr(macDocs).filter((d) => !d.company);
+}
+
+// Grouped for the Library tab: one group per project, then "Company-wide".
+export function groupDocs(docs, projects) {
+  const names = Object.fromEntries(arr(projects).map((p) => [p.id, p.name]));
+  const groups = new Map();
+  for (const d of docs) {
+    const k = d.project && names[d.project] ? d.project : '';
+    if (!groups.has(k)) groups.set(k, { id: k, label: k ? names[k] : 'Company-wide', docs: [] });
+    groups.get(k).docs.push(d);
+  }
+  const order = arr(projects).map((p) => p.id);
+  return [...groups.values()].sort((a, b) => (a.id === '' ? 1 : b.id === '' ? -1 : order.indexOf(a.id) - order.indexOf(b.id)));
+}
+
+// Tasks of a company: the Mac's tag (`company`), else via the project.
+export function companyTasks(companyId, projects, tasks) {
+  const pids = new Set(arr(projects).map((p) => p.id));
+  return arr(tasks).filter((t) => (t.company ? t.company === companyId : pids.has(t.project)));
+}
+
+export const TASK_FILTERS = [
+  { value: 'open', label: 'Running' },
+  { value: 'done', label: 'Done' },
+  { value: 'all', label: 'All' },
+];
+export function filterTasks(tasks, f) {
+  if (f === 'open') return tasks.filter(isOpenTask);
+  if (f === 'done') return tasks.filter((t) => t.status === 'done' || t.status === 'failed' || t.status === 'cancelled');
+  return tasks;
+}
+
+// Knowledge: facts with sources; grouped by where they came from.
+export function companyKnowledge(companyId, knowledge) {
+  if (!knowledge || typeof knowledge !== 'object') return null; // older Mac
+  return arr(knowledge[companyId]);
+}
+export function filterFacts(facts, q) {
+  const s = String(q || '').trim().toLowerCase();
+  if (!s) return facts;
+  return facts.filter((f) => `${f.text} ${f.section || ''} ${f.source?.title || ''} ${f.source?.file || ''}`.toLowerCase().includes(s));
+}
+export function groupFacts(facts) {
+  const groups = new Map();
+  for (const f of facts) {
+    const src = f.source || {};
+    const k = src.kind === 'doc' ? 'doc' : `m:${src.file || ''}:${f.section || ''}`;
+    const label = src.kind === 'doc' ? 'From the Library' : f.section || src.file || 'Memory';
+    if (!groups.has(k)) groups.set(k, { id: k, label, file: src.kind === 'doc' ? '' : src.file || '', facts: [] });
+    groups.get(k).facts.push(f);
+  }
+  return [...groups.values()].sort((a, b) => (a.id === 'doc' ? 1 : b.id === 'doc' ? -1 : 0));
+}
+export function sourceLabel(src) {
+  if (!src) return '';
+  if (src.kind === 'doc') return src.title || src.id;
+  return src.line ? `${src.file} · line ${src.line}` : src.file || '';
+}
+
+// ---- action buttons -------------------------------------------------------------
+export const TIER_LABEL = { cheap: 'Haiku', mid: 'Sonnet', smart: 'Opus' };
+
+export function actionsOf(company) {
+  return arr(company?.actions).filter((a) => a.id && a.label && a.prompt);
+}
+
+export function missingInputs(action, inputs = {}) {
+  return arr(action?.inputs).filter((i) => i.required !== false && !String(inputs[i.name] ?? '').trim());
+}
+
+export function renderPrompt(action, inputs = {}) {
+  return String(action?.prompt || '').replace(/\{(\w+)\}/g, (m, k) => {
+    const v = String(inputs[k] ?? '').trim();
+    return v || m;
+  });
+}
+
+// The [MC] line Mia gets: which company, which button, the job itself, and
+// the tier the button suggests (Mia still decides how to dispatch).
+export function actionLine(c, reg) {
+  const co = arr(reg?.companies).find((x) => x.id === c.company);
+  const a = actionsOf(co).find((x) => x.id === c.actionId);
+  if (!co || !a) return '';
+  const p = a.project ? arr(reg?.projects).find((x) => x.id === a.project) : null;
+  const tier = a.tier ? ` Suggested tier: ${a.tier} (${TIER_LABEL[a.tier] || a.tier}).` : '';
+  return `HQ action · ${co.name}${p ? ` · ${p.name}` : ''} · ${a.label}: ${renderPrompt(a, c.inputs || {})}${tier} Filed under ${co.id}${p ? `/${p.id}` : ''}.`;
+}
+
+// The last time each action was sent (findings kind 'action' + pending taps).
+export function actionHistory(companyId, findings, sync) {
+  const last = {};
+  for (const f of arr(findings)) {
+    if (f.kind !== 'action' || f.company !== companyId || !f.action) continue;
+    if (!last[f.action] || ts(f.at) > ts(last[f.action].at)) last[f.action] = { at: f.at, text: f.text, inputs: f.inputs || {} };
+  }
+  for (const [k, at] of Object.entries(sync?.actions || {})) {
+    const [co, id] = k.split('/');
+    if (co === companyId && (!last[id] || ts(at) >= ts(last[id].at))) last[id] = { at, pending: true };
+  }
+  return last;
+}
+
+// ---- history charts ---------------------------------------------------------------
+// One metric's history → points for an SVG area chart: x in [0,1] by time,
+// y in [0,1] by value (with a little headroom), plus the labels the axis shows.
+export function chartOf(metric, { maxPoints = 90 } = {}) {
+  const h = arr(metric?.history)
+    .map((p) => ({ t: ts(p.t), v: Number(p.v) }))
+    .filter((p) => p.t && Number.isFinite(p.v))
+    .sort((a, b) => a.t - b.t)
+    .slice(-maxPoints);
+  if (h.length < 2) return null;
+  const t0 = h[0].t;
+  const t1 = h[h.length - 1].t;
+  let lo = Math.min(...h.map((p) => p.v));
+  let hi = Math.max(...h.map((p) => p.v));
+  if (hi === lo) {
+    hi += Math.abs(hi) * 0.1 || 1;
+    lo -= Math.abs(lo) * 0.1 || 1;
+  }
+  const pad = (hi - lo) * 0.12;
+  const y0 = lo >= 0 && lo - pad < 0 ? 0 : lo - pad;
+  const y1 = hi + pad;
+  const span = t1 - t0 || 1;
+  const points = h.map((p) => ({ ...p, x: (p.t - t0) / span, y: (p.v - y0) / (y1 - y0) }));
+  return {
+    points,
+    min: Math.min(...h.map((p) => p.v)),
+    max: Math.max(...h.map((p) => p.v)),
+    first: points[0],
+    last: points[points.length - 1],
+    days: Math.max(1, Math.round(span / 86400e3)),
   };
 }

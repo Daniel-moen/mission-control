@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
-import { motion } from 'motion/react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { motion, LayoutGroup } from 'motion/react';
 import { spring, press } from '../../lib/motion.js';
 import Icon from '../../ui/Icon.jsx';
 import Sparkline from '../../ui/Sparkline.jsx';
 import Segmented from '../../ui/Segmented.jsx';
-import { LEVELS, levelOf, fmtWhen } from '../../lib/hqModel.js';
+import { LEVELS, levelOf, fmtWhen, fmtNum, chartOf, trendOf } from '../../lib/hqModel.js';
 import { hqControl, useBusy } from '../../lib/hq.js';
 
 // Small pieces shared by the HQ board and a company's page (task 0199).
@@ -201,6 +201,7 @@ const KIND = {
   control: { icon: 'settings', tone: 'text-ink3', word: 'Control' },
   scout: { icon: 'scout', tone: 'text-mgr', word: 'Scout' },
   note: { icon: 'note', tone: 'text-ink2', word: 'Note' },
+  action: { icon: 'action', tone: 'text-accent', word: 'Job for Mia' },
 };
 export const kindOf = (k) => KIND[k] || KIND.note;
 
@@ -262,5 +263,139 @@ export function SectionTitle({ children, right }) {
       <h3 className="flex-1 text-[13px] font-semibold tracking-tight text-ink2">{children}</h3>
       {right}
     </div>
+  );
+}
+
+
+// ---- history chart (task 0204) -----------------------------------------------------
+// One metric over time: a 2px line over a faint area, recessive axis (first
+// and last date, low and high), and a crosshair + readout on hover or touch.
+// Single series, so no legend: the label above names it.
+const fmtDay = (t) => new Date(t).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+
+export function HistoryChart({ metric, height = 56 }) {
+  const c = chartOf(metric);
+  const box = useRef(null);
+  const [hover, setHover] = useState(null);
+  const gid = useId().replace(/:/g, '');
+  const trend = trendOf(metric);
+  const unit = metric.unit || '';
+  if (!c) {
+    return (
+      <div className="glass-soft rounded-xl2 p-3" data-chart={metric.name}>
+        <div className="truncate text-[11.5px] text-ink3">{metric.label || metric.name}</div>
+        <div className="tnum mt-0.5 text-[20px] font-semibold tracking-tight text-ink">{fmtNum(metric.value, unit)}</div>
+        <div className="mt-1 text-[11px] text-ink3">History starts with the next reading</div>
+      </div>
+    );
+  }
+  const W = 100;
+  const H = 40;
+  const pts = c.points.map((p) => [p.x * W, H - p.y * H]);
+  const line = pts.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(2)},${y.toFixed(2)}`).join(' ');
+  const area = `${line} L${W},${H} L0,${H} Z`;
+  const pick = (clientX) => {
+    const r = box.current?.getBoundingClientRect();
+    if (!r || !r.width) return;
+    const fx = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
+    let best = c.points[0];
+    for (const p of c.points) if (Math.abs(p.x - fx) < Math.abs(best.x - fx)) best = p;
+    setHover(best);
+  };
+  const shown = hover || c.last;
+  return (
+    <div className="glass-soft rounded-xl2 p-3" data-chart={metric.name}>
+      <div className="flex items-baseline gap-2">
+        <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink3">{metric.label || metric.name}</span>
+        <span className="text-[10.5px] text-ink3">{hover ? fmtDay(hover.t) : `${c.days} d`}</span>
+      </div>
+      <div className="mt-0.5 flex items-baseline gap-1.5">
+        <span className="tnum text-[20px] font-semibold tracking-tight text-ink">{fmtNum(shown.v, unit)}</span>
+        {!hover && <Trend trend={trend} />}
+      </div>
+      <div
+        ref={box}
+        className="relative mt-1.5 touch-pan-y select-none"
+        style={{ height }}
+        onPointerMove={(e) => pick(e.clientX)}
+        onPointerDown={(e) => pick(e.clientX)}
+        onPointerLeave={() => setHover(null)}
+        role="img"
+        aria-label={`${metric.label || metric.name}: ${fmtNum(c.first.v, unit)} on ${fmtDay(c.first.t)} to ${fmtNum(c.last.v, unit)} on ${fmtDay(c.last.t)}`}
+      >
+        <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="absolute inset-0 h-full w-full overflow-visible">
+          <defs>
+            <linearGradient id={`g${gid}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--color-accent)" stopOpacity="0.22" />
+              <stop offset="100%" stopColor="var(--color-accent)" stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          <line x1="0" x2={W} y1={H} y2={H} stroke="rgba(255,255,255,0.10)" vectorEffect="non-scaling-stroke" />
+          <motion.path d={area} fill={`url(#g${gid})`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.5 }} />
+          {/* Drawn left to right by a clip that grows: pathLength would dash
+              a non-scaling stroke. */}
+          <clipPath id={`c${gid}`}>
+            <motion.rect x="0" y="-5" height={H + 10} initial={{ width: 0 }} animate={{ width: W }} transition={{ duration: 0.7, ease: [0.2, 0.8, 0.2, 1] }} />
+          </clipPath>
+          <path
+            d={line}
+            clipPath={`url(#c${gid})`}
+            fill="none"
+            stroke="var(--color-accent)"
+            strokeWidth="2"
+            strokeLinejoin="round"
+            strokeLinecap="round"
+            vectorEffect="non-scaling-stroke"
+          />
+          {hover && <line x1={hover.x * W} x2={hover.x * W} y1="0" y2={H} stroke="rgba(255,255,255,0.28)" vectorEffect="non-scaling-stroke" />}
+        </svg>
+        <span
+          className="pointer-events-none absolute h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-bg bg-accent"
+          style={{ left: `${shown.x * 100}%`, top: `${(1 - shown.y) * 100}%` }}
+        />
+        <span className="tnum pointer-events-none absolute right-0 top-0 text-[10px] text-ink3">{fmtNum(c.max, unit)}</span>
+      </div>
+      <div className="tnum mt-1 flex justify-between text-[10px] text-ink3">
+        <span>{fmtDay(c.first.t)}</span>
+        <span className="hidden sm:inline">low {fmtNum(c.min, unit)}</span>
+        <span>{fmtDay(c.last.t)}</span>
+      </div>
+    </div>
+  );
+}
+
+// ---- tabs --------------------------------------------------------------------------
+// The company page's sections. One pill glides between them (shared layoutId);
+// fits a 390 px phone without scrolling, and scrolls inside itself if a
+// translation ever makes it wider.
+export function Tabs({ tabs, value, onChange }) {
+  const id = useId();
+  return (
+    <LayoutGroup id={id}>
+      <div className="noscroll glass-soft pill flex w-full max-w-full items-center gap-0.5 overflow-x-auto p-0.5 sm:w-auto" role="tablist">
+        {tabs.map((t) => {
+          const on = t.value === value;
+          return (
+            <button
+              key={t.value}
+              role="tab"
+              aria-selected={on}
+              data-tab={t.value}
+              onClick={() => onChange(t.value)}
+              className={`pill relative flex h-9 flex-1 items-center justify-center gap-1.5 whitespace-nowrap px-2.5 text-[12.5px] font-medium transition-colors sm:flex-none sm:px-3.5 ${
+                on ? 'text-ink' : 'text-ink3 hover:text-ink2'
+              }`}
+            >
+              {on && <motion.span layoutId="tab-pill" transition={spring.snappy} className="pill absolute inset-0 bg-white/[0.13]" />}
+              <span className="relative flex items-center gap-1.5">
+                {t.icon && <Icon name={t.icon} size={14} className="hidden sm:block" />}
+                {t.label}
+                {t.count > 0 && <span className="tnum hidden text-[10.5px] text-ink3 sm:inline">{t.count}</span>}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </LayoutGroup>
   );
 }

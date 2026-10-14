@@ -120,11 +120,22 @@ export function useHQView() {
     const registry = overlay(st.registry, resp.pending);
     const match = makeMatcher(registry.projects, st.home || '');
     const tasks = mergeTasks(st.tasks, liveTasks, match);
-    return { registry, match, tasks, findings: Array.isArray(st.findings) ? st.findings : [], pushedAt: st.at, receivedAt: resp.receivedAt, pending: resp.pending };
+    return {
+      registry,
+      match,
+      tasks,
+      findings: Array.isArray(st.findings) ? st.findings : [],
+      // schema 2 (task 0204): the Library filed by company + what Mia knows
+      docs: Array.isArray(st.docs) ? st.docs : null,
+      knowledge: st.knowledge && typeof st.knowledge === 'object' ? st.knowledge : null,
+      pushedAt: st.at,
+      receivedAt: resp.receivedAt,
+      pending: resp.pending,
+    };
   }, [resp, liveTasks]);
 }
 
-const keyOf = (c) => `${c.action}:${c.project || ''}`;
+const keyOf = (c) => `${c.action}:${c.project || c.company || ''}${c.actionId ? `/${c.actionId}` : ''}`;
 
 // One control: tell Mia (chat path), queue it for the Mac (relay), show it at
 // once (pending overlay). Returns true when it was saved.

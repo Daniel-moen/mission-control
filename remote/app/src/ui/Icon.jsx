@@ -9,7 +9,7 @@ import {
   Download, Share, FileCode2, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen,
   Ear, EarOff, Paperclip, File, FileImage, FileAudio, FileSpreadsheet, Presentation, AppWindow,
   Building2, Pause, Telescope, ExternalLink, TrendingUp, TrendingDown, Undo2, ShieldCheck,
-  Volume1, Volume2, Wrench, Eye, CircleOff, Lightbulb,
+  Volume1, Volume2, Wrench, Eye, CircleOff, Lightbulb, Clapperboard, Upload, Brain, Wand2, Quote,
 } from 'lucide-react';
 
 // Semantic name → lucide glyph. Views ask for meaning ("launch", "needs you"),
@@ -111,6 +111,12 @@ const MAP = {
   watch: Eye,
   off: CircleOff,
   suggest: Lightbulb,
+  // Company pages (task 0204)
+  video: Clapperboard,
+  upload: Upload,
+  knowledge: Brain,
+  action: Wand2,
+  source: Quote,
 };
 
 export default function Icon({ name, size = 18, strokeWidth = 1.75, ...rest }) {
