@@ -181,16 +181,17 @@ async function main() {
   ok((await phone.locator('[data-company]').count()) === 8, '8 company cards');
   const names = await phone.locator('[data-company] [aria-label^="Open "]').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label').slice(5)));
   ok(['Oblivion Estates', 'Klear', 'Dry-ager', 'Games', 'YouTube & video', 'PropIQ', 'CivEntropy', 'Mission Control'].every((n) => names.includes(n)), `every company: ${names.join(', ')}`);
-  ok((await phone.locator('[data-company="games"] [data-project]').count()) === 4, 'Games groups its 4 games');
+  // Compact tiles (task 0204): three project lines, then "+N more".
+  ok((await phone.locator('[data-company="games"] [data-project]').count()) === 3 && /\+1 more/.test(await phone.locator('[data-company="games"]').innerText()), 'Games shows 3 games + 1 more');
   ok((await phone.locator('[data-company="klear"] [data-health="down"]').count()) === 1, 'Klear shows down (Penny 503)');
   ok((await phone.locator('[data-company="dryager"] [data-health="up"]').count()) === 1, 'Dry-ager shows up');
   const dryCard = await phone.locator('[data-company="dryager"]').innerText();
-  ok(/Leads[\s\S]*73/.test(dryCard), 'key number on the card (Leads 73)');
+  ok((await phone.locator('[data-company="dryager"] [data-num="leads"]').innerText()).includes('73'), 'key number on the card (Leads 73)');
   ok(/Now: Dry-ager: chase the stale leads/.test(dryCard), 'what Mia is doing now');
-  ok(/12 leads untouched/.test(dryCard), 'last scout finding');
-  ok(/1 for you/.test(dryCard), 'open question for Daniel');
-  ok((await phone.locator('[data-project="dryager-panel"] [data-level="2"]').count()) === 1, 'autonomy level chip (Suggest)');
-  ok((await phone.locator('[data-company="dryager"] [data-num="stale"] .text-accent').count()) === 1, 'stale leads going down shows as good (green)');
+  ok(/1\?/.test(dryCard), 'open question for Daniel');
+  ok((await phone.locator('[data-company="dryager"] [data-num="leads"] .text-accent').count()) === 1, 'leads going up shows as good (green)');
+  const tileH = await phone.locator('[data-company="dryager"]').evaluate((e) => e.getBoundingClientRect().height);
+  ok(tileH < 260, `the tile is compact (${Math.round(tileH)}px)`);
   const ss = await noSideScroll(phone);
   ok(ss.ok, `no sideways scroll on the phone ${ss.bad.join(' ')}`);
   await waitImages(phone);
@@ -225,6 +226,7 @@ async function main() {
   const panel = phone.locator('[data-project-panel="dryager-panel"]');
   ok((await panel.locator('a[data-link="live"]').getAttribute('href')) === 'https://dryager-panel.up.railway.app', 'live link');
   ok((await panel.innerText()).includes('Restart the service when it is down'), 'standing permissions');
+  ok((await panel.innerText()).includes('12 leads untouched'), 'last scout finding (company page)');
   ok((await panel.locator('[data-task="0601"]').count()) === 1, 'the project’s tasks');
   ok((await panel.locator('[data-num="leads"] svg path').count()) >= 1, 'number history sparkline');
   ok((await panel.locator('[data-question="q_dry1"]').count()) === 1, 'the question shows on the project');
@@ -274,7 +276,7 @@ async function main() {
   await openHQ(ipadP);
   await waitImages(ipadP);
   const cols = await ipadP.locator('[data-company]').evaluateAll((els) => new Set(els.map((e) => Math.round(e.getBoundingClientRect().left))).size);
-  ok(cols === 2, `two columns of cards (${cols})`);
+  ok(cols === 3, `three columns of tiles (${cols})`);
   ok((await noSideScroll(ipadP)).ok, 'no sideways scroll');
   await ipadP.screenshot({ path: path.join(SHOTS, 'ipad-portrait-board.png') });
   await ipadP.locator('[aria-label="Open Games"]').click();
