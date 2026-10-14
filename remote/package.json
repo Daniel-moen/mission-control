@@ -29,7 +29,9 @@
     "test:hq-model": "node test/hq-model-test.mjs",
     "test:hq-panel": "node test/hq-panel-e2e.mjs",
     "test:docpages": "node test/docpages-test.mjs",
-    "test:docpages-panel": "node test/docpages-panel-e2e.mjs"
+    "test:docpages-panel": "node test/docpages-panel-e2e.mjs",
+    "test:hq-v2-model": "node test/hq-v2-model-test.mjs",
+    "test:jarvis-v2-cli": "node test/jarvis-v2-cli-test.mjs"
   },
   "engines": {
     "node": ">=20"
