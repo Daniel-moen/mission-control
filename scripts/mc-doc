@@ -14,7 +14,9 @@
 # Byte-for-byte compatibility with DocLibrary.write matters: a file is
 #   "---\n" + frontmatter-lines + "\n---\n" + body(with one trailing "\n")
 # and frontmatter keys are written in the order kind, status, subject, tags,
-# dir, session, created — with subject/tags/dir/session omitted when empty.
+# company, dir, session, created — with subject/tags/company/dir/session
+# omitted when empty. (company — a Jarvis registry company/project id — is
+# mc-doc's own key; the app reads it but does not write it yet.)
 
 set -eu
 
@@ -120,6 +122,9 @@ normalize_tags() {
 
 trim() { printf '%s' "$1" | sed -e 's/^[[:blank:]]*//' -e 's/[[:blank:]]*$//'; }
 
+# A frontmatter value on one line (a newline would forge a key), trimmed.
+one_line() { trim "$(printf '%s' "$1" | tr '\n\r' '  ')"; }
+
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 # Guarantee exactly one trailing newline on the body file, as DocLibrary.write does.
@@ -137,6 +142,7 @@ emit_doc() {
   printf 'status: %s\n' "$F_status"
   [ -n "$F_subject" ] && printf 'subject: %s\n' "$F_subject"
   [ -n "$F_tags" ] && printf 'tags: %s\n' "$F_tags"
+  [ -n "${F_company:-}" ] && printf 'company: %s\n' "$F_company"
   [ -n "$F_dir" ] && printf 'dir: %s\n' "$F_dir"
   [ -n "$F_session" ] && printf 'session: %s\n' "$F_session"
   printf 'created: %s\n' "$F_created"
@@ -155,7 +161,7 @@ replace_file() {
 require_val() { [ $# -ge 2 ] && [ -n "${2:-}" ] || die "$1 needs a value"; }
 
 cmd_new() {
-  local kind="" title="" subject="" tags="" dir="" bodyfile="" stdin=0 base="" html="" summary=""
+  local kind="" title="" subject="" tags="" company="" dir="" bodyfile="" stdin=0 base="" html="" summary=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --assets-from) require_val "$1" "${2:-}"; base=$2; shift 2 ;;
@@ -163,6 +169,7 @@ cmd_new() {
       --title) require_val "$1" "${2:-}"; title=$2; shift 2 ;;
       --subject) subject=${2:-}; shift 2 ;;
       --tags) tags=${2:-}; shift 2 ;;
+      --company) company=${2:-}; shift 2 ;;
       --dir) dir=${2:-}; shift 2 ;;
       --body-file) require_val "$1" "${2:-}"; bodyfile=$2; shift 2 ;;
       --stdin) stdin=1; shift ;;
@@ -195,6 +202,7 @@ cmd_new() {
     F_status=done
     F_subject=$(trim "$subject")
     F_tags=$(with_page_tag "$tags")
+    F_company=$(one_line "$company")
     F_dir=$(trim "$dir")
     F_session=""
     F_created=$(now_iso)
@@ -231,6 +239,7 @@ cmd_new() {
   F_status=draft
   F_subject=$(trim "$subject")
   F_tags=$(normalize_tags "$tags")
+  F_company=$(one_line "$company")
   F_dir=$(trim "$dir")
   F_session=""
   F_created=$(now_iso)
@@ -301,6 +310,7 @@ cmd_set() {
   F_status=$(front_val "$id" status)
   F_subject=$(front_val "$id" subject)
   F_tags=$(front_val "$id" tags)
+  F_company=$(front_val "$id" company)
   F_dir=$(front_val "$id" dir)
   F_session=$(front_val "$id" session)
   F_created=$(front_val "$id" created)
@@ -315,8 +325,9 @@ cmd_set() {
     status) case "$value" in draft|active|done|archived) ;; *) die "status must be draft|active|done|archived" ;; esac; F_status=$value ;;
     subject) F_subject=$(trim "$value") ;;
     tags)    F_tags=$(normalize_tags "$value") ;;
+    company) F_company=$(one_line "$value") ;;
     dir)     F_dir=$(trim "$value") ;;
-    *) die "cannot set '$key' (only kind, status, subject, tags, dir)" ;;
+    *) die "cannot set '$key' (only kind, status, subject, tags, company, dir)" ;;
   esac
   emit_doc "$body_tmp" | replace_file "$id"
 }
@@ -921,12 +932,13 @@ mc-doc — command-line handle on the Mission Control document library.
 Library root: ${MC_LIBRARY:-$HOME/.mission-control/library}
 
   mc-doc new --kind <plan|research|note> --title <t>
-             [--subject <s>] [--tags a,b] [--dir <path>]
+             [--subject <s>] [--tags a,b] [--company <id>] [--dir <path>]
              [--body-file <f> | --stdin] [--assets-from <dir>]
         Create a doc; prints its absolute path (and nothing else).
+        --company: the Jarvis company/project id it belongs to (HQ grouping).
 
   mc-doc new --kind page --title <t> --html <file.html> [--assets-from <dir>]
-             [--subject <s>] [--tags a,b] [--summary <s>]
+             [--subject <s>] [--tags a,b] [--company <id>] [--summary <s>]
         Publish a full HTML page (shown full-bleed in the panel, sandboxed).
         Stores <stem>.html + <stem>.assets/ and a .md stub; local images the
         page refers to are attached and rewritten to assets/<name>.
@@ -940,7 +952,8 @@ Library root: ${MC_LIBRARY:-$HOME/.mission-control/library}
   mc-doc get  <id>                 Print the body (frontmatter stripped).
   mc-doc write <id> [--stdin | --body-file f] [--assets-from <dir>]
                                    Replace the body, keep frontmatter verbatim.
-  mc-doc set  <id> <key> <value>   Rewrite one of kind|status|subject|tags|dir.
+  mc-doc set  <id> <key> <value>   Rewrite one of kind|status|subject|tags|company|dir
+                                   (an empty value clears subject/tags/company/dir).
 
 Images (stored in <stem>.assets/ next to the doc, pushed to the relay):
   mc-doc attach <id> <file>... [--name n] [--caption c] [--tag t] [--no-sync]
