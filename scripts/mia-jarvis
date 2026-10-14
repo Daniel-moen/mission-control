@@ -380,7 +380,8 @@ def step_pitch(cur, how):
 
 
 def add_finding(project, kind, text, by="mia", **extra):
-    f = {"id": "f_%d" % int(time.time() * 1000), "at": now_iso(), "project": project or "", "kind": kind, "text": text, "by": by}
+    # ms + a random tail: several controls applied in one sync stay distinct.
+    f = {"id": "f_%d_%s" % (int(time.time() * 1000), os.urandom(2).hex()), "at": now_iso(), "project": project or "", "kind": kind, "text": text, "by": by}
     f.update(extra)
     append_jsonl(FINDINGS, f)
     return f
@@ -1578,10 +1579,10 @@ def cmd_action(args):
         c = next((c for c in r["companies"] if c["id"] == pos[0]), None)
         if not c:
             die("no company '%s'" % pos[0])
-        if o.get("--project") and company_of(r, lookup(r, o["--project"])["id"]) != c["id"]:
+        if o.get("--project") and company_of(r, find_project(r, o["--project"])["id"]) != c["id"]:
             die("project %s is not in %s" % (o["--project"], c["id"]))
         a = A(pos[1], o["--label"], o["--prompt"], icon=o.get("--icon") or "sparkles", inputs=inputs,
-              project=lookup(r, o["--project"])["id"] if o.get("--project") else None, tier=o.get("--tier"), hint=o.get("--hint") or "")
+              project=find_project(r, o["--project"])["id"] if o.get("--project") else None, tier=o.get("--tier"), hint=o.get("--hint") or "")
         c["actions"] = [x for x in c["actions"] if x.get("id") != a["id"]] + [a]
         save(r)
     print("%s/%s: %s" % (c["id"], a["id"], a["label"]))

@@ -79,9 +79,8 @@ function createJarvis({ file, log = console } = {}) {
       if (!/^[a-z0-9][a-z0-9._-]*$/i.test(c.actionId)) return 'actionId missing or malformed';
       const inputs = b.inputs && typeof b.inputs === 'object' && !Array.isArray(b.inputs) ? b.inputs : {};
       c.inputs = {};
-      for (const [k, v] of Object.entries(inputs).slice(0, 8)) {
-        if (/^\w{1,32}$/.test(k) && typeof v === 'string') c.inputs[k] = v.trim().slice(0, 400);
-      }
+      const good = Object.entries(inputs).filter(([k, v]) => /^\w{1,32}$/.test(k) && typeof v === 'string');
+      for (const [k, v] of good.slice(0, 8)) c.inputs[k] = v.trim().slice(0, 400);
       c.label = str(b.label, 80);
     }
     c.told = b.told === true; // the panel also sent Mia the [MC] line

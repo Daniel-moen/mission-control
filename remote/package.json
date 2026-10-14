@@ -31,7 +31,8 @@
     "test:docpages": "node test/docpages-test.mjs",
     "test:docpages-panel": "node test/docpages-panel-e2e.mjs",
     "test:hq-v2-model": "node test/hq-v2-model-test.mjs",
-    "test:jarvis-v2-cli": "node test/jarvis-v2-cli-test.mjs"
+    "test:jarvis-v2-cli": "node test/jarvis-v2-cli-test.mjs",
+    "test:hq-v2-panel": "node test/hq-v2-panel-e2e.mjs"
   },
   "engines": {
     "node": ">=20"

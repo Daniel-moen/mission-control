@@ -92,6 +92,8 @@ console.log('jarvis through the server');
   }
 }
 
-fs.rmSync(TMP, { recursive: true, force: true });
+// The relay may still be writing its store as it dies: wait, then retry.
+await sleep(300);
+try { fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch {}
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
