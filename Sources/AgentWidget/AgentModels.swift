@@ -189,6 +189,22 @@ final class AgentRun: ObservableObject, Identifiable {
     var completedToolUseIds: Set<String> = []
     /// Throttle for the subagents-directory scan (it stats files).
     var lastSubagentScan = Date.distantPast
+    /// Background jobs this session started (Bash `run_in_background`, async
+    /// subagents) and no `<task-notification>` has reported stopped yet:
+    /// id → (started, is an agent). A turn that ends with any of these still
+    /// running isn't a finish (ExecutorWatch).
+    var pendingBackground: [String: (at: Date, isAgent: Bool)] = [:]
+    /// uuid of the assistant line that ended the latest turn — the identity of
+    /// one finish, so it is reported once (survives an app restart: the
+    /// transcript re-parses to the same uuid).
+    var turnEndKey: String?
+    /// The latest turn ended on "API Error: Your computer went to sleep
+    /// mid-response" (that line's uuid); nil once any other reply lands.
+    var sleepErrorKey: String?
+    /// Claude Code closed the ended turn: a `system` turn_duration /
+    /// stop_hook_summary line followed it. A message that reads `end_turn` but
+    /// was cut off mid-stream (the Mac slept) never gets one.
+    var turnClosed = false
     /// Consecutive liveness scans where no claude process matched this cwd.
     /// Used to auto-remove a session shortly after the user leaves it.
     var livenessMisses = 0

@@ -91,7 +91,8 @@ final class AgentManager: ObservableObject {
 
     var activeCount: Int { agents.filter { $0.status == .active }.count }
 
-    init() { start() }
+    /// `autostart: false` is for tests: no scan, no timer.
+    init(autostart: Bool = true) { if autostart { start() } }
 
     /// Fast cadence while the popover is open so the activity feed reads as live.
     private let openInterval: TimeInterval = 0.7
@@ -828,22 +829,31 @@ final class AgentManager: ObservableObject {
         // how long it's been quiet — the turn's end, not silence, is the edge
         // that matters. (A transcript written moments ago also proves the
         // process is alive, whatever a flaky liveness scan claims.)
-        let exited = liveScanReady && !run.workingDir.isEmpty && !run.processAlive
-            && now.timeIntervalSince(run.lastModified) > 15
-        // A background subagent outlives the turn that launched it: the parent's
-        // Agent call returns immediately and the turn ends, but work is very much
-        // still happening — the session stays Working until the subagents finish.
-        // The staleness cutoff keeps a subagent that died without a final message
-        // (crash, kill) from pinning its parent to Working forever.
-        let subagentsWorking = run.processAlive && run.subagents.contains {
-            !$0.isDone && now.timeIntervalSince($0.lastModified) < 15 * 60
-        }
+        let exited = hasExited(run, now: now)
+        let subagentsWorking = subagentsWorking(run, now: now)
         if exited || (run.turnEnded && !subagentsWorking) {
             run.status = .done
         } else if run.interrupted && !subagentsWorking {
             run.status = .idle          // Esc'd mid-turn — waiting for input
         } else {
             run.status = .active
+        }
+    }
+
+    /// The session's claude process is gone (not merely quiet).
+    func hasExited(_ run: AgentRun, now: Date) -> Bool {
+        liveScanReady && !run.workingDir.isEmpty && !run.processAlive
+            && now.timeIntervalSince(run.lastModified) > 15
+    }
+
+    /// A background subagent outlives the turn that launched it: the parent's
+    /// Agent call returns immediately and the turn ends, but work is very much
+    /// still happening — the session stays Working until the subagents finish.
+    /// The staleness cutoff keeps a subagent that died without a final message
+    /// (crash, kill) from pinning its parent to Working forever.
+    func subagentsWorking(_ run: AgentRun, now: Date) -> Bool {
+        run.processAlive && run.subagents.contains {
+            !$0.isDone && now.timeIntervalSince($0.lastModified) < 15 * 60
         }
     }
 
@@ -1021,7 +1031,8 @@ final class AgentManager: ObservableObject {
 
     // MARK: Event parsing (works on both stream-json and transcript lines)
 
-    private func handleEvent(_ obj: [String: Any], run: AgentRun) {
+    /// Internal (not private) so tests can replay transcripts through it.
+    func handleEvent(_ obj: [String: Any], run: AgentRun) {
         if run.workingDir.isEmpty, let cwd = obj["cwd"] as? String, !cwd.isEmpty {
             run.workingDir = cwd
         }
@@ -1029,6 +1040,7 @@ final class AgentManager: ObservableObject {
         switch type {
         case "assistant":
             run.interrupted = false
+            run.turnClosed = false
             guard let message = obj["message"] as? [String: Any],
                   let content = message["content"] as? [[String: Any]] else { return }
             for item in content { handleContentItem(item, run: run) }
@@ -1038,6 +1050,13 @@ final class AgentManager: ObservableObject {
             // is now waiting for you, even though the process stays alive.
             if let reason = message["stop_reason"] as? String {
                 run.turnEnded = (reason != "tool_use")
+                // One message is written as several lines (thinking, text):
+                // key the finish by the message, not the line.
+                if run.turnEnded { run.turnEndKey = (message["id"] as? String) ?? (obj["uuid"] as? String) }
+            }
+            run.sleepErrorKey = ExecutorWatch.isSleepError(obj) ? (obj["uuid"] as? String ?? "?") : nil
+            for item in content where (item["type"] as? String) == "tool_use" {
+                for id in ExecutorWatch.stoppedTaskIds(item) { run.pendingBackground[id] = nil }
             }
 
         case "user":
@@ -1047,9 +1066,15 @@ final class AgentManager: ObservableObject {
             // too — none of them start a turn, so none of them may reset
             // `turnEnded` (that made a finished session read as "Working",
             // then fire a false "needs you" when it decayed).
+            let message = obj["message"] as? [String: Any]
+            if let bg = ExecutorWatch.backgroundLaunch(obj) {
+                run.pendingBackground[bg.id] = (MiaManager.date(obj["timestamp"]) ?? Date(), bg.isAgent)
+            }
+            for text in ExecutorWatch.userTexts(message) {
+                for id in ExecutorWatch.notifiedTaskIds(text) { run.pendingBackground[id] = nil }
+            }
             if (obj["isMeta"] as? Bool) == true { return }
             if (obj["isCompactSummary"] as? Bool) == true { return }
-            let message = obj["message"] as? [String: Any]
             if let s = message?["content"] as? String,
                s.hasPrefix("<command-name>") || s.hasPrefix("<local-command") { return }
             // Esc mid-turn: the turn is over but nothing finished — the agent
@@ -1061,6 +1086,7 @@ final class AgentManager: ObservableObject {
             }
             // Real input or a tool result — either way the agent is working again.
             run.turnEnded = false
+            run.turnClosed = false
             run.interrupted = false
             capturePromptIfNeeded(obj, run: run)
             if let content = message?["content"] as? [[String: Any]] {
@@ -1071,6 +1097,24 @@ final class AgentManager: ObservableObject {
                     let text = toolResultText(item)
                     if !text.isEmpty { run.append(LogLine(kind: .result, text: text)) }
                 }
+            }
+
+        case "system":
+            if run.turnEnded, let sub = obj["subtype"] as? String,
+               sub == "turn_duration" || sub == "stop_hook_summary" {
+                run.turnClosed = true
+            }
+
+        case "attachment":
+            // A background job's <task-notification> that arrived mid-turn is
+            // folded into the turn as a queued command. (Idle, it comes as a
+            // user line instead. The queue-operation written just before either
+            // is deliberately ignored: clearing the job there, while the turn
+            // still reads as ended, would report a finish a moment before the
+            // notification wakes the session.)
+            if let a = obj["attachment"] as? [String: Any], (a["type"] as? String) == "queued_command",
+               let text = a["prompt"] as? String {
+                for id in ExecutorWatch.notifiedTaskIds(text) { run.pendingBackground[id] = nil }
             }
 
         case "result":
