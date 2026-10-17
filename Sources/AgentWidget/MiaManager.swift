@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Combine
 
 /// Mia — the persistent Mission Control assistant (docs/mia.md, section 7).
@@ -75,9 +76,23 @@ final class MiaManager: ObservableObject {
     private var messagesOffset: UInt64 = 0
     private var panelOffset: UInt64 = 0
     private var tellRetryAt: [String: Date] = [:]
-    private var execLastStatus: [String: AgentStatus] = [:]
     private var execReported: Set<String> = []
     private var execSeen: Set<String> = []
+    /// Sessions whose verdict has been checked once since launch (adopting a
+    /// finish an older build already reported, without re-reporting it).
+    private var execChecked: Set<String> = []
+
+    // Sleep / wake (task 0244)
+    private let keepAwake = KeepAwake()
+    private var sleptAt: Date?
+    private var sleptWith: [String] = []
+    /// Bumped on every wake; an executor is auto-resumed at most once per wake.
+    private var wakeCount = 0
+    private var lastWake: (slept: Date?, woke: Date)?
+    private var resumedInWake: [String: Int] = [:]
+    /// pid → (has a running Bash child, checked at) — the process-tree check
+    /// behind "a background command is still running".
+    private var shellChildCache: [Int32: (alive: Bool, at: Date)] = [:]
     private var lastScheduleTick = Date.distantPast
 
     // Snapshot caches (keyed on mtimes, so the 1 Hz snapshot doesn't re-read
@@ -122,6 +137,19 @@ final class MiaManager: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] on in self?.enabledChanged(on) }
             .store(in: &cancellables)
+
+        let ws = NSWorkspace.shared.notificationCenter
+        ws.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.willSleep()
+        }
+        ws.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.didWake()
+        }
+        // Don't leave the Mac pinned awake by an idle executor after a quit.
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            self?.keepAwake.releaseAll()
+        }
 
         let t = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.tick()
@@ -322,14 +350,16 @@ final class MiaManager: ObservableObject {
     /// events within 2 s go out as one send, one line each. `mirror` also puts
     /// a muted system line in the conversation thread.
     private func enqueue(kind: String, line: String, tag: String? = nil,
-                         mirror: String? = nil, taskId: String? = nil, front: Bool = false) {
+                         mirror: String? = nil, taskId: String? = nil, front: Bool = false,
+                         deliver: Bool = true) {
         let flat = line.replacingOccurrences(of: "\r\n", with: " ")
             .replacingOccurrences(of: "\n", with: " ")
         var id = ""
         withLock {
             id = nextStamp(eventsPath, prefix: "e_")
+            // deliver: false only records it (a log line, not news for Mia).
             appendJSONL(eventsPath, ["id": id, "at": Self.iso(Date()), "kind": kind,
-                                     "text": flat, "delivered": false])
+                                     "text": flat, "delivered": !deliver])
             if let mirror {
                 var m: [String: Any] = ["id": nextStamp(messagesPath, prefix: "m_"),
                                         "at": Self.iso(Date()), "from": "system",
@@ -338,6 +368,7 @@ final class MiaManager: ObservableObject {
                 appendJSONL(messagesPath, m)
             }
         }
+        guard deliver else { return }
         let ev = PendingEvent(id: id, kind: kind, tag: tag, line: flat)
         if front { pending.insert(ev, at: 0) } else { pending.append(ev) }
         if deliverAt == nil { deliverAt = Date().addingTimeInterval(2) }
@@ -520,8 +551,10 @@ final class MiaManager: ObservableObject {
         mutateTask(tid) { t in
             t["status"] = "running"
             t["dir"] = d
-            t["executor"] = ["sessionId": NSNull(), "model": model,
-                             "dispatchedAt": at, "finishedAt": NSNull()] as [String: Any]
+            var e: [String: Any] = ["sessionId": NSNull(), "model": model,
+                                    "dispatchedAt": at, "finishedAt": NSNull()]
+            reportBaseline(&e, tid: tid, at: at, sinceTell: false)
+            t["executor"] = e
             appendLog(&t, "Dispatched executor (\(model)) in \(d)")
         }
     }
@@ -545,8 +578,15 @@ final class MiaManager: ObservableObject {
             // The executor is working again: its next turn-end is a new finish.
             mutateTask(tid) { t in
                 if t["status"] as? String == "checking" { t["status"] = "running" }
-                if var e = t["executor"] as? [String: Any] { e["finishedAt"] = NSNull(); t["executor"] = e }
-                appendLog(&t, "Mia → executor: \(text)")
+                if var e = t["executor"] as? [String: Any] {
+                    e["finishedAt"] = NSNull()
+                    // An automatic "resume" isn't Mia asking for more work.
+                    if (req["auto"] as? Bool) != true {
+                        reportBaseline(&e, tid: tid, at: Self.iso(now), sinceTell: true)
+                    }
+                    t["executor"] = e
+                }
+                appendLog(&t, (req["auto"] as? Bool) == true ? "Auto → executor: \(text)" : "Mia → executor: \(text)")
             }
             return
         }
@@ -562,10 +602,71 @@ final class MiaManager: ObservableObject {
 
     // MARK: Executors finishing
 
+    /// Where `executor` records what to compare the report against: its mtime
+    /// (or none) at dispatch / at Mia's last tell.
+    private func reportBaseline(_ e: inout [String: Any], tid: String, at: String, sinceTell: Bool) {
+        e["since"] = at
+        e["sinceTell"] = sinceTell
+        e["reportMtime"] = ExecutorWatch.mtime(reportPath(tid)).map { Self.iso($0) } ?? NSNull()
+        // Keep sub-second precision for the comparison (iso() drops it).
+        e["reportMtimeEpoch"] = ExecutorWatch.mtime(reportPath(tid))?.timeIntervalSince1970 ?? NSNull()
+    }
+
+    private func reportPath(_ tid: String) -> String { "\(briefsDir)/\(tid).report.md" }
+
+    private func reportChange(_ tid: String, exec: [String: Any]) -> String {
+        let base = (exec["reportMtimeEpoch"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) }
+        guard exec["since"] != nil else { return "" }
+        return ExecutorWatch.reportChange(now: ExecutorWatch.mtime(reportPath(tid)), baseline: base,
+                                          sinceTell: (exec["sinceTell"] as? Bool) == true)
+    }
+
+    /// Is a `run_in_background` command of this claude process still running?
+    /// Claude Code runs each one as a child shell sourcing its shell snapshot.
+    /// nil when the process isn't bound (trust the transcript).
+    private func shellChildAlive(pid: Int32, now: Date) -> Bool? {
+        guard pid > 0 else { return nil }
+        if let c = shellChildCache[pid], now.timeIntervalSince(c.at) < 15 { return c.alive }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        p.arguments = ["-P", String(pid), "-f", "shell-snapshots"]
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return nil }
+        p.waitUntilExit()
+        let alive = p.terminationStatus == 0
+        shellChildCache[pid] = (alive, now)
+        return alive
+    }
+
+    private func executorVerdict(_ task: [String: Any], exec: [String: Any], run: AgentRun,
+                                 now: Date) -> ExecutorWatch.Verdict {
+        guard let manager else { return .working }
+        var i = ExecutorWatch.Inputs()
+        i.sessionId = run.sessionId
+        i.exited = manager.hasExited(run, now: now)
+        i.turnEnded = run.turnEnded
+        i.turnKey = run.turnEndKey
+        i.sleepErrorKey = run.sleepErrorKey
+        i.pendingShells = run.pendingBackground.values.filter { !$0.isAgent }.count
+        i.pendingAgents = run.pendingBackground.values.filter { $0.isAgent }.count
+        i.subagentsWorking = manager.subagentsWorking(run, now: now)
+        i.turnClosed = run.turnClosed
+        i.quiet = now.timeIntervalSince(run.lastModified)
+        i.quietAwake = now.timeIntervalSince(max(run.lastModified, lastWake?.woke ?? .distantPast))
+        if run.turnEnded && i.pendingShells > 0 && !i.exited {
+            i.shellChildAlive = shellChildAlive(pid: run.pid, now: now)
+        }
+        let since = Self.date(exec["since"]) ?? Self.date(exec["dispatchedAt"]) ?? .distantPast
+        i.doneNoted = ExecutorWatch.doneNoted(log: task["log"] as? [[String: Any]] ?? [], since: since)
+        return ExecutorWatch.verdict(i)
+    }
+
     private func trackExecutors(now: Date) {
         guard let manager else { return }
         let tasks = allTasks()
         var claimed = Set<String>()
+        var awake: [String: Int32] = [:]
         for t in tasks {
             if let e = t["executor"] as? [String: Any], let sid = e["sessionId"] as? String { claimed.insert(sid) }
         }
@@ -594,7 +695,8 @@ final class MiaManager: ObservableObject {
                         appendLog(&t, "Executor session \(run.sessionId)")
                     }
                 } else if now.timeIntervalSince(dispatchedAt) > 600 {
-                    executorEnded(tid, sid: nil, finished: false, now: now)
+                    executorEnded(tid, sid: nil, key: "nosession:\(tid):\(Self.iso(dispatchedAt))",
+                                  finished: false, exec: exec, now: now)
                 }
                 continue
             }
@@ -602,44 +704,148 @@ final class MiaManager: ObservableObject {
 
             if let run = manager.agent(withSessionId: sid) {
                 execSeen.insert(sid)
-                let prev = execLastStatus[sid]
-                execLastStatus[sid] = run.status
-                guard run.status == .done else { execReported.remove(sid); continue }
-                guard !execReported.contains(sid) else { continue }
-                execReported.insert(sid)
-                // First sight after an app restart of a finish already handled.
-                if prev == nil && finished { continue }
-                executorEnded(tid, sid: sid, finished: run.turnEnded, now: now)
+                let verdict = executorVerdict(task, exec: exec, run: run, now: now)
+                let firstCheck = execChecked.insert(sid).inserted
+                let key: String
+                switch verdict {
+                case .working:
+                    // Esc'd at the prompt is waiting, not working.
+                    if !run.interrupted { awake[sid] = run.pid }
+                    continue
+                case .finished(let k, _), .exited(let k), .sleepStall(let k):
+                    key = k
+                }
+                if case .sleepStall = verdict { awake[sid] = run.pid }
+                // One event per real finish.
+                if (exec["finishKey"] as? String) == key { continue }
+                // A build without finish keys already reported this one.
+                if firstCheck && finished && exec["finishKey"] == nil {
+                    mutateTask(tid) { t in
+                        guard var e = t["executor"] as? [String: Any] else { return }
+                        e["finishKey"] = key
+                        t["executor"] = e
+                    }
+                    continue
+                }
+                switch verdict {
+                case .sleepStall:
+                    sleepStalled(tid, sid: sid, key: key, now: now)
+                case .finished(_, let note):
+                    executorEnded(tid, sid: sid, key: key, finished: true, note: note, exec: exec, now: now)
+                default:
+                    executorEnded(tid, sid: sid, key: key, finished: false, exec: exec, now: now)
+                }
             } else if !finished, !execReported.contains(sid),
                       execSeen.contains(sid) || now.timeIntervalSince(bootedAt) > 90,
                       now.timeIntervalSince(dispatchedAt) > 60 {
                 // The session is gone without us ever seeing it finish.
                 execReported.insert(sid)
-                executorEnded(tid, sid: sid, finished: false, now: now)
+                executorEnded(tid, sid: sid, key: "gone:\(sid)", finished: false, exec: exec, now: now)
             }
         }
+        keepAwake.sync(awake)
     }
 
-    private func executorEnded(_ tid: String, sid: String?, finished: Bool, now: Date) {
+    private func executorEnded(_ tid: String, sid: String?, key: String, finished: Bool,
+                               note: String? = nil, exec: [String: Any], now: Date) {
         let saved = mutateTask(tid) { t in
             var e = t["executor"] as? [String: Any] ?? [:]
             e["finishedAt"] = Self.iso(now)
+            e["finishKey"] = key
             t["executor"] = e
             if ["running", "queued", "asking"].contains(t["status"] as? String ?? "") {
                 t["status"] = "checking"
             }
-            appendLog(&t, finished ? "Executor finished" : "Executor exited without finishing")
+            appendLog(&t, finished ? "Executor finished" + (note.map { " (\($0))" } ?? "")
+                                   : "Executor exited without finishing")
         }
         // Daniel cancelled it in the meantime — nothing for Mia to review.
         if (saved?["status"] as? String) == "cancelled" { return }
+        var facts = ["session \(sid ?? "?")"]
+        let report = reportChange(tid, exec: exec)
+        if !report.isEmpty { facts.append(report) }
+        if let note { facts.append(note) }
+        let detail = facts.joined(separator: "; ")
         if finished {
             enqueue(kind: "executor",
-                    line: "[MC] Executor for task \(tid) finished (session \(sid ?? "?")). Review it: mia task show \(tid) ; report at ~/.mission-control/mia/briefs/\(tid).report.md",
+                    line: "[MC] Executor for task \(tid) finished (\(detail)). Review it: mia task show \(tid) ; report at ~/.mission-control/mia/briefs/\(tid).report.md",
                     mirror: "Executor for \(tid) finished", taskId: tid)
         } else {
-            enqueue(kind: "executor", line: "[MC] Executor for task \(tid) exited without finishing.",
+            enqueue(kind: "executor", line: "[MC] Executor for task \(tid) exited without finishing (\(detail)).",
                     mirror: "Executor for \(tid) exited without finishing", taskId: tid)
         }
+    }
+
+    // MARK: Sleep / wake
+
+    private func workingExecutorTasks() -> [String] {
+        guard let manager else { return [] }
+        return allTasks().compactMap { t in
+            guard let tid = t["id"] as? String,
+                  !["done", "failed", "cancelled"].contains(t["status"] as? String ?? ""),
+                  let sid = (t["executor"] as? [String: Any])?["sessionId"] as? String,
+                  let run = manager.agent(withSessionId: sid), run.processAlive,
+                  run.status != .done else { return nil }
+            return tid
+        }
+    }
+
+    private func willSleep() {
+        sleptAt = Date()
+        sleptWith = workingExecutorTasks()
+    }
+
+    private func didWake() {
+        let now = Date()
+        wakeCount += 1
+        lastWake = (sleptAt, now)
+        defer { sleptAt = nil; sleptWith = [] }
+        guard !sleptWith.isEmpty else { return }
+        let span = sleptAt.map { "\(Self.clock($0))–\(Self.clock(now)), \(Int(now.timeIntervalSince($0) / 60)) min" }
+            ?? "until \(Self.clock(now))"
+        enqueue(kind: "sleep",
+                line: "[MC] The Mac slept (\(span)) while executors ran: \(sleptWith.joined(separator: ", ")).",
+                deliver: false)
+    }
+
+    private static func clock(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f.string(from: d)
+    }
+
+    /// The executor's turn died on "your computer went to sleep mid-response":
+    /// type one "resume" into it per wake, and log the stall. Only a second
+    /// stall within the same wake reaches Mia.
+    private func sleepStalled(_ tid: String, sid: String, key: String, now: Date) {
+        let slept = lastWake.map { w in
+            (w.slept.map { "slept \(Self.clock($0))–" } ?? "woke ") + Self.clock(w.woke)
+        } ?? "slept"
+        let again = resumedInWake[tid] == wakeCount
+        mutateTask(tid) { t in
+            guard var e = t["executor"] as? [String: Any] else { return }
+            e["finishKey"] = key
+            t["executor"] = e
+            appendLog(&t, again ? "Stalled again: the Mac slept mid-response (not auto-resumed twice in one wake)"
+                                : "Stalled: the Mac slept mid-response (\(slept)); auto-resuming")
+        }
+        if again {
+            enqueue(kind: "stall",
+                    line: "[MC] Executor for task \(tid) stalled again (the Mac slept mid-response, \(slept)) after an automatic resume this wake. Not resuming it again — `mia tell \(tid) \"resume\"` if it should continue.",
+                    mirror: "Executor for \(tid) stalled (Mac slept)", taskId: tid)
+            return
+        }
+        resumedInWake[tid] = wakeCount
+        withLock {
+            let path = "\(dispatchDir)/\(tid).tell.json"
+            if !fm.fileExists(atPath: path) {
+                writeJSON(path, ["taskId": tid, "at": Self.iso(now), "auto": true,
+                                 "text": "resume — the Mac went to sleep mid-response; carry on where you left off."])
+            }
+        }
+        enqueue(kind: "stall",
+                line: "[MC] Executor for task \(tid) stalled: the Mac slept mid-response (\(slept), session \(sid)). Auto-resumed once.",
+                deliver: false)
     }
 
     // MARK: Schedule
@@ -1316,7 +1522,7 @@ RESEARCH
 TASKS
 - `mia task list / show / add / set / note` manage the list. Statuses: queued → asking → running → checking → done | failed | cancelled.
 - For each queued task: decide if the brief is clear enough. If not, `mia ask` (status becomes asking). If yes, pick the folder (Daniel's projects are under ~; check the task's dir, ask if unknown), write a precise brief, and `mia dispatch <id> --dir <folder> --stdin` with the brief on stdin. The executor is a Claude Code session in that folder, on your own model unless you pass `--model`. Never run two tasks in the same folder at once. A task you can finish yourself (no code) you just do, then mark it done.
-- When `[MC] Executor for task <id> finished` arrives, read the report, check it (you may read files and run tests, never edit), then `mia task set <id> status done` and `mia notify` with a one-line summary and the obvious next step — or `mia tell <id> "…"` to send the executor corrections and keep it running.
+- When `[MC] Executor for task <id> finished` arrives, read the report, check it (you may read files and run tests, never edit), then `mia task set <id> status done` and `mia notify` with a one-line summary and the obvious next step — or `mia tell <id> "…"` to send the executor corrections and keep it running. The event fires once per real finish (never while its background commands or subagents still run) and says whether the report changed since dispatch or your last tell, so you don't need to check file times. An executor stalled by the Mac sleeping is resumed automatically.
 - Keep task notes short and factual with `mia task note`.
 
 MAIL AND CALENDAR

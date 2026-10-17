@@ -62,11 +62,16 @@ enum MiaChannels {
         return servers.keys.sorted()
     }
 
+    /// Environment for Mia's session, which the plugin's server inherits.
+    /// IMESSAGE_APPEND_SIGNATURE=false stops the plugin adding "Sent by Claude"
+    /// to every reply she texts Daniel (task 0208).
+    static let env: [String: String] = ["IMESSAGE_APPEND_SIGNATURE": "false"]
+
     /// The session-only settings that stand in for `--strict-mcp-config`.
     static func settings(mcpServers: [String], pluginCommand: [String]) -> [String: Any] {
         var allowed: [[String: Any]] = (mcpServers + [chromeServer]).map { ["serverName": $0] }
         allowed.append(["serverCommand": pluginCommand])
-        return ["enabledPlugins": [plugin: true], "allowedMcpServers": allowed]
+        return ["enabledPlugins": [plugin: true], "allowedMcpServers": allowed, "env": env]
     }
 
     /// Mia's flags before the prompt. `settingsPath` is the written settings

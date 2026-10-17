@@ -238,8 +238,9 @@ Every delivered event is one line, prefixed so Mia can recognise it, sent via
 [MC] Daniel dismissed q_… (task 0007) — no answer is coming, don't wait on it: "<question>"   (dismiss)
 [MC] Daniel dismissed 5 old questions — no answers are coming, don't wait on them: q_…, q_… (task 0007)
 [MC] New task 0009 queued: <title>                        (task added from panel)
-[MC] Executor for task 0007 finished (session <id>). Review it: mia task show 0007 ; report at ~/.mission-control/mia/briefs/0007.report.md
-[MC] Executor for task 0007 exited without finishing.
+[MC] Executor for task 0007 finished (session <id>; report updated since your last tell). Review it: mia task show 0007 ; report at ~/.mission-control/mia/briefs/0007.report.md
+[MC] Executor for task 0007 exited without finishing (session <id>; no report file yet).
+[MC] Executor for task 0007 stalled again (the Mac slept mid-response, …) after an automatic resume this wake. …   (stall)
 [MC] Daniel uploaded a file: <path> (<mime>, <size>) — note: <caption>     (upload; "— note" only with a caption)
 [MC] Daniel uploaded a file (2 of 3): <path> (<mime>, <size>) — note: <caption>   (several files sent together)
 [MC] Reminder: <text>                                     (reminder)
@@ -248,6 +249,28 @@ Every delivered event is one line, prefixed so Mia can recognise it, sent via
 ```
 
 Several events that arrive within 2 s are batched into one send, one per line.
+
+**When an executor counts as finished** (ExecutorWatch.swift, task 0244). Its
+turn ended with `end_turn` *and* Claude Code closed it (a `system`
+turn_duration / stop_hook_summary line; a message cut off by sleep never gets
+one), *and* nothing it started is still running: no `run_in_background`
+command without its `<task-notification>` (cross-checked against the claude
+process's child shells), no background subagent without one, no subagent
+transcript still being written. A DONE/BLOCKED `mia task note` since dispatch or
+the last tell overrides leftover background work (a dev server); work listed
+as running but silent for 8 h is reported with a note. The process exiting is
+always an end. Each finish is keyed by the message that ended the turn and
+stored as `executor.finishKey`, so it is reported once, across app restarts.
+Dispatch and every tell record the report's mtime (`executor.reportMtime`),
+which the event compares against.
+
+**Sleep.** While an executor works, the app holds `caffeinate -i -s -w <pid>`
+for it (released when it finishes or the app quits). A turn that ends on "API
+Error: Your computer went to sleep mid-response" gets one automatic
+`resume` tell per wake (`auto: true` in the tell file; it doesn't move the
+report baseline); a second stall in the same wake goes to Mia instead.
+Sleeps that interrupt executors and the auto-resumes are logged to
+events.jsonl as `sleep` / `stall` events already marked delivered.
 
 ---
 
@@ -308,7 +331,7 @@ RESEARCH
 TASKS
 - `mia task list / show / add / set / note` manage the list. Statuses: queued → asking → running → checking → done | failed | cancelled.
 - For each queued task: decide if the brief is clear enough. If not, `mia ask` (status becomes asking). If yes, pick the folder (Daniel's projects are under ~; check the task's dir, ask if unknown), write a precise brief, and `mia dispatch <id> --dir <folder> --stdin` with the brief on stdin. The executor is a Claude Code session in that folder, on your own model unless you pass `--model`. Never run two tasks in the same folder at once. A task you can finish yourself (no code) you just do, then mark it done.
-- When `[MC] Executor for task <id> finished` arrives, read the report, check it (you may read files and run tests, never edit), then `mia task set <id> status done` and `mia notify` with a one-line summary and the obvious next step — or `mia tell <id> "…"` to send the executor corrections and keep it running.
+- When `[MC] Executor for task <id> finished` arrives, read the report, check it (you may read files and run tests, never edit), then `mia task set <id> status done` and `mia notify` with a one-line summary and the obvious next step — or `mia tell <id> "…"` to send the executor corrections and keep it running. The event fires once per real finish (never while its background commands or subagents still run) and says whether the report changed since dispatch or your last tell, so you don't need to check file times. An executor stalled by the Mac sleeping is resumed automatically.
 - Keep task notes short and factual with `mia task note`.
 
 MAIL AND CALENDAR
@@ -681,7 +704,9 @@ so it texts as whatever Apple ID Messages on this Mac is signed into.
   `allowedMcpServers` (a policy list) admits only her `mcp.json` servers,
   `claude-in-chrome` and the plugin server. A plugin server only matches that
   list by `serverCommand`, which embeds the versioned install path from
-  `~/.claude/plugins/installed_plugins.json`.
+  `~/.claude/plugins/installed_plugins.json`. Its `env` sets
+  `IMESSAGE_APPEND_SIGNATURE=false`, which the plugin server inherits, so her
+  replies carry no "Sent by Claude" footer (task 0208).
 - The plugin is installed at user scope but **disabled** there
   (`enabledPlugins` false in `~/.claude/settings.json`), so no other session
   spawns a chat.db poller or gets its reply tool. Don't enable it globally.
