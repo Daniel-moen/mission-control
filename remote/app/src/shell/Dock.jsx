@@ -8,6 +8,7 @@ const ITEMS = [
   { key: 'mia', label: 'Mia', icon: 'mia' },
   { key: 'home', label: 'Home', icon: 'sparkles' },
   { key: 'hq', label: 'HQ', icon: 'hq' },
+  { key: 'channels', label: 'Channels', icon: 'video' },
   { key: 'fleet', label: 'Fleet', icon: 'agents' },
   { key: 'insights', label: 'Insights', icon: 'overview' },
   { key: 'library', label: 'Library', icon: 'library' },

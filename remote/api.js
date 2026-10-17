@@ -242,6 +242,11 @@ function createApi({
       'POST /api/v1/jarvis/control {action, project?, level?, value?}': 'queue an HQ change for the Mac: level (0-3) | pause | resume | pitch (quieter|louder) | scout',
       'GET  /api/v1/jarvis/controls': 'the queued HQ changes (the Mac pulls these)',
       'PUT  /api/v1/jarvis/state {registry, findings, tasks, applied[]}': 'the Mac pushes its registry view; applied control ids leave the queue',
+      'GET  /api/v1/channels': 'Channels (task 0260): the view Channels HQ on the Mac last pushed + taps not yet taken',
+      'POST /api/v1/channels/action {action, channel, video?, note?, slot?, title?}': 'queue a request for Mia: approve | reject | make_next_10 | pause_channel | resume_channel | schedule | publish_now (confirmed:true) | regen_thumbnail | change_title',
+      'GET  /api/v1/channels/actions': 'the queued taps + media the panel is waiting for (the Mac pulls these)',
+      'PUT  /api/v1/channels/state {state, applied[]}': 'the Mac pushes the Channels view; applied action ids leave the queue',
+      'GET|PUT /api/v1/channels/media/<id>?size=thumb|poster|full': 'thumbnails, Short posters and mp4s the Mac uploaded (Range); GET of a missing one asks the Mac (202)',
     },
   };
 
