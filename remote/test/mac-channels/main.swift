@@ -44,6 +44,7 @@ check((st["enabledPlugins"] as? [String: Bool]) == ["imessage@claude-plugins-off
 let allowed = st["allowedMcpServers"] as? [[String: Any]] ?? []
 check(allowed.compactMap { $0["serverName"] as? String } == ["mc-gmail", "claude-in-chrome"], "allowlist: her servers + Chrome only")
 check(allowed.compactMap { $0["serverCommand"] as? [String] } == [["bun", "x"]], "allowlist: plugin by command")
+check((st["env"] as? [String: String])?["IMESSAGE_APPEND_SIGNATURE"] == "false", "no \"Sent by Claude\" footer on her replies")
 
 // resolve()
 let files: [String: Data] = ["/h/.claude/plugins/installed_plugins.json": reg,

@@ -704,7 +704,9 @@ so it texts as whatever Apple ID Messages on this Mac is signed into.
   `allowedMcpServers` (a policy list) admits only her `mcp.json` servers,
   `claude-in-chrome` and the plugin server. A plugin server only matches that
   list by `serverCommand`, which embeds the versioned install path from
-  `~/.claude/plugins/installed_plugins.json`.
+  `~/.claude/plugins/installed_plugins.json`. Its `env` sets
+  `IMESSAGE_APPEND_SIGNATURE=false`, which the plugin server inherits, so her
+  replies carry no "Sent by Claude" footer (task 0208).
 - The plugin is installed at user scope but **disabled** there
   (`enabledPlugins` false in `~/.claude/settings.json`), so no other session
   spawns a chat.db poller or gets its reply tool. Don't enable it globally.
