@@ -39,14 +39,15 @@ Use the tool for everything.
 
 `~/.mission-control/bin/mc-doc` is a self-contained CLI. Commands:
 
-- `mc-doc new --kind <plan|research|note> --title <t> [--subject <s>] [--tags a,b] [--dir <path>] [--stdin | --body-file <f>]`
+- `mc-doc new --kind <plan|research|note> --title <t> [--subject <s>] [--tags a,b] [--company <id>] [--dir <path>] [--stdin | --body-file <f>]`
   — creates the doc and prints its absolute path (and nothing else). New docs
   start at `status: draft`. There is no `--status` flag; set status with `set`.
 - `mc-doc list [--kind k] [--status s] [--tag t]` — one `id<TAB>kind<TAB>status<TAB>title` per line.
 - `mc-doc path <id>` — absolute path of a doc (exit 1 if it does not exist).
 - `mc-doc get <id>` — print the body (frontmatter stripped).
 - `mc-doc write <id> [--stdin | --body-file f]` — replace the body, keep frontmatter.
-- `mc-doc set <id> <key> <value>` — rewrite one of `kind`, `status`, `subject`, `tags`, `dir`.
+- `mc-doc set <id> <key> <value>` — rewrite one of `kind`, `status`, `subject`, `tags`, `company`, `dir` (empty value clears).
+- `--company` / `company` is the Jarvis company or project id the doc belongs to (`mia jarvis show` lists them), so HQ can group it.
 - `mc-doc attach <id> <file>... [--name n] [--caption c] [--tag t]` — copy images into the doc
   (see **Images** below) and print the markdown line to paste for each one.
 - `mc-doc assets <id>` — the doc's images: `name<TAB>bytes<TAB>WxH<TAB>assets/name`.

@@ -36,6 +36,8 @@ EVENTS = os.path.join(D, "events.jsonl")
 SCHED = os.path.join(D, "schedule.json")
 STATE = os.path.join(D, "state.json")
 UPLOADS = os.path.join(D, "uploads.jsonl")
+ROUTING = os.path.join(D, "routing.json")
+REGISTRY = os.path.join(D, "jarvis", "registry.json")
 STATUSES = ["queued", "asking", "running", "checking", "done", "failed", "cancelled"]
 DEFAULT_SCHEDULE = {
     "heartbeats": [
@@ -266,6 +268,137 @@ def message(kind, text, task=None, **extra):
     return m
 
 
+# ---- model routing (task 0204) ---------------------------------------------
+# A dispatch can name a tier (cheap/mid/smart) or a kind of work that maps to
+# one; the tier picks the model id the app launches `claude --model` with.
+# $MIA_DIR/routing.json may override either table: {"tiers": {...}, "kinds": {...}}.
+
+TIERS = ["cheap", "mid", "smart"]
+DEFAULT_TIER_MODELS = {"cheap": "claude-haiku-5-5", "mid": "claude-sonnet-5-5",
+                       "smart": "claude-opus-5-5"}
+DEFAULT_KINDS = {}
+for _tier, _kinds in (("cheap", "scout summary triage classify stats health"),
+                      ("mid", "research fix docs content refresh"),
+                      ("smart", "build design release verify review")):
+    for _k in _kinds.split():
+        DEFAULT_KINDS[_k] = _tier
+
+
+def warn(msg):
+    sys.stderr.write("mia: warning: %s\n" % msg)
+
+
+def load_routing():
+    """(tier -> model, kind -> tier): the defaults with routing.json merged over."""
+    tiers, kinds = dict(DEFAULT_TIER_MODELS), dict(DEFAULT_KINDS)
+    if not os.path.exists(ROUTING):
+        return tiers, kinds
+    try:
+        with open(ROUTING, "r", encoding="utf-8") as f:
+            r = json.load(f)
+        if not isinstance(r, dict):
+            raise ValueError("not an object")
+        rt, rk = r.get("tiers") or {}, r.get("kinds") or {}
+        if not isinstance(rt, dict) or not isinstance(rk, dict):
+            raise ValueError("tiers/kinds must be objects")
+    except (IOError, OSError, ValueError) as e:
+        warn("ignoring malformed %s (%s)" % (ROUTING, e))
+        return tiers, kinds
+    for k, v in rt.items():
+        if k not in TIERS:
+            warn("routing.json: unknown tier %r ignored" % k)
+        elif not isinstance(v, str) or not v.strip():
+            warn("routing.json: tier %r needs a model id" % k)
+        else:
+            tiers[k] = v.strip()
+    for k, v in rk.items():
+        if v not in TIERS:
+            warn("routing.json: kind %r -> %r is not a tier; ignored" % (k, v))
+        else:
+            kinds[str(k).strip()] = v
+    return tiers, kinds
+
+
+def resolve_route(model=None, tier=None, kind=None):
+    """(tier, kind, model). --model wins, then --tier, then --kind."""
+    model = (model or "").strip() or None
+    if tier is None and kind is None:
+        return None, None, model
+    tiers, kinds = load_routing()
+    if tier is not None and tier not in tiers:
+        die("unknown tier: %s (tiers: %s)" % (tier, ", ".join(TIERS)))
+    if kind is not None:
+        if kind not in kinds:
+            die("unknown kind: %s (kinds: %s)" % (kind, ", ".join(sorted(kinds))))
+        if tier is None:
+            tier = kinds[kind]
+    return tier, kind, model or tiers[tier]
+
+
+def dispatch_locked(t, brief, d, tier=None, kind=None, model=None):
+    """Write the brief + dispatch request for task t. Caller holds Lock()."""
+    tid = t["id"]
+    if not d:
+        die("task %s has no folder; pass --dir" % tid)
+    if not os.path.isdir(d):
+        die("no such folder: %s" % d)
+    brief_path = os.path.join(BRIEFS, tid + ".md")
+    write_atomic(brief_path, brief.rstrip("\n") + "\n")
+    req = {"taskId": tid, "dir": d, "model": model or None,
+           "brief": brief_path, "at": now_iso()}
+    if tier or kind:
+        req["tier"] = tier
+        req["kind"] = kind
+    write_json(os.path.join(DISPATCH, tid + ".json"), req)
+    t["dir"] = d
+    line = "Dispatch requested in " + d
+    if tier:
+        line += " (%s \u00b7 %s)" % (tier, model)
+        prev = t.get("routing") if isinstance(t.get("routing"), dict) else {}
+        t["routing"] = {"tier": tier, "kind": kind, "model": model,
+                        "verify": "smart" if tier == "cheap" else None}
+        if prev.get("verifiedBy"):
+            t["routing"]["verifiedBy"] = prev["verifiedBy"]
+    t.setdefault("log", []).append({"at": req["at"], "text": line})
+    save_task(t)
+    return d
+
+
+# ---- Jarvis registry lookups -------------------------------------------------
+
+def resolve_company(value):
+    """A company or project id -> (company, project). Checked against the Jarvis
+    registry when there is one; without it the value is kept as a company id."""
+    v = (value or "").strip()
+    if not v:
+        return None, None
+    reg = read_json(REGISTRY)
+    if not isinstance(reg, dict):
+        if os.path.exists(REGISTRY):
+            warn("cannot read %s; keeping %r as given" % (REGISTRY, v))
+        return v, None
+    companies = [c.get("id") for c in reg.get("companies") or []
+                 if isinstance(c, dict) and c.get("id")]
+    projects = dict((p.get("id"), p) for p in reg.get("projects") or []
+                    if isinstance(p, dict) and p.get("id"))
+    if v in companies:
+        return v, None
+    if v in projects:
+        return projects[v].get("company") or None, v
+    die("unknown company or project: %s\n  companies: %s\n  projects: %s"
+        % (v, ", ".join(companies) or "-", ", ".join(sorted(projects)) or "-"))
+
+
+def apply_company(t, value):
+    c, p = resolve_company(value)
+    t.pop("company", None)
+    t.pop("project", None)
+    if c:
+        t["company"] = c
+    if p:
+        t["project"] = p
+
+
 # ---- commands -------------------------------------------------------------
 
 def speak_extra(o):
@@ -333,7 +466,8 @@ def cmd_task(args):
             die("usage: mia task show <id>")
         print(json.dumps(load_task(norm_id(pos[0])), indent=2, ensure_ascii=False))
     elif sub == "add":
-        pos, o = parse(rest, {"--detail": True, "--stdin": False, "--dir": True, "--priority": True})
+        pos, o = parse(rest, {"--detail": True, "--stdin": False, "--dir": True, "--priority": True,
+                              "--company": True})
         title = text_arg(pos, "title")
         detail = o.get("--detail", "")
         if o.get("--stdin"):
@@ -351,11 +485,16 @@ def cmd_task(args):
             t = {"id": tid, "title": title, "detail": detail, "dir": d, "status": "queued",
                  "priority": prio, "createdAt": at, "updatedAt": at, "questions": [],
                  "executor": None, "log": [{"at": at, "text": "Created"}], "result": None}
+            if o.get("--company", "").strip():
+                apply_company(t, o["--company"])
             write_json(task_path(tid), t)
         print(tid)
     elif sub == "set":
         if len(rest) < 3:
-            die("usage: mia task set <id> <status|dir|priority|result|title> <value>")
+            if len(rest) == 2 and rest[1] == "company":
+                rest = rest + [""]
+            else:
+                die("usage: mia task set <id> <status|dir|priority|result|title|company> <value>")
         tid, field, value = norm_id(rest[0]), rest[1], " ".join(rest[2:])
         with Lock():
             t = load_task(tid)
@@ -374,10 +513,15 @@ def cmd_task(args):
                 t["dir"] = expand_dir(value) if value.strip() else ""
             elif field in ("result", "title"):
                 t[field] = value
+            elif field == "company":
+                apply_company(t, value)
             else:
-                die("field must be one of: status, dir, priority, result, title")
+                die("field must be one of: status, dir, priority, result, title, company")
             save_task(t)
-        print("%s %s = %s" % (tid, field, t[field]))
+        shown = t.get(field, "")
+        if field == "company" and t.get("project"):
+            shown = "%s (project %s)" % (shown, t["project"])
+        print("%s %s = %s" % (tid, field, shown))
     elif sub == "note":
         if len(rest) < 2:
             die("usage: mia task note <id> \"<text>\"")
@@ -393,10 +537,13 @@ def cmd_task(args):
 
 
 def cmd_dispatch(args):
-    pos, o = parse(args, {"--dir": True, "--model": True, "--brief-file": True, "--stdin": False})
+    pos, o = parse(args, {"--dir": True, "--model": True, "--tier": True, "--kind": True,
+                          "--brief-file": True, "--stdin": False})
     if len(pos) != 1:
-        die("usage: mia dispatch <id> [--dir <d>] [--model <m>] --brief-file <f> | --stdin")
+        die("usage: mia dispatch <id> [--dir <d>] [--tier cheap|mid|smart] [--kind <k>] "
+            "[--model <m>] --brief-file <f> | --stdin")
     tid = norm_id(pos[0])
+    tier, kind, model = resolve_route(o.get("--model"), o.get("--tier"), o.get("--kind"))
     if o.get("--stdin"):
         brief = sys.stdin.read()
     elif o.get("--brief-file"):
@@ -408,19 +555,68 @@ def cmd_dispatch(args):
     with Lock():
         t = load_task(tid)
         d = expand_dir(o["--dir"]) if o.get("--dir") else (t.get("dir") or "")
+        dispatch_locked(t, brief, d, tier, kind, model)
+    print("dispatch %s queued in %s" % (tid, d))
+
+
+VERIFY_BRIEF = """Verify task {orig} ("{title}"). You are the checker, not the builder: never redo, fix or finish the work yourself.
+
+1. Read what was claimed: {report} (the executor's report), and the original task's log and result (`mia task show {orig}`).
+2. Check every claim against this repo ({dir}): `git log` / `git diff` for the commits or changes it says it made, and run its tests (whatever the repo has) to confirm they pass.
+3. Write your verdict to {out}: first line `PASS` or `FAIL`, then the reasons — what you checked, what held up, what did not.
+4. Record it on the original: mia task note {orig} "VERIFIED: PASS — <one line>" (or "VERIFIED: FAIL — <one line>").
+"""
+
+
+def cmd_verify(args):
+    pos, o = parse(args, {"--tier": True, "--dir": True})
+    if len(pos) != 1:
+        die("usage: mia verify <id> [--tier smart] [--dir <d>]")
+    orig = norm_id(pos[0])
+    tier, kind, model = resolve_route(None, o.get("--tier") or "smart", "verify")
+    with Lock():
+        ot = load_task(orig)
+        d = expand_dir(o["--dir"]) if o.get("--dir") else (ot.get("dir") or "")
         if not d:
-            die("task %s has no folder; pass --dir" % tid)
+            die("task %s has no folder; pass --dir" % orig)
         if not os.path.isdir(d):
             die("no such folder: %s" % d)
-        brief_path = os.path.join(BRIEFS, tid + ".md")
-        write_atomic(brief_path, brief.rstrip("\n") + "\n")
-        req = {"taskId": tid, "dir": d, "model": o.get("--model") or None,
-               "brief": brief_path, "at": now_iso()}
-        write_json(os.path.join(DISPATCH, tid + ".json"), req)
-        t["dir"] = d
-        t.setdefault("log", []).append({"at": req["at"], "text": "Dispatch requested in " + d})
-        save_task(t)
-    print("dispatch %s queued in %s" % (tid, d))
+        tid = next_task_id()
+        at = now_iso()
+        title = ot.get("title") or ""
+        t = {"id": tid, "title": "Verify %s: %s" % (orig, title),
+             "detail": "Independent check of task %s (%s): confirm its claimed work against the repo "
+                       "and record PASS/FAIL on %s. Do not redo the work." % (orig, title, orig),
+             "dir": d, "status": "queued", "priority": ot.get("priority", 3),
+             "createdAt": at, "updatedAt": at, "questions": [], "executor": None,
+             "log": [{"at": at, "text": "Created to verify task %s" % orig}], "result": None,
+             "verifies": orig}
+        for k in ("company", "project"):
+            if ot.get(k):
+                t[k] = ot[k]
+        write_json(task_path(tid), t)
+        brief = VERIFY_BRIEF.format(orig=orig, title=title, dir=d,
+                                    report=os.path.join(BRIEFS, orig + ".report.md"),
+                                    out=os.path.join(BRIEFS, tid + ".report.md"))
+        dispatch_locked(t, brief, d, tier, kind, model)
+        r = ot.get("routing") if isinstance(ot.get("routing"), dict) else {}
+        r["verifiedBy"] = tid
+        ot["routing"] = r
+        ot.setdefault("log", []).append({"at": now_iso(), "text": "Verification: task %s (%s \u00b7 %s)"
+                                         % (tid, tier, model)})
+        save_task(ot)
+    print(tid)
+
+
+def cmd_routing(args):
+    pos, o = parse(args, {})
+    if pos:
+        die("usage: mia routing")
+    tiers, kinds = load_routing()
+    for tier in TIERS:
+        print("tier %s\t%s" % (tier, tiers[tier]))
+    for k in sorted(kinds):
+        print("kind %s\t%s" % (k, kinds[k]))
 
 
 def cmd_tell(args):
@@ -866,7 +1062,7 @@ def cmd_status(args):
 # recently active panel (docs/mia.md §8.2). Fire-and-forget: if no panel is
 # open or the target isn't found, an [MC] event says so.
 
-PANEL_VIEWS = ["home", "fleet", "library", "mia", "insights", "settings"]
+PANEL_VIEWS = ["home", "hq", "fleet", "library", "mia", "insights", "settings"]
 PANEL_SCROLLS = ["down", "up", "top", "bottom"]
 
 
@@ -960,10 +1156,18 @@ HELP = """mia — Mia's line to Daniel and the Mission Control task list.
   mia task list [--status <s>]                      id<TAB>status<TAB>priority<TAB>title
   mia task show <id>                                the task JSON
   mia task add "<title>" [--detail <text>|--stdin] [--dir <d>] [--priority n]
-  mia task set <id> <status|dir|priority|result|title> <value>
+               [--company <company-or-project-id>]  (checked against the Jarvis registry)
+  mia task set <id> <status|dir|priority|result|title|company> <value>
+                                                    (company "" clears company + project)
   mia task note <id> "<text>"                       append to the task's log
-  mia dispatch <id> [--dir <d>] [--model <m>] --brief-file <f> | --stdin
-                                                    launch an executor for the task
+  mia dispatch <id> [--dir <d>] [--tier cheap|mid|smart] [--kind <k>] [--model <m>]
+               --brief-file <f> | --stdin           launch an executor for the task
+                                                    --model wins, then --tier, then --kind;
+                                                    none of them = Mia's own model
+  mia verify <id> [--tier smart] [--dir <d>]        new task that checks <id>'s claimed work
+                                                    (smart tier); prints the new id
+  mia routing                                       tier -> model and kind -> tier tables
+                                                    ($MIA_DIR/routing.json overrides)
   mia tell <id> "<text>"                            type text into the task's executor
   mia remind --at <ISO-8601|HH:MM|+2h|+30m> "<text>" [--task <id>]
   mia remind list [--all]                           pending reminders (--all: fired too)
@@ -976,7 +1180,7 @@ HELP = """mia — Mia's line to Daniel and the Mission Control task list.
                                                     open a Library doc on Daniel's panel
   mia panel open-task <id>                          show a task on Mia's board
   mia panel open-agent <name|session-id>            open an agent's window
-  mia panel view <home|fleet|library|mia|insights|settings>
+  mia panel view <home|hq|fleet|library|mia|insights|settings>
   mia panel open-url <https-url>                    open a link on the iPad (Zoom/Meet/Teams…)
   mia panel search "<text>"                         open search with this text
   mia panel scroll-to "<heading or text>"           scroll the open doc/page to it (forgiving match)
@@ -996,6 +1200,8 @@ HELP = """mia — Mia's line to Daniel and the Mission Control task list.
                                                     (default: the max age below)
   mia question max-age [<48h|3d|never>]             show/set when open questions count as old
                                                     (old = hidden from Daniel; never deleted)
+  mia jarvis <show|set-level|metric|finding|pause|resume|…>
+                                                    the HQ registry (mia jarvis help)
   mia status [--all]                                tasks, open questions, reminders
                                                     (--all: old questions too)
   mia help
@@ -1004,16 +1210,27 @@ Statuses: queued, asking, running, checking, done, failed, cancelled.
 State lives in $MIA_DIR (default ~/.mission-control/mia)."""
 
 
+def cmd_jarvis(args):
+    """The Jarvis registry (HQ view) lives in its own script beside this one."""
+    me = os.environ.get("MIA_SELF") or ""
+    for c in (os.path.join(os.path.dirname(os.path.realpath(me)), "mia-jarvis") if me else "",
+              os.path.expanduser("~/.mission-control/bin/mia-jarvis")):
+        if c and os.path.isfile(c):
+            os.execvp("python3", ["python3", c] + list(args))
+    die("mia-jarvis is not installed next to mia (update Mission Control)")
+
+
 def main(argv):
     if not argv or argv[0] in ("help", "-h", "--help"):
         print(HELP)
         return
     cmd, rest = argv[0], argv[1:]
     table = {"say": cmd_say, "notify": cmd_notify, "ask": cmd_ask, "task": cmd_task,
-             "dispatch": cmd_dispatch, "tell": cmd_tell, "remind": cmd_remind,
+             "dispatch": cmd_dispatch, "verify": cmd_verify, "routing": cmd_routing,
+             "tell": cmd_tell, "remind": cmd_remind,
              "heartbeat": cmd_heartbeat, "inbox": cmd_inbox, "status": cmd_status,
              "panel": cmd_panel, "uploads": cmd_uploads,
-             "question": cmd_question, "questions": cmd_question}
+             "question": cmd_question, "questions": cmd_question, "jarvis": cmd_jarvis}
     if cmd not in table:
         die("unknown command: %s (try: mia help)" % cmd)
     table[cmd](rest)
@@ -1022,4 +1239,6 @@ def main(argv):
 main(sys.argv[1:])
 PY
 
+MIA_SELF="${BASH_SOURCE[0]:-$0}"
+export MIA_SELF
 exec python3 -c "$MIA_PY" "$@"

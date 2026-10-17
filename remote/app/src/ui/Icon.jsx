@@ -8,6 +8,8 @@ import {
   Sparkle, Bell, BellRing, BellOff, Ban, RotateCcw, ListTodo, MessageSquare,
   Download, Share, FileCode2, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen,
   Ear, EarOff, Paperclip, File, FileImage, FileAudio, FileSpreadsheet, Presentation, AppWindow,
+  Building2, Pause, Telescope, ExternalLink, TrendingUp, TrendingDown, Undo2, ShieldCheck,
+  Volume1, Volume2, Wrench, Eye, CircleOff, Lightbulb, Clapperboard, Upload, Brain, Wand2, Quote,
 } from 'lucide-react';
 
 // Semantic name → lucide glyph. Views ask for meaning ("launch", "needs you"),
@@ -94,6 +96,27 @@ const MAP = {
   fileAudio: FileAudio,
   fileSheet: FileSpreadsheet,
   fileSlides: Presentation,
+  // Jarvis HQ (task 0199)
+  hq: Building2,
+  pause: Pause,
+  scout: Telescope,
+  external: ExternalLink,
+  trendUp: TrendingUp,
+  trendDown: TrendingDown,
+  undo: Undo2,
+  shield: ShieldCheck,
+  quieter: Volume1,
+  louder: Volume2,
+  fix: Wrench,
+  watch: Eye,
+  off: CircleOff,
+  suggest: Lightbulb,
+  // Company pages (task 0204)
+  video: Clapperboard,
+  upload: Upload,
+  knowledge: Brain,
+  action: Wand2,
+  source: Quote,
 };
 
 export default function Icon({ name, size = 18, strokeWidth = 1.75, ...rest }) {

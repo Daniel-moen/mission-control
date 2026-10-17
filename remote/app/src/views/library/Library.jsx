@@ -18,6 +18,7 @@ import Icon from '../../ui/Icon.jsx';
 import EmptyState from '../../ui/EmptyState.jsx';
 import DownloadButton from './Download.jsx';
 import { PaneToggle } from '../../shell/Window.jsx';
+import { useHQ, useHQSync } from '../../lib/hq.js';
 
 // The document library — one central directory of markdown files living in
 // ~/.mission-control/library on the Mac, written by you OR by agents (a
@@ -281,14 +282,37 @@ export default function Library({ onOpen, onClose }) {
   const [statusFilter, setStatusFilter] = useState('all');
   const [tagFilter, setTagFilter] = useState('all');
   const [q, setQ] = useState('');
+  const [coFilter, setCoFilter] = useState('all');
 
   const tags = useMemo(() => allTags(docs), [docs]);
 
+  // Filed by company (task 0204): the Mac's Jarvis sync files every doc under
+  // a company; the same poll HQ uses brings that index here. An older Mac
+  // sends no index and the row simply doesn't show.
+  useHQSync();
+  const hqState = useHQ((s) => s.resp?.state);
+  const filing = useMemo(() => {
+    const idx = Array.isArray(hqState?.docs) ? hqState.docs : null;
+    if (!idx) return null;
+    const of = new Map(idx.map((d) => [String(d.id).replace(/\.md$/, ''), d.company || '']));
+    const names = Object.fromEntries((hqState.registry?.companies || []).map((c) => [c.id, c.name]));
+    return { of: (id) => of.get(String(id).replace(/\.md$/, '')) ?? '', names, order: (hqState.registry?.companies || []).map((c) => c.id) };
+  }, [hqState]);
+  const coTabs = useMemo(() => {
+    if (!filing) return [];
+    const n = {};
+    for (const d of docs) {
+      const c = filing.of(d.id);
+      n[c] = (n[c] || 0) + 1;
+    }
+    return [...filing.order.filter((c) => n[c]).map((c) => ({ value: c, label: filing.names[c] || c, count: n[c] })), ...(n[''] ? [{ value: '', label: 'Not filed', count: n[''] }] : [])];
+  }, [filing, docs]);
+
   // Instant local sieve over the metadata every card already shows.
-  const localDocs = useMemo(
-    () => filterDocs(docs, { kind: kindFilter, status: statusFilter, tag: tagFilter, q }),
-    [docs, kindFilter, statusFilter, tagFilter, q],
-  );
+  const localDocs = useMemo(() => {
+    const out = filterDocs(docs, { kind: kindFilter, status: statusFilter, tag: tagFilter, q });
+    return filing && coFilter !== 'all' ? out.filter((d) => filing.of(d.id) === coFilter) : out;
+  }, [docs, kindFilter, statusFilter, tagFilter, q, filing, coFilter]);
 
   // Kind chip counts respect the OTHER active filters (status/tag/query) so a
   // count reads as "how many I'd see if I picked this kind", not a raw total.
@@ -481,6 +505,25 @@ export default function Library({ onOpen, onClose }) {
               aria-label="Status filter"
             />
           </div>
+
+          {coTabs.length > 0 && (
+            <div className="noscroll flex flex-none gap-1.5 overflow-x-auto px-4 pb-2 sm:px-5" data-company-filter>
+              {[{ value: 'all', label: 'All companies', count: docs.length }, ...coTabs].map((t) => (
+                <motion.button
+                  key={t.value || 'unfiled'}
+                  {...press}
+                  data-co={t.value || 'unfiled'}
+                  onClick={() => setCoFilter((cur) => (cur === t.value && t.value !== 'all' ? 'all' : t.value))}
+                  className={`pill flex flex-none items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium transition-colors ${
+                    coFilter === t.value ? 'bg-white/[0.14] text-ink' : 'bg-white/[0.05] text-ink3 hover:text-ink2'
+                  }`}
+                >
+                  {t.label}
+                  <span className="tnum text-[10.5px] text-ink3">{t.count}</span>
+                </motion.button>
+              ))}
+            </div>
+          )}
 
           {tags.length > 0 && (
             <div className="noscroll flex flex-none gap-1.5 overflow-x-auto px-4 pb-3 sm:px-5">
