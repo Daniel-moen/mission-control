@@ -211,7 +211,7 @@ replace_file() {
 require_val() { [ $# -ge 2 ] && [ -n "${2:-}" ] || die "$1 needs a value"; }
 
 cmd_new() {
-  local kind="" title="" subject="" tags="" dir="" bodyfile="" stdin=0 base=""
+  local kind="" title="" subject="" tags="" dir="" bodyfile="" stdin=0 base="" html="" summary=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --assets-from) require_val "$1" "${2:-}"; base=$2; shift 2 ;;
@@ -222,18 +222,50 @@ cmd_new() {
       --dir) dir=${2:-}; shift 2 ;;
       --body-file) require_val "$1" "${2:-}"; bodyfile=$2; shift 2 ;;
       --stdin) stdin=1; shift ;;
+      --html) require_val "$1" "${2:-}"; html=$2; shift 2 ;;
+      --summary) summary=${2:-}; shift 2 ;;
       *) die "unknown flag: $1" ;;
     esac
   done
   [ -n "$kind" ] || die "new needs --kind"
   [ -n "$title" ] || die "new needs --title"
-  case "$kind" in plan|research|note) ;; *) die "kind must be plan|research|note" ;; esac
+  case "$kind" in plan|research|note|page) ;; *) die "kind must be plan|research|note|page" ;; esac
+  if [ "$kind" = page ]; then
+    [ -n "$bodyfile" ] && die "a page takes --html <file> (or --stdin), not --body-file"
+    [ -n "$html" ] || [ "$stdin" -eq 1 ] || die "new --kind page needs --html <file> (or --stdin)"
+  else
+    [ -z "$html" ] || die "--html is for --kind page"
+  fi
 
   ensure_root
   local slug id n
   slug=$(slugify "$title")
   id="$slug.md"; n=2
   while [ -e "$LIB/$id" ]; do id="$slug-$n.md"; n=$((n+1)); done
+
+  if [ "$kind" = page ]; then
+    local src_tmp=""
+    if [ -z "$html" ]; then src_tmp=$(mktemp); cat >"$src_tmp"; html=$src_tmp; fi
+    [ -n "$base" ] || { [ -n "$src_tmp" ] && base=$PWD || base=$(dirname "$html"); }
+    F_kind=page
+    F_status=done
+    F_subject=$(trim "$subject")
+    F_tags=$(with_page_tag "$tags")
+    F_dir=$(trim "$dir")
+    F_session=""
+    F_created=$(now_iso)
+    # Reserve the id first (the stub), then import the page into it.
+    local stub; stub=$(mktemp)
+    printf '# %s\n' "$title" >"$stub"
+    emit_doc "$stub" | replace_file "$id"
+    rm -f "$stub"
+    # (in a subshell: a failed import exits it, and we clean the stub up)
+    ( page_import "$id" "$html" "$base" "$title" "$summary" ) || { rm -rf "$LIB/$id" "$LIB/${id%.md}.html" "$LIB/${id%.md}.assets"; [ -z "$src_tmp" ] || rm -f "$src_tmp"; exit 1; }
+    [ -z "$src_tmp" ] || rm -f "$src_tmp"
+    sync_assets "$id"
+    printf '%s\n' "$LIB/$id"
+    return 0
+  fi
 
   local body_tmp; body_tmp=$(mktemp)
   # shellcheck disable=SC2064
@@ -333,7 +365,9 @@ cmd_set() {
   [ -n "$F_created" ] || F_created=$(now_iso)
 
   case "$key" in
-    kind)   case "$value" in plan|research|note) ;; *) die "kind must be plan|research|note" ;; esac; F_kind=$value ;;
+    kind)   case "$value" in plan|research|note|page) ;; *) die "kind must be plan|research|note|page" ;; esac
+            if [ "$value" = page ] && [ ! -f "$LIB/${id%.md}.html" ]; then die "no page HTML for $id (use: mc-doc page $id --html <file>)"; fi
+            F_kind=$value ;;
     status) case "$value" in draft|active|done|archived) ;; *) die "status must be draft|active|done|archived" ;; esac; F_status=$value ;;
     subject) F_subject=$(trim "$value") ;;
     tags)    F_tags=$(normalize_tags "$value") ;;
@@ -346,6 +380,7 @@ cmd_set() {
 cmd_write() {
   local id="${1:-}"; shift || true
   require_id "$id"
+  is_page "$id" && die "$id is a page: update it with  mc-doc page $id --html <file>"
   local bodyfile="" stdin=0 base=""
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -503,6 +538,18 @@ relay_conf() {
 sync_assets() {
   local id="$1" strict="${2:-}"
   [ "${MC_DOC_NO_SYNC:-0}" = 1 ] && return 0
+  # A page's images go first, then its HTML (sync_page), so the page never
+  # reaches the relay before the pictures it points at.
+  if is_page "$id"; then
+    sync_assets_only "$id" "$strict" || return 1
+    sync_page "$id" "$strict"
+    return $?
+  fi
+  sync_assets_only "$id" "$strict"
+}
+
+sync_assets_only() {
+  local id="$1" strict="${2:-}"
   local adir; adir=$(assets_dir "$id")
   [ -d "$adir" ] || return 0
   if ! relay_conf; then
@@ -700,6 +747,229 @@ cmd_detach() {
   done
 }
 
+# ---------------------------------------------------------------------------
+# Pages (task 0126). A page is a full, self-contained HTML page — the kind of
+# thing a Claude artifact is — shown full-bleed in the panel inside a sandboxed
+# frame. On disk:
+#   <stem>.md      a stub (kind: page, tag "page", "# Title" + a summary) so
+#                  the Mac app, `list` and the panel's Library see it like any doc;
+#   <stem>.html    the page itself, local refs rewritten to assets/<name>;
+#   <stem>.assets/ its images, through the same attach pipeline as markdown docs.
+# The HTML and the images are pushed to the relay, which serves the page from
+# /p/<capability>/<stem>/ with a strict CSP (see remote/docpages.js).
+
+PAGE_MAX_BYTES=2097152   # the relay's cap: put images in assets, not data: URIs
+
+page_file() { printf '%s/%s.html' "$LIB" "${1%.md}"; }
+is_page() { [ -f "$(page_file "$1")" ]; }
+
+# "a, b" → "page, a, b" (once).
+with_page_tag() {
+  local t; t=$(normalize_tags "$1")
+  case ", $t, " in *", page, "*) printf '%s' "$t" ;; *) normalize_tags "page, $t" ;; esac
+}
+
+# The python half of page import: list the local files an HTML page refers to
+# (mode=scan) or rewrite those refs to assets/<name> (mode=rewrite). Looks at
+# src/href/poster/data-src, srcset lists and CSS url(...). Web, data:, blob:,
+# #anchor and already-assets/ refs are left alone.
+page_refs_py() {
+  python3 - "$@" <<'PY'
+import os, re, sys
+from urllib.parse import unquote
+mode, html, base, adir = sys.argv[1:5]
+mp = {}
+if mode == 'rewrite':
+    for line in open(sys.argv[5], encoding='utf-8'):
+        k, _, v = line.rstrip('\n').partition('\t')
+        if k: mp[k] = v
+IMG_EXT = re.compile(r'\.(jpe?g|png|gif|webp|heic|heif|tiff?|avif|bmp)$', re.I)
+text = open(html, encoding='utf-8', errors='surrogateescape').read()
+seen, warned = [], set()
+def resolve(ref):
+    r = ref.strip()
+    if not r or re.match(r'^(?:[a-z][a-z0-9+.-]*:|#|//|\{)', r, re.I): return None
+    r = r.split('#')[0].split('?')[0]
+    if not r: return None
+    r2 = re.sub(r'^\./', '', r)
+    if r2.startswith('assets/'):
+        if mode == 'scan' and not os.path.isfile(os.path.join(adir, r2[7:])) and r2 not in warned:
+            warned.add(r2); sys.stderr.write('mc-doc: warning: %s is not attached to this page\n' % r2)
+        return None
+    for cand in (r, unquote(r)):
+        p = os.path.expanduser(cand)
+        p = os.path.realpath(p if os.path.isabs(p) else os.path.join(base, p))
+        if os.path.isfile(p):
+            if IMG_EXT.search(p): return p
+            if mode == 'scan' and p not in warned:
+                warned.add(p); sys.stderr.write('mc-doc: warning: %s is a local file the page cannot load; inline it (only images become assets)\n' % r)
+            return None
+    if mode == 'scan' and r not in warned and IMG_EXT.search(r):
+        warned.add(r); sys.stderr.write('mc-doc: warning: image not found: %s\n' % r)
+    return None
+def one(ref):
+    p = resolve(ref)
+    if p is None: return ref
+    if mode == 'scan':
+        if p not in seen: seen.append(p)
+        return ref
+    name = mp.get(p)
+    return 'assets/' + name if name else ref
+ATTR = re.compile(r'(\b(?:src|href|poster|data-src|data-full|xlink:href)\s*=\s*)(["\'])(.*?)\2', re.I | re.S)
+SRCSET = re.compile(r'(\b(?:srcset|data-srcset)\s*=\s*)(["\'])(.*?)\2', re.I | re.S)
+URL = re.compile(r'(url\(\s*)(["\']?)([^"\')]+)\2(\s*\))', re.I)
+def srcset(m):
+    parts = []
+    for item in m.group(3).split(','):
+        bits = item.strip().split(None, 1)
+        if not bits: continue
+        bits[0] = one(bits[0])
+        parts.append(' '.join(bits))
+    return m.group(1) + m.group(2) + ', '.join(parts) + m.group(2)
+text = SRCSET.sub(srcset, text)
+text = ATTR.sub(lambda m: m.group(1) + m.group(2) + one(m.group(3)) + m.group(2), text)
+text = URL.sub(lambda m: m.group(1) + m.group(2) + one(m.group(3)) + m.group(2) + m.group(4), text)
+if mode == 'scan':
+    for p in seen: print(p)
+else:
+    open(html, 'w', encoding='utf-8', errors='surrogateescape').write(text)
+PY
+}
+
+# A one-paragraph plain-text summary of a page: <meta name=description>, else
+# its first <p>, else "" — for the stub (the Library card's preview line).
+page_summary_py() {
+  python3 - "$1" <<'PY'
+import html, re, sys
+t = open(sys.argv[1], encoding='utf-8', errors='replace').read()
+t = re.sub(r'(?is)<(script|style|template)\b.*?</\1\s*>', ' ', t)
+m = re.search(r'(?is)<meta\s+[^>]*name\s*=\s*["\']description["\'][^>]*content\s*=\s*["\'](.*?)["\']', t)
+s = m.group(1) if m else ''
+if not s:
+    m = re.search(r'(?is)<p\b[^>]*>(.*?)</p\s*>', t)
+    s = m.group(1) if m else ''
+s = html.unescape(re.sub(r'(?s)<[^>]+>', ' ', s))
+s = re.sub(r'\s+', ' ', s).strip()
+if len(s) > 320: s = s[:317].rsplit(' ', 1)[0] + '…'
+print(s)
+PY
+}
+
+# The asset name for page image $1, numbered past names in $2 (" a.jpg b.jpg ")
+# — two files can slug to the same name (long names are cut at 40 chars).
+page_asset_name() {
+  local p="$1" used="$2" stem n=2 cand
+  stem=$(slugify "$(basename "${p%.*}")")
+  cand=$stem
+  while case "$used" in *" $cand."*) true ;; *) false ;; esac; do
+    cand="$(printf '%s' "$stem" | cut -c1-36)-$n"; n=$((n+1))
+  done
+  printf '%s' "$cand"
+}
+
+# Import HTML file $2 as page doc $1: attach its local images, rewrite refs to
+# assets/<name>, write <stem>.html, refresh the stub. $3 base dir for relative
+# refs, $4 title ("" = keep the stub's), $5 summary ("" = from the page).
+page_import() {
+  local id="$1" src="$2" base="$3" title="$4" summary="$5"
+  [ -f "$src" ] || die "no such HTML file: $src"
+  command -v python3 >/dev/null 2>&1 || die "pages need python3"
+  local work; work=$(mktemp)
+  cat "$src" >"$work"
+  grep -qi '<[a-z!]' "$work" || { rm -f "$work"; die "that doesn't look like HTML: $src"; }
+  local adir; adir=$(assets_dir "$id")
+  local srcs; srcs=$(page_refs_py scan "$work" "$base" "$adir") || { rm -f "$work"; die "could not read $src"; }
+  if [ -n "$srcs" ]; then
+    local map used=" " p name count=0
+    map=$(mktemp)
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      name=$(attach_one "$id" "$p" "$(page_asset_name "$p" "$used")") || { rm -f "$map" "$work"; exit 1; }
+      used="$used$name "
+      count=$((count+1))
+      printf '%s\t%s\n' "$p" "$name" >>"$map"
+    done <<SRCS
+$srcs
+SRCS
+    page_refs_py rewrite "$work" "$base" "$adir" "$map"
+    rm -f "$map"
+    printf 'mc-doc: attached %s image(s) to the page\n' "$count" >&2
+  fi
+  [ "$(file_bytes "$work")" -le "$PAGE_MAX_BYTES" ] || { rm -f "$work"; die "page HTML over 2 MB (keep images as files next to it, not data: URIs)"; }
+  local pf; pf=$(page_file "$id")
+  local tmp; tmp=$(mktemp "$LIB/.mc-doc.XXXXXX")
+  cat "$work" >"$tmp"; mv "$tmp" "$pf"; chmod 644 "$pf"
+  [ -n "$summary" ] || summary=$(page_summary_py "$work")
+  rm -f "$work"
+  [ -n "$title" ] || title=$(doc_title "$id")
+  # The stub: what the Mac app, `list` and the Library card read.
+  local stub; stub=$(mktemp)
+  {
+    printf '# %s\n\n' "$title"
+    if [ -n "$summary" ]; then printf '%s\n\n' "$summary"; fi
+    printf '<!-- mc-doc page: the content is %s next to this file and opens full-bleed in the Mission Control panel. Update it with: mc-doc page %s --html <file> -->\n' "$(basename "$pf")" "$id"
+  } >"$stub"
+  { get_head "$id"; cat "$stub"; } | replace_file "$id"
+  rm -f "$stub"
+}
+
+# Push page $1's HTML to the relay (after its images).
+sync_page() {
+  local id="$1" strict="${2:-}"
+  [ "${MC_DOC_NO_SYNC:-0}" = 1 ] && return 0
+  if ! relay_conf; then
+    [ -n "$strict" ] && die "no relay configured (set MC_RELAY_URL and MC_TOKEN, or the app's Remote settings)"
+    printf 'mc-doc: page kept on this Mac only (no relay configured)\n' >&2
+    return 0
+  fi
+  if curl -sS --fail --max-time 60 -X PUT --data-binary @"$(page_file "$id")" -H "Authorization: Bearer $R_TOKEN" \
+       -H 'Content-Type: text/html; charset=utf-8' "$R_URL/api/v1/doc-pages/${id%.md}" >/dev/null 2>&1; then
+    printf 'mc-doc: pushed the page to the relay\n' >&2
+    return 0
+  fi
+  printf 'mc-doc: could not push the page to the relay; it is safe on this Mac. Run: mc-doc sync %s\n' "$id" >&2
+  [ -n "$strict" ] && return 1
+  return 0
+}
+
+# mc-doc page <id>                    → the page's HTML path
+# mc-doc page <id> --html <file> [--assets-from <dir>] [--summary s] [--title t]
+#                                     → replace the page (and re-sync)
+cmd_page() {
+  local id="${1:-}"; shift || true
+  require_id "$id"
+  local html="" base="" summary="" title="" stdin=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --html) require_val "$1" "${2:-}"; html=$2; shift 2 ;;
+      --stdin) stdin=1; shift ;;
+      --assets-from) require_val "$1" "${2:-}"; base=$2; shift 2 ;;
+      --summary) summary=${2:-}; shift 2 ;;
+      --title) require_val "$1" "${2:-}"; title=$2; shift 2 ;;
+      *) die "unknown flag: $1" ;;
+    esac
+  done
+  if [ -z "$html" ] && [ "$stdin" -eq 0 ]; then
+    is_page "$id" || die "$id is not a page"
+    printf '%s\n' "$(page_file "$id")"
+    return 0
+  fi
+  if ! is_page "$id" && [ "$(front_val "$id" kind)" != page ]; then
+    die "$id is a markdown doc, not a page (make one with: mc-doc new --kind page --title … --html file.html)"
+  fi
+  local src_tmp=""
+  if [ -z "$html" ]; then src_tmp=$(mktemp); cat >"$src_tmp"; html=$src_tmp; fi
+  [ -n "$base" ] || { [ -n "$src_tmp" ] && base=$PWD || base=$(dirname "$html"); }
+  ( page_import "$id" "$html" "$base" "$title" "$summary" ) || { [ -z "$src_tmp" ] || rm -f "$src_tmp"; exit 1; }
+  [ -z "$src_tmp" ] || rm -f "$src_tmp"
+  # Keep the managed frontmatter honest: kind page + the page tag (an older
+  # Mission Control app may have rewritten the kind to note).
+  local tags; tags=$(front_val "$id" tags)
+  case ", $tags, " in *", page, "*) ;; *) (cmd_set "$id" tags "$(with_page_tag "$tags")") ;; esac
+  [ "$(front_val "$id" kind)" = page ] || (cmd_set "$id" kind page)
+  sync_assets "$id"
+}
+
 cmd_help() {
   cat <<'EOF'
 mc-doc — command-line handle on the Mission Control document library.
@@ -710,6 +980,15 @@ Library root: ${MC_LIBRARY:-$HOME/.mission-control/library}
              [--subject <s>] [--tags a,b] [--dir <path>]
              [--body-file <f> | --stdin] [--assets-from <dir>]
         Create a doc; prints its absolute path (and nothing else).
+
+  mc-doc new --kind page --title <t> --html <file.html> [--assets-from <dir>]
+             [--subject <s>] [--tags a,b] [--summary <s>]
+        Publish a full HTML page (shown full-bleed in the panel, sandboxed).
+        Stores <stem>.html + <stem>.assets/ and a .md stub; local images the
+        page refers to are attached and rewritten to assets/<name>.
+  mc-doc page <id> --html <file> [--assets-from <dir>] [--summary s] [--title t]
+                                   Replace a page's HTML (and re-sync).
+  mc-doc page <id>                 Print the page's HTML path.
 
   mc-doc path <id>                 Absolute path of <id> (exit 1 if missing).
   mc-doc list [--kind k] [--status s] [--tag t]
@@ -725,7 +1004,7 @@ Images (stored in <stem>.assets/ next to the doc, pushed to the relay):
                                    JPEG, plus an 800 px thumb) and print the
                                    markdown to paste: ![c](assets/x.jpg "t | c")
   mc-doc assets <id>               "name<TAB>bytes<TAB>WxH<TAB>assets/name" per image.
-  mc-doc sync   <id>               Push the doc's images to the relay again.
+  mc-doc sync   <id>               Push the doc's images (and a page's HTML) to the relay again.
   mc-doc detach <id> <name>...     Remove images (here and on the relay).
   new/write also accept local image refs — ![x](./photo.jpg), ![x](~/Desktop/a.png):
   they are attached and rewritten to assets/… (relative to the body file's
@@ -759,6 +1038,7 @@ main() {
     assets) cmd_assets "$@" ;;
     sync)  cmd_sync "$@" ;;
     detach) cmd_detach "$@" ;;
+    page)  cmd_page "$@" ;;
     help|-h|--help) cmd_help ;;
     *) die "unknown command: $cmd (try: mc-doc help)" ;;
   esac
@@ -770,7 +1050,7 @@ main "$@"
     private static let skill = #"""
 ---
 name: mission-control-library
-description: Save and retrieve research, plans, and notes in the Mission Control document library — the user's central directory that the Mission Control web panel reads live. Use this whenever the user asks you to research something and keep/save/file the findings; write a report, plan, or note somewhere they can read later; or when they refer to "the library", "my plans", "my research", "my notes", or "the central directory". Also use it to look up or update a document that already lives there.
+description: Save and retrieve research, plans, and notes in the Mission Control document library — the user's central directory that the Mission Control web panel reads live. Use this whenever the user asks you to research something and keep/save/file the findings; write a report, plan, or note somewhere they can read later; or when they refer to "the library", "my plans", "my research", "my notes", or "the central directory". Also use it to look up or update a document that already lives there. Also use it to publish a designed, self-contained HTML page (a gallery, visual comparison, dashboard; like a Claude artifact) into the Library.
 ---
 
 # Mission Control document library
@@ -796,7 +1076,7 @@ created: 2026-07-09T18:22:04Z
 ...
 ```
 
-- `kind` is `plan`, `research`, or `note`.
+- `kind` is `plan`, `research`, `note`, or `page` (a full HTML page; see **Pages**).
 - `status` is `draft`, `active`, `done`, or `archived`.
 - `subject` is the company/product/thing it is about; `tags` is a comma list.
 
@@ -822,6 +1102,8 @@ Use the tool for everything.
 - `mc-doc assets <id>` — the doc's images: `name<TAB>bytes<TAB>WxH<TAB>assets/name`.
 - `mc-doc sync <id>` — push the doc's images to the panel's relay again (after a network failure).
 - `mc-doc detach <id> <name>...` — remove images.
+- `mc-doc new --kind page --title <t> --html <file> [--assets-from <dir>]` / `mc-doc page <id> --html <file>`
+  — publish or replace a full HTML page (see **Pages** below).
 
 `new` and `path` print an absolute path; the other commands take an `id`, which
 is the filename (the last path component, e.g. `acme-pricing.md`). Capture it
@@ -955,6 +1237,87 @@ mc-doc set "$id" status done
 ```
 
 Daniel can also see it right away: `mia panel show-doc "$id"`.
+
+## Pages (full HTML, like a Claude artifact)
+
+Besides markdown docs, the library holds **pages**: one self-contained HTML
+page that opens full-bleed in Daniel's panel (Library reader and
+`mia panel show-doc`), the way a Claude artifact does.
+
+**Page or markdown doc?**
+- **Markdown doc** (the default): research reports, plans, notes, anything
+  that is mostly text, gets edited or extended later, or that Daniel may want
+  as a PDF. The `:::pair`/`:::gallery`/`:::facts` blocks already cover
+  most visual reports.
+- **Page**: when the *layout itself* is the point and markdown can't carry
+  it: a visual gallery or mood board, a designed comparison, a dashboard
+  with a chart, a timeline, an interactive calculator or filter. Also use a
+  page when Daniel says "make it like an artifact" or "make a page".
+
+**Commands**
+```sh
+path=$(mc-doc new --kind page --title "Crystal Garden designs" \
+  --html ~/work/gallery/index.html [--subject s] [--tags a,b] [--summary "one line for the card"])
+id=$(basename "$path")
+mc-doc page "$id" --html ~/work/gallery/index.html   # replace it later (re-syncs)
+mc-doc page "$id"                                     # print the stored .html path
+mc-doc sync "$id"                                     # push images + HTML to the relay again
+```
+- On disk: `<stem>.md` (a stub with `kind: page`, the tag `page`, the title
+  and a one-line summary, so lists work), `<stem>.html` and `<stem>.assets/`.
+  Never edit the stub; `mc-doc write` refuses pages. A new page starts as
+  `status: done`.
+- Local images the HTML points at (`src`, `href`, `srcset`, `poster`, CSS
+  `url(...)`, relative to the HTML file's folder or `--assets-from <dir>`)
+  are attached through the normal image pipeline (shrunk to 1600 px, pushed
+  to the relay) and rewritten to `assets/<name>`. A link around an image to
+  the same image (`<a href="x.jpg"><img src="x.jpg"></a>`) opens the panel's
+  full-screen lightbox when Daniel taps it.
+
+**Page rules** (the panel enforces the CDN and network rules; anything else is
+blocked silently):
+- **Self-contained:** one HTML file; a fragment is fine (the panel adds the
+  `<!doctype>`, `<meta charset>` and viewport). Inline your CSS and JS. Max
+  2 MB of HTML; images are separate files, never big `data:` URIs.
+- **Scripts:** inline, or from `cdnjs.cloudflare.com`, `cdn.jsdelivr.net` or
+  `unpkg.com` only. **Fonts:** Google Fonts (`fonts.googleapis.com` /
+  `fonts.gstatic.com`). **Images:** the page's own files, `data:` and
+  `blob:`. **No other network:** no `fetch`/XHR or WebSocket, no iframes, no
+  forms, no remote images (download them and reference the file instead).
+- **Theme tokens:** define colours as CSS variables on `:root`, with a dark
+  set under `@media (prefers-color-scheme: dark)` guarded by
+  `:root:not([data-theme="light"])`, and again under
+  `:root[data-theme="dark"]`. The panel sets `data-theme` on `<html>` to
+  match itself. Give `body` an explicit background.
+- **Phone width first:** it must read at 390 px wide with a 16 px side gutter
+  and no sideways scroll (`min-width:0` on grid children, `max-width:100%` on
+  media), and scale up to the iPad and desktop
+  (`grid-template-columns: repeat(auto-fill, minmax(280px, 1fr))`).
+- **Links:** web links open in a new tab; a link to another Library doc by id
+  (`href="silvertree-place-is-the-doubled-flat-her.md"`) opens it in the panel.
+- **Sandbox:** the page runs in a sandboxed frame with no access to the panel,
+  its storage or its token. Don't try to reach `/api`, `localStorage` or the
+  parent page.
+
+Minimal skeleton:
+```html
+<title>Crystal Garden designs</title>
+<style>
+:root{--bg:#f4f2fa;--card:#fff;--fg:#221d33;--muted:#6a6380;--line:#e2ddef}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#14111d;--card:#1e1a2b;--fg:#ece8f7;--muted:#a49cbd;--line:#2e2840;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#14111d;--card:#1e1a2b;--fg:#ece8f7;--muted:#a49cbd;--line:#2e2840;color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;padding:24px 16px 48px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;max-width:1200px;margin:0 auto}
+figure{margin:0;min-width:0;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+figure img{display:block;width:100%;aspect-ratio:4/3;object-fit:cover}
+</style>
+<h1>Crystal Garden designs</h1>
+<div class="grid">
+  <figure><a href="01-prism-tree.jpg"><img src="01-prism-tree.jpg" alt="Prism Tree" loading="lazy"></a>
+    <figcaption>Prism Tree</figcaption></figure>
+</div>
+```
+Show it to Daniel right away with `mia panel show-doc "$id"`.
 
 ## Worked example — "research pricing at Acme Corp"
 

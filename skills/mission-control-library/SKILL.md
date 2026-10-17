@@ -1,6 +1,6 @@
 ---
 name: mission-control-library
-description: Save and retrieve research, plans, and notes in the Mission Control document library — the user's central directory that the Mission Control web panel reads live. Use this whenever the user asks you to research something and keep/save/file the findings; write a report, plan, or note somewhere they can read later; or when they refer to "the library", "my plans", "my research", "my notes", or "the central directory". Also use it to look up or update a document that already lives there.
+description: Save and retrieve research, plans, and notes in the Mission Control document library — the user's central directory that the Mission Control web panel reads live. Use this whenever the user asks you to research something and keep/save/file the findings; write a report, plan, or note somewhere they can read later; or when they refer to "the library", "my plans", "my research", "my notes", or "the central directory". Also use it to look up or update a document that already lives there. Also use it to publish a designed, self-contained HTML page (a gallery, visual comparison, dashboard; like a Claude artifact) into the Library.
 ---
 
 # Mission Control document library
@@ -26,7 +26,7 @@ created: 2026-07-09T18:22:04Z
 ...
 ```
 
-- `kind` is `plan`, `research`, or `note`.
+- `kind` is `plan`, `research`, `note`, or `page` (a full HTML page; see **Pages**).
 - `status` is `draft`, `active`, `done`, or `archived`.
 - `subject` is the company/product/thing it is about; `tags` is a comma list.
 
@@ -52,6 +52,8 @@ Use the tool for everything.
 - `mc-doc assets <id>` — the doc's images: `name<TAB>bytes<TAB>WxH<TAB>assets/name`.
 - `mc-doc sync <id>` — push the doc's images to the panel's relay again (after a network failure).
 - `mc-doc detach <id> <name>...` — remove images.
+- `mc-doc new --kind page --title <t> --html <file> [--assets-from <dir>]` / `mc-doc page <id> --html <file>`
+  — publish or replace a full HTML page (see **Pages** below).
 
 `new` and `path` print an absolute path; the other commands take an `id`, which
 is the filename (the last path component, e.g. `acme-pricing.md`). Capture it
@@ -185,6 +187,87 @@ mc-doc set "$id" status done
 ```
 
 Daniel can also see it right away: `mia panel show-doc "$id"`.
+
+## Pages (full HTML, like a Claude artifact)
+
+Besides markdown docs, the library holds **pages**: one self-contained HTML
+page that opens full-bleed in Daniel's panel (Library reader and
+`mia panel show-doc`), the way a Claude artifact does.
+
+**Page or markdown doc?**
+- **Markdown doc** (the default): research reports, plans, notes, anything
+  that is mostly text, gets edited or extended later, or that Daniel may want
+  as a PDF. The `:::pair`/`:::gallery`/`:::facts` blocks already cover
+  most visual reports.
+- **Page**: when the *layout itself* is the point and markdown can't carry
+  it: a visual gallery or mood board, a designed comparison, a dashboard
+  with a chart, a timeline, an interactive calculator or filter. Also use a
+  page when Daniel says "make it like an artifact" or "make a page".
+
+**Commands**
+```sh
+path=$(mc-doc new --kind page --title "Crystal Garden designs" \
+  --html ~/work/gallery/index.html [--subject s] [--tags a,b] [--summary "one line for the card"])
+id=$(basename "$path")
+mc-doc page "$id" --html ~/work/gallery/index.html   # replace it later (re-syncs)
+mc-doc page "$id"                                     # print the stored .html path
+mc-doc sync "$id"                                     # push images + HTML to the relay again
+```
+- On disk: `<stem>.md` (a stub with `kind: page`, the tag `page`, the title
+  and a one-line summary, so lists work), `<stem>.html` and `<stem>.assets/`.
+  Never edit the stub; `mc-doc write` refuses pages. A new page starts as
+  `status: done`.
+- Local images the HTML points at (`src`, `href`, `srcset`, `poster`, CSS
+  `url(...)`, relative to the HTML file's folder or `--assets-from <dir>`)
+  are attached through the normal image pipeline (shrunk to 1600 px, pushed
+  to the relay) and rewritten to `assets/<name>`. A link around an image to
+  the same image (`<a href="x.jpg"><img src="x.jpg"></a>`) opens the panel's
+  full-screen lightbox when Daniel taps it.
+
+**Page rules** (the panel enforces the CDN and network rules; anything else is
+blocked silently):
+- **Self-contained:** one HTML file; a fragment is fine (the panel adds the
+  `<!doctype>`, `<meta charset>` and viewport). Inline your CSS and JS. Max
+  2 MB of HTML; images are separate files, never big `data:` URIs.
+- **Scripts:** inline, or from `cdnjs.cloudflare.com`, `cdn.jsdelivr.net` or
+  `unpkg.com` only. **Fonts:** Google Fonts (`fonts.googleapis.com` /
+  `fonts.gstatic.com`). **Images:** the page's own files, `data:` and
+  `blob:`. **No other network:** no `fetch`/XHR or WebSocket, no iframes, no
+  forms, no remote images (download them and reference the file instead).
+- **Theme tokens:** define colours as CSS variables on `:root`, with a dark
+  set under `@media (prefers-color-scheme: dark)` guarded by
+  `:root:not([data-theme="light"])`, and again under
+  `:root[data-theme="dark"]`. The panel sets `data-theme` on `<html>` to
+  match itself. Give `body` an explicit background.
+- **Phone width first:** it must read at 390 px wide with a 16 px side gutter
+  and no sideways scroll (`min-width:0` on grid children, `max-width:100%` on
+  media), and scale up to the iPad and desktop
+  (`grid-template-columns: repeat(auto-fill, minmax(280px, 1fr))`).
+- **Links:** web links open in a new tab; a link to another Library doc by id
+  (`href="silvertree-place-is-the-doubled-flat-her.md"`) opens it in the panel.
+- **Sandbox:** the page runs in a sandboxed frame with no access to the panel,
+  its storage or its token. Don't try to reach `/api`, `localStorage` or the
+  parent page.
+
+Minimal skeleton:
+```html
+<title>Crystal Garden designs</title>
+<style>
+:root{--bg:#f4f2fa;--card:#fff;--fg:#221d33;--muted:#6a6380;--line:#e2ddef}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#14111d;--card:#1e1a2b;--fg:#ece8f7;--muted:#a49cbd;--line:#2e2840;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#14111d;--card:#1e1a2b;--fg:#ece8f7;--muted:#a49cbd;--line:#2e2840;color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;padding:24px 16px 48px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;max-width:1200px;margin:0 auto}
+figure{margin:0;min-width:0;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+figure img{display:block;width:100%;aspect-ratio:4/3;object-fit:cover}
+</style>
+<h1>Crystal Garden designs</h1>
+<div class="grid">
+  <figure><a href="01-prism-tree.jpg"><img src="01-prism-tree.jpg" alt="Prism Tree" loading="lazy"></a>
+    <figcaption>Prism Tree</figcaption></figure>
+</div>
+```
+Show it to Daniel right away with `mia panel show-doc "$id"`.
 
 ## Worked example — "research pricing at Acme Corp"
 

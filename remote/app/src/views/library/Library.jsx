@@ -39,6 +39,7 @@ const KIND = {
   plan: { icon: 'plan', text: 'text-accent', ring: 'border-accent/35 bg-accent/12 text-accent', chip: 'border-accent/30 text-accent' },
   research: { icon: 'research', text: 'text-mgr', ring: 'border-mgr/35 bg-mgr/12 text-mgr', chip: 'border-mgr/30 text-mgr' },
   note: { icon: 'note', text: 'text-ink2', ring: 'border-glass-line bg-white/[0.07] text-ink2', chip: 'border-glass-line text-ink3' },
+  page: { icon: 'page', text: 'text-s4', ring: 'border-s4/35 bg-s4/12 text-s4', chip: 'border-s4/30 text-s4' },
 };
 const kindOf = (k) => KIND[k] || KIND.note;
 
@@ -55,6 +56,7 @@ const KIND_TABS = [
   { value: 'plan', label: 'Plans' },
   { value: 'research', label: 'Research' },
   { value: 'note', label: 'Notes' },
+  { value: 'page', label: 'Pages' },
 ];
 const STATUS_TABS = [
   { value: 'all', label: 'Any status' },
@@ -292,7 +294,7 @@ export default function Library({ onOpen, onClose }) {
   // count reads as "how many I'd see if I picked this kind", not a raw total.
   const kindTabs = useMemo(
     () =>
-      KIND_TABS.map((t) => ({
+      KIND_TABS.filter((t) => t.value !== 'page' || docs.some((d) => d.kind === 'page')).map((t) => ({
         ...t,
         count: filterDocs(docs, { kind: t.value, status: statusFilter, tag: tagFilter, q }).length,
       })),

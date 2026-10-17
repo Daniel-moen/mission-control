@@ -409,8 +409,18 @@ if (process.env.FAKE_HOST_LIBRARY) {
   for (const f of fs.readdirSync(process.env.FAKE_HOST_LIBRARY)) {
     if (!f.endsWith('.md')) continue;
     const st = fs.statSync(path.join(process.env.FAKE_HOST_LIBRARY, f));
+    const raw = fs.readFileSync(path.join(process.env.FAKE_HOST_LIBRARY, f), 'utf8');
+    const front = (/^---\n([\s\S]*?)\n---\n/.exec(raw) || [])[1] || '';
+    const fv = (k) => ((new RegExp(`^${k}:\\s*(.*)$`, 'm').exec(front) || [])[1] || '').trim();
+    // Like DocLibrary.Kind(loose:) in a Mac app from before pages (task 0126):
+    // an unknown kind reads as note — FAKE_HOST_PAGE_KIND=1 plays a newer app.
+    const kinds = process.env.FAKE_HOST_PAGE_KIND === '1' ? ['plan', 'research', 'note', 'page'] : ['plan', 'research', 'note'];
     docs.set(f, {
-      kind: 'research', status: 'done', subject: '', tags: [], dir: '', session: '',
+      kind: front ? (kinds.includes(fv('kind')) ? fv('kind') : 'note') : 'research',
+      status: front ? fv('status') || 'draft' : 'done',
+      subject: fv('subject'),
+      tags: fv('tags').split(',').map((t) => t.trim()).filter(Boolean),
+      dir: '', session: '',
       created: Math.floor(st.mtimeMs / 1000), updatedAt: Math.floor(st.mtimeMs / 1000),
       // The Mac sends the body only (DocLibrary strips the frontmatter).
       content: fs.readFileSync(path.join(process.env.FAKE_HOST_LIBRARY, f), 'utf8').replace(/^---\n[\s\S]*?\n---\n/, ''),

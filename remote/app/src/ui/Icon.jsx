@@ -7,7 +7,7 @@ import {
   Terminal, Trash2, TriangleAlert, Tv, User, Users, X, Zap, Microscope, FileText,
   Sparkle, Bell, BellRing, BellOff, Ban, RotateCcw, ListTodo, MessageSquare,
   Download, Share, FileCode2, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen,
-  Ear, EarOff, Paperclip, File, FileImage, FileAudio, FileSpreadsheet, Presentation,
+  Ear, EarOff, Paperclip, File, FileImage, FileAudio, FileSpreadsheet, Presentation, AppWindow,
 } from 'lucide-react';
 
 // Semantic name → lucide glyph. Views ask for meaning ("launch", "needs you"),
@@ -28,6 +28,7 @@ const MAP = {
   plan: ClipboardList,
   research: Microscope,
   note: StickyNote,
+  page: AppWindow,
   doc: FileText,
   play: Play,
   stop: Square,

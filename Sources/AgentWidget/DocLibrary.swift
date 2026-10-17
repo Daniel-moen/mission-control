@@ -37,6 +37,7 @@ final class DocLibrary {
         case plan       // an implementation plan — something to build
         case research   // findings about a topic, company, technology
         case note       // anything else you want to keep
+        case page       // a full HTML page (<stem>.html next to a stub .md) — `mc-doc new --kind page`
 
         /// Unknown/garbage values on disk degrade to `.note` rather than
         /// dropping the file out of the library.
@@ -49,6 +50,7 @@ final class DocLibrary {
             case .plan: return "Plan"
             case .research: return "Research"
             case .note: return "Note"
+            case .page: return "Page"
             }
         }
     }

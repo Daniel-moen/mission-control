@@ -22,7 +22,9 @@
     "test:questions": "node test/questions-test.mjs",
     "test:questions-panel": "node test/questions-panel-e2e.mjs",
     "test:docassets": "node test/docassets-test.mjs",
-    "test:docassets-panel": "node test/docassets-panel-e2e.mjs"
+    "test:docassets-panel": "node test/docassets-panel-e2e.mjs",
+    "test:docpages": "node test/docpages-test.mjs",
+    "test:docpages-panel": "node test/docpages-panel-e2e.mjs"
   },
   "engines": {
     "node": ">=20"

@@ -53,6 +53,7 @@
 import { create } from 'zustand';
 import { stripAnsi } from './ansi.js';
 import { fmtTokens, fmtInt, fmtMem, clockOf } from './format.js';
+import { BUILD, checkForUpdate } from './update.js';
 
 export { fmtTokens, fmtInt, fmtMem, clockOf };
 
@@ -123,7 +124,7 @@ export const useMC = create(() => ({
 export const getMC = () => useMC.getState();
 const set = (patch) => useMC.setState(patch);
 
-export const PANEL_BUILD = 'v23.14 · 2026-09-29 · listing photos in docs';
+export const PANEL_BUILD = `v23.16 · 2026-10-07 · Library pages · ${BUILD}`;
 
 // ---- status helpers ---------------------------------------------------------
 // Status semantics: working = green, needs-you = amber, done = quiet neutral,
@@ -162,12 +163,12 @@ export function agentName(a) {
 // doc. `kind` and `status` cross the wire as the raw enum strings DocLibrary
 // writes into frontmatter — map them here so the labels live in one place.
 export function kindLabel(kind) {
-  return kind === 'plan' ? 'Plan' : kind === 'research' ? 'Research' : 'Note';
+  return kind === 'plan' ? 'Plan' : kind === 'research' ? 'Research' : kind === 'page' ? 'Page' : 'Note';
 }
 // The icon NAME the UI looks up in its glyph set; an unknown kind degrades to
 // the note glyph, matching DocLibrary's Kind(loose:).
 export function kindIcon(kind) {
-  return kind === 'plan' ? 'plan' : kind === 'research' ? 'research' : 'note';
+  return kind === 'plan' ? 'plan' : kind === 'research' ? 'research' : kind === 'page' ? 'page' : 'note';
 }
 // `statusLabel` above is the AGENT status; a doc's status is a different enum
 // (draft/active/done/archived), so it gets its own name. `active` reads as
@@ -651,7 +652,7 @@ export function connect() {
     ws = null;
   }
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const url = `${proto}://${location.host}/ws?role=viewer&token=${encodeURIComponent(token)}`;
+  const url = `${proto}://${location.host}/ws?role=viewer&build=${encodeURIComponent(BUILD)}&token=${encodeURIComponent(token)}`;
   diagPatch({ lastAttemptAt: Date.now(), lastUrl: url.replace(/token=[^&]*/, 'token=…') });
   let sock;
   try {
@@ -682,6 +683,7 @@ export function connect() {
     diagPatch({ opens: getMC().diag.opens + 1, wsFails: 0 });
     setLink();
     sendAllWatches(); // re-assert leases on every (re)connect
+    checkForUpdate(); // a reconnect often means the relay was just redeployed
     // A fresh socket starts with no presence at the relay; say where we stand.
     if (document.visibilityState !== 'hidden' && Date.now() - lastInteraction < 10 * 60000) reportActive(true);
   };
@@ -1122,7 +1124,10 @@ function ingest(s) {
   const dgk = (s.docs || []).map((d) => `${d.id}@${d.updatedAt}`).join('|');
   if (dgk !== docsKey) {
     docsKey = dgk;
-    const docs = s.docs || [];
+    // A Library page (task 0126) is `kind: page` + the tag `page` (mc-doc
+    // writes both). A Mac app from before pages reads the kind as `note`, so
+    // the tag is what marks it then.
+    const docs = (s.docs || []).map((d) => (d && d.kind !== 'page' && (d.tags || []).includes('page') ? { ...d, kind: 'page' } : d));
     patch.docs = docs;
     // A doc that changed on disk (or vanished) invalidates its cached body. This
     // is the main path a research report lands: the agent rewrites the file, its
