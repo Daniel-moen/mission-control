@@ -69,6 +69,7 @@ const { createTts } = require('./tts');
 const { createUpload } = require('./upload');
 const { createDocAssets } = require('./docassets');
 const { createDocPages } = require('./docpages');
+const { createChannels } = require('./channels');
 
 const PORT = process.env.PORT || 8080;
 const TOKEN = process.env.MC_TOKEN || '';
@@ -169,7 +170,7 @@ const server = http.createServer((req, res) => {
 
   if (pathname === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, host: host !== null, viewers: viewers.size, pollers: pollers.size, pushSubscriptions: push.count(), stt: stt.info().provider, realtime: realtime.info(), tts: tts.info(), uploads: upload.info(), docAssets: docAssets.info().bytes, docPages: docPages.info().bytes, panelBuild: panelBuild(), viewerBuilds: [...viewers].map((v) => v.build || 'legacy') }));
+    res.end(JSON.stringify({ ok: true, host: host !== null, viewers: viewers.size, pollers: pollers.size, pushSubscriptions: push.count(), stt: stt.info().provider, realtime: realtime.info(), tts: tts.info(), uploads: upload.info(), docAssets: docAssets.info().bytes, docPages: docPages.info().bytes, channels: channels.info(), panelBuild: panelBuild(), viewerBuilds: [...viewers].map((v) => v.build || 'legacy') }));
     return;
   }
 
@@ -200,6 +201,16 @@ const server = http.createServer((req, res) => {
       console.error('doc-assets error:', err);
       if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: 'internal error' }));
+    });
+    return;
+  }
+
+  // Channels (task 0260): state + taps for the Channels view, media the Mac pushed — see channels.js.
+  if (url.pathname === '/api/v1/channels' || url.pathname.startsWith('/api/v1/channels/')) {
+    channels.handle(req, res, url).catch((err) => {
+      if (!res.headersSent) res.writeHead(err.status || 500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: err.status ? err.message : 'internal error' }));
+      if (!err.status) console.error('channels error:', err);
     });
     return;
   }
@@ -440,6 +451,8 @@ const docAssets = createDocAssets({
     (process.env.RAILWAY_VOLUME_MOUNT_PATH ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'doc-assets') : undefined),
   maxTotalBytes: (Number(process.env.DOC_ASSETS_MB) || 2048) * 1024 * 1024,
 });
+// Channels (channels.js, task 0260): the Mac's Channels HQ view + Daniel's queued taps + cached media.
+const channels = createChannels({ tokenOk });
 // Library pages (docpages.js): HTML next to the doc assets, served sandboxed
 // under /p/<capability>/… — never with the panel's token.
 const docPages = createDocPages({
