@@ -8,7 +8,8 @@ import os, re, sys
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SWIFT = os.path.join(REPO, "Sources", "AgentWidget", "ToolingInstaller.swift")
 FILES = [("mcDoc", "scripts/mc-doc"), ("skill", "skills/mission-control-library/SKILL.md"),
-         ("mia", "scripts/mia"), ("miaJarvis", "scripts/mia-jarvis"), ("miaCore", "scripts/mia-core")]
+         ("mia", "scripts/mia"), ("miaJarvis", "scripts/mia-jarvis"), ("miaCore", "scripts/mia-core"),
+         ("miaUsage", "scripts/mia-usage")]
 
 src = open(SWIFT, encoding="utf-8").read()
 out = src

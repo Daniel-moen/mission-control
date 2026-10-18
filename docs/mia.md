@@ -219,6 +219,10 @@ mia question list [--all] [--json]                     open questions (--all: ol
 mia question dismiss <q_id>…                           close questions that no longer matter (state dismissed, by mia)
 mia question expire [--older-than 48h] [--dry-run]     close every open question older than that (default: the max age)
 mia question max-age [<48h|3d|never>]                  show/set when an open question counts as old (questions.json)
+mia usage [--refresh] [--json]                         Claude plan usage: 5-hour session + weekly % and resets
+                                                       (scripts/mia-usage; cached 4 min in usage.json)
+mia usage sync [--force] [--quiet] [--json] [--loop S] fetch, PUT /api/v1/usage to the relay, announce
+                                                       thresholds (80/95 %) once per window period
 mia help
 ```
 
@@ -245,6 +249,8 @@ Every delivered event is one line, prefixed so Mia can recognise it, sent via
 [MC] Daniel uploaded a file (2 of 3): <path> (<mime>, <size>) — note: <caption>   (several files sent together)
 [MC] Reminder: <text>                                     (reminder)
 [MC] Heartbeat "<label>": <prompt>                        (heartbeat)
+[MC] Usage: 83% of the 5-hour session, resets 01:49 (in 1h 36m). Throttle: pause big executors, keep small work going.   (usage, ≥80 %)
+[MC] Usage: 96% of the weekly limit, resets Thu 08:59 (in 3d 7h). Near the limit: hold new dispatches; only finish what's running.   (usage, ≥95 %)
 [MC] You were restarted. Run `mia inbox` and `mia status` to catch up.   (first message after a relaunch)
 ```
 
@@ -410,6 +416,18 @@ model), **without** the strict MCP config (they are ordinary agents).
 - **Schedule**: tick every 30 s. Fire due reminders (mark `fired`) and
   heartbeats (`everyMinutes` since last fire; daily `at` once per day, tracked
   in `state.json.lastHeartbeat[id]`). Nothing fires while Mia is disabled.
+- **Usage** (task 0290): while `miaEnabled`, every 300 s (first ~45 s after
+  launch) run `~/.mission-control/bin/mia usage sync --json --quiet` off the
+  main thread (60 s timeout, never overlapping). `mia-usage` reads Claude
+  Code's login read-only (Keychain `Claude Code-credentials`, else
+  `~/.claude/.credentials.json`; never refreshed, never printed), calls
+  `GET https://api.anthropic.com/api/oauth/usage` at most every 4 min (≥10 min
+  after a 429), writes `usage.json`, pushes it to the relay
+  (`PUT /api/v1/usage`) and returns new threshold alerts (each threshold once
+  per window period, `usage-state.json`); each becomes a `usage` event.
+  Shape: `{source:"oauth-usage", at, plan, stale, error, windows:[{key, label,
+  pct, resetsAt, severity?, active?}]}`, keys `session`, `weekly`,
+  `weekly_<model>`.
 - **Settings**: `miaEnabled` (default false), `miaModel` (default
   `claude-fable-5-1`; a value stored in UserDefaults — any pick from the
   panel — wins over the default), `miaReadUpTo`.

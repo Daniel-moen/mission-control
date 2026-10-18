@@ -102,6 +102,9 @@ final class MiaManager: ObservableObject {
     /// behind "a background command is still running".
     private var shellChildCache: [Int32: (alive: Bool, at: Date)] = [:]
     private var lastScheduleTick = Date.distantPast
+    // Claude plan usage (task 0290): `mia usage sync` every 5 min, one at a time.
+    private var nextUsageAt = Date().addingTimeInterval(45)
+    private var usageRunning = false
 
     // Snapshot caches (keyed on mtimes, so the 1 Hz snapshot doesn't re-read
     // every task file each second).
@@ -251,6 +254,10 @@ final class MiaManager: ObservableObject {
         if now.timeIntervalSince(lastScheduleTick) >= 30 {
             lastScheduleTick = now
             tickSchedule(now: now)
+        }
+        if now >= nextUsageAt {
+            nextUsageAt = now.addingTimeInterval(300)
+            pollUsage()
         }
         if let at = deliverAt, now >= at { flush(now: now) }
     }
@@ -999,6 +1006,50 @@ final class MiaManager: ObservableObject {
             enqueue(kind: "heartbeat", line: "[MC] Heartbeat \"\(label)\": \(prompt)", tag: id)
         }
         if lastChanged { updateState { $0["lastHeartbeat"] = last } }
+    }
+
+    // MARK: Usage (task 0290)
+
+    /// `mia usage sync` refreshes usage.json, pushes it to the relay and
+    /// returns new threshold alerts (mia-usage remembers which fired, so each
+    /// arrives once per window period); each becomes a `[MC] Usage:` event.
+    private func pollUsage() {
+        guard settings.miaEnabled, !usageRunning else { return }
+        usageRunning = true
+        let env = ProcessInfo.processInfo.environment.merging(["MIA_DIR": dir]) { $1 }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let alerts = Self.runUsageSync(env: env)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.usageRunning = false
+                guard self.settings.miaEnabled else { return }
+                for text in alerts {
+                    self.enqueue(kind: "usage", line: text,
+                                 mirror: text.hasPrefix("[MC] ") ? String(text.dropFirst(5)) : text)
+                }
+            }
+        }
+    }
+
+    /// Runs off the main thread; 60 s timeout. The alert texts, or [] on any failure.
+    private static func runUsageSync(env: [String: String]) -> [String] {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/bash")
+        p.arguments = [NSHomeDirectory() + "/.mission-control/bin/mia", "usage", "sync", "--json", "--quiet"]
+        p.environment = env
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return [] }
+        let killer = DispatchWorkItem { if p.isRunning { p.terminate() } }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 60, execute: killer)
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        killer.cancel()
+        guard p.terminationStatus == 0,
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let alerts = obj["alerts"] as? [[String: Any]] else { return [] }
+        return alerts.compactMap { $0["text"] as? String }
     }
 
     // MARK: Panel commands (RemoteBridge)

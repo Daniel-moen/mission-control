@@ -26,6 +26,7 @@
 const zlib = require('zlib');
 const { createThumbs } = require('./thumbs');
 const { createJarvis } = require('./jarvis');
+const { createUsage } = require('./usage');
 
 const MAX_BODY = 2 * 1024 * 1024; // doc bodies travel through here
 const ACK_TIMEOUT_MS = 15000;
@@ -48,6 +49,7 @@ function createApi({
   onPanelDone = () => {},
   thumbs = createThumbs(),
   jarvis = createJarvis(),
+  usage = createUsage(),
 }) {
   // ---------------------------------------------------------------------------
   // Assembled terminal screens for HTTP pollers: sessionId → { seq, text, at }.
@@ -242,6 +244,8 @@ function createApi({
       'POST /api/v1/jarvis/control {action, project?, level?, value?}': 'queue an HQ change for the Mac: level (0-3) | pause | resume | pitch (quieter|louder) | scout',
       'GET  /api/v1/jarvis/controls': 'the queued HQ changes (the Mac pulls these)',
       'PUT  /api/v1/jarvis/state {registry, findings, tasks, applied[]}': 'the Mac pushes its registry view; applied control ids leave the queue',
+      'GET  /api/v1/usage': 'Claude subscription usage the Mac last pushed (session / weekly % used, reset times)',
+      'PUT  /api/v1/usage {source, at, plan, stale, error, windows[]}': 'the Mac (`mia usage sync`) pushes the usage picture',
       'GET  /api/v1/channels': 'Channels (task 0260): the view Channels HQ on the Mac last pushed + taps not yet taken',
       'POST /api/v1/channels/action {action, channel, video?, note?, slot?, title?}': 'queue a request for Mia: approve | reject | make_next_10 | pause_channel | resume_channel | schedule | publish_now (confirmed:true) | regen_thumbnail | change_title',
       'GET  /api/v1/channels/actions': 'the queued taps + media the panel is waiting for (the Mac pulls these)',
@@ -561,6 +565,12 @@ function createApi({
     // ---- Jarvis HQ (jarvis.js, task 0199) -----------------------------------
     if (route[0] === 'jarvis') {
       const r = jarvis.route(route.slice(1), m, body);
+      if (r) return json(res, r.status, r.body);
+    }
+
+    // ---- Claude usage (usage.js, task 0290) ------------------------------------
+    if (route[0] === 'usage') {
+      const r = usage.route(route.slice(1), m, body);
       if (r) return json(res, r.status, r.body);
     }
 

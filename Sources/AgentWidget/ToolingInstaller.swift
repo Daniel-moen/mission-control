@@ -11,7 +11,7 @@ import Foundation
 /// touches nothing.
 ///
 /// The embedded strings mirror, byte for byte, `scripts/mc-doc`, `scripts/mia`,
-/// `scripts/mia-jarvis`, `scripts/mia-core`
+/// `scripts/mia-jarvis`, `scripts/mia-core`, `scripts/mia-usage`
 /// and `skills/mission-control-library/SKILL.md` in the repo (the short Mia
 /// skill lives only here). Those are the
 /// readable, testable source of truth; the app ships as a bundle, so a copy has
@@ -33,6 +33,8 @@ enum ToolingInstaller {
                         name: "mia-jarvis", body: miaJarvis, executable: true)
             installFile(dir: home + "/.mission-control/bin",
                         name: "mia-core", body: miaCore, executable: true)
+            installFile(dir: home + "/.mission-control/bin",
+                        name: "mia-usage", body: miaUsage, executable: true)
             installFile(dir: home + "/.claude/skills/mission-control-mia",
                         name: "SKILL.md", body: miaSkill, executable: false)
         }
@@ -2685,6 +2687,8 @@ HELP = """mia — Mia's line to Daniel and the Mission Control task list.
   mia jobs [--all] [--json]                         the job queue (mia-core): running, queued, cost
   mia core status|log <task|#job> [-f]|cancel <task|#job>|budget|config [get|set <k> <v>]|beat <id>
                                                     the job engine and its settings ($MIA_DIR/core.json)
+  mia usage [--refresh] [--json]                    Claude plan usage: 5-hour session + weekly %
+  mia usage sync [--force] [--quiet] [--json]       fetch, push to the panel, announce 80%/95% once
   mia status [--all]                                tasks, open questions, reminders
                                                     (--all: old questions too)
   mia help
@@ -2703,6 +2707,16 @@ def cmd_jarvis(args):
     die("mia-jarvis is not installed next to mia (update Mission Control)")
 
 
+def cmd_usage(args):
+    """Claude plan usage lives in its own script beside this one (mia-usage)."""
+    me = os.environ.get("MIA_SELF") or ""
+    for c in (os.path.join(os.path.dirname(os.path.realpath(me)), "mia-usage") if me else "",
+              os.path.expanduser("~/.mission-control/bin/mia-usage")):
+        if c and os.path.isfile(c):
+            os.execvp("python3", ["python3", c] + list(args))
+    die("mia-usage is not installed next to mia (update Mission Control)")
+
+
 def main(argv):
     if not argv or argv[0] in ("help", "-h", "--help"):
         print(HELP)
@@ -2714,7 +2728,7 @@ def main(argv):
              "heartbeat": cmd_heartbeat, "inbox": cmd_inbox, "status": cmd_status,
              "panel": cmd_panel, "uploads": cmd_uploads,
              "question": cmd_question, "questions": cmd_question, "jarvis": cmd_jarvis,
-             "core": cmd_core, "jobs": cmd_jobs}
+             "core": cmd_core, "jobs": cmd_jobs, "usage": cmd_usage}
     if cmd not in table:
         die("unknown command: %s (try: mia help)" % cmd)
     table[cmd](rest)
@@ -2846,6 +2860,12 @@ dismisses from the panel you get:
 ```
 
 Carry on without the answer, or ask again differently if it still matters.
+
+**Usage limits**: `mia usage` shows Claude plan usage (5-hour session + weekly %,
+reset times); `mia usage --json` for the numbers. A `[MC] Usage: …` event means
+throttle: at 80% pause/stop dispatching big Opus executors and keep small,
+cheap work going; at 95% hold new dispatches and only finish what's running.
+Resume normally after the reset time in the event.
 
 **If you are Mia**: never sleep or poll — end your turn and wait for `[MC]`.
 """#
@@ -6301,5 +6321,604 @@ def main(argv):
 
 if __name__ == "__main__":
     main(sys.argv[1:])
+"""#
+
+    // `mia usage …` (task 0290): Claude plan usage, beside `mia`.
+    private static let miaUsage = #"""
+#!/usr/bin/env python3
+# mia-usage — Claude subscription usage (5-hour session + weekly limits) for
+# Mia and the Mission Control panel (task 0290).
+#
+# Reached as `mia usage …` (scripts/mia hands the arguments over). Reads the
+# plan-usage endpoint Claude Code's /usage uses, with Claude Code's own login
+# (macOS Keychain "Claude Code-credentials", else ~/.claude/.credentials.json).
+# The token is only ever sent as a bearer header to that endpoint: never
+# printed, logged or written. It is never refreshed here either — refreshing
+# would rotate Claude Code's refresh token and could log it out; on 401/403
+# the last numbers are kept and marked stale until Claude Code refreshes it.
+#
+#   $MIA_DIR/usage.json        the normalised usage (what the relay/panel get)
+#   $MIA_DIR/usage-state.json  fetch bookkeeping + thresholds already announced
+#
+# Repo source of truth: scripts/mia-usage. ToolingInstaller.swift embeds a
+# byte-for-byte copy next to `mia` in ~/.mission-control/bin. Needs only
+# python3 (stdlib).
+
+import sys, os, json, time, fcntl, tempfile, datetime, subprocess
+import urllib.request, urllib.error
+
+D = os.path.abspath(os.path.expanduser(os.environ.get("MIA_DIR") or "~/.mission-control/mia"))
+CACHE = os.path.join(D, "usage.json")
+STATE = os.path.join(D, "usage-state.json")
+LOCK = os.path.join(D, ".usage.lock")
+
+URL = os.environ.get("MIA_USAGE_URL") or "https://api.anthropic.com/api/oauth/usage"
+FRESH_S = 240          # reuse a fetch for 4 minutes
+BACKOFF_S = 600        # after a 429, wait at least 10 minutes
+CC_VERSION_FALLBACK = "2.1.0"
+UA = "MissionControl-Usage/1"
+EXPIRED = "login token expired — Claude Code refreshes it on its next request"
+
+
+def die(msg, code=1):
+    sys.stderr.write("mia: %s\n" % msg)
+    sys.exit(code)
+
+
+def now_iso(t=None):
+    return datetime.datetime.fromtimestamp(time.time() if t is None else t, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_ts(v):
+    """ISO-8601 (with or without fractions / offset) → epoch seconds, or None."""
+    if not v or not isinstance(v, str):
+        return None
+    s = v.strip().replace("Z", "+00:00")
+    try:
+        d = datetime.datetime.fromisoformat(s)
+    except ValueError:
+        # Python < 3.11 chokes on 6+ digit fractions with an offset; trim them.
+        head, dot, rest = s.partition(".")
+        if not dot:
+            return None
+        n = 0
+        while n < len(rest) and rest[n].isdigit():
+            n += 1
+        frac = rest[:n]
+        tz = rest[len(frac):]
+        try:
+            d = datetime.datetime.fromisoformat(head + "." + frac[:6].ljust(6, "0") + tz)
+        except ValueError:
+            return None
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=datetime.timezone.utc)
+    return d.timestamp()
+
+
+def write_atomic(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".usage.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def read_json(path, default=None):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (IOError, OSError, ValueError):
+        return default
+
+
+def write_json(path, obj):
+    write_atomic(path, json.dumps(obj, indent=2, ensure_ascii=False) + "\n")
+
+
+class Lock(object):
+    """One fetch at a time (the app's poller and a manual `mia usage`)."""
+    def __enter__(self):
+        os.makedirs(D, exist_ok=True)
+        self.fd = os.open(LOCK, os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(self.fd, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        fcntl.flock(self.fd, fcntl.LOCK_UN)
+        os.close(self.fd)
+        return False
+
+
+def parse(args, spec):
+    """spec: {"--flag": takes_value(bool)}. Returns (positionals, opts)."""
+    pos, opts = [], {}
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            pos.extend(args[i + 1:])
+            break
+        if a.startswith("--") and len(a) > 2:
+            name, eq, val = a.partition("=")
+            if name not in spec:
+                die("unknown option: %s" % name)
+            if spec[name]:
+                if not eq:
+                    i += 1
+                    if i >= len(args):
+                        die("%s needs a value" % name)
+                    val = args[i]
+                opts[name] = val
+            else:
+                opts[name] = True
+        else:
+            pos.append(a)
+        i += 1
+    return pos, opts
+
+
+# ---------------------------------------------------------------------------
+# Claude Code's login (read only)
+
+def credentials():
+    """(accessToken or "", plan, expiresAt epoch or None). Never logged."""
+    tok = os.environ.get("MIA_USAGE_TOKEN", "").strip()
+    if tok:
+        return tok, os.environ.get("MIA_USAGE_PLAN", ""), None
+    raw = ""
+    if sys.platform == "darwin":
+        try:
+            raw = subprocess.run(["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=15).stdout.decode("utf-8", "replace")
+        except (OSError, subprocess.SubprocessError):
+            raw = ""
+    if not raw.strip():
+        base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+        try:
+            with open(os.path.join(base, ".credentials.json"), "r", encoding="utf-8") as f:
+                raw = f.read()
+        except (IOError, OSError):
+            raw = ""
+    try:
+        o = (json.loads(raw) or {}).get("claudeAiOauth") or {}
+    except ValueError:
+        o = {}
+    tier = str(o.get("rateLimitTier") or "")
+    plan = ""
+    for p in ("max_20x", "max_5x"):
+        if p in tier:
+            plan = p
+    plan = plan or str(o.get("subscriptionType") or "")
+    exp = o.get("expiresAt")
+    exp = exp / 1000.0 if isinstance(exp, (int, float)) and exp > 1e11 else exp if isinstance(exp, (int, float)) else None
+    return str(o.get("accessToken") or ""), plan, exp
+
+
+def cc_version(state):
+    """Claude Code's version for the User-Agent, cached for a day."""
+    v = os.environ.get("MIA_USAGE_CC_VERSION")
+    if v:
+        return v
+    if state.get("ccVersion") and time.time() - (state.get("ccVersionAt") or 0) < 86400:
+        return state["ccVersion"]
+    v = ""
+    if not os.environ.get("MIA_USAGE_TOKEN"):
+        for exe in ("claude", os.path.expanduser("~/.local/bin/claude"), os.path.expanduser("~/.claude/local/claude")):
+            try:
+                out = subprocess.run([exe, "--version"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                     timeout=10).stdout.decode("utf-8", "replace").strip()
+            except (OSError, subprocess.SubprocessError):
+                continue
+            if out and out[0].isdigit():
+                v = out.split()[0]
+                break
+    state["ccVersion"], state["ccVersionAt"] = v or CC_VERSION_FALLBACK, time.time()
+    return state["ccVersion"]
+
+
+# ---------------------------------------------------------------------------
+# Normalising the endpoint's answer
+
+def pct_of(v):
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if f != f:
+        return None
+    return round(min(100.0, max(0.0, f)), 1)
+
+
+def iso_z(v):
+    t = parse_ts(v)
+    return now_iso(t) if t is not None else ""
+
+
+def slug(s):
+    out = "".join(c.lower() if c.isalnum() else "_" for c in str(s)).strip("_")
+    while "__" in out:
+        out = out.replace("__", "_")
+    return out
+
+
+def window(key, label, pct, resets, extra=None):
+    w = {"key": key, "label": label, "pct": pct, "resetsAt": iso_z(resets)}
+    w.update(extra or {})
+    return w
+
+
+def normalise(data, plan, at):
+    wins = []
+    limits = data.get("limits") if isinstance(data, dict) else None
+    if isinstance(limits, list) and limits:
+        seen = set()
+        for l in limits:
+            if not isinstance(l, dict):
+                continue
+            p = pct_of(l.get("percent", l.get("utilization")))
+            if p is None:
+                continue
+            kind = str(l.get("kind") or "")
+            if kind == "session":
+                key, label = "session", "Session (5h)"
+            elif kind == "weekly_all":
+                key, label = "weekly", "Week"
+            elif kind == "weekly_scoped":
+                sc = l.get("scope") or {}
+                m = (sc.get("model") or {}) if isinstance(sc, dict) else {}
+                surf = sc.get("surface") if isinstance(sc, dict) else None
+                name = m.get("display_name") or m.get("id") or (surf.get("display_name") if isinstance(surf, dict) else surf) or ""
+                if not name:
+                    continue
+                key, label = "weekly_" + slug(name), "Week · " + str(name)
+            elif kind:
+                key, label = slug(kind), kind.replace("_", " ").capitalize()
+            else:
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            extra = {}
+            if l.get("severity"):
+                extra["severity"] = str(l["severity"])
+            if l.get("is_active") is True:
+                extra["active"] = True
+            wins.append(window(key, label, p, l.get("resets_at"), extra))
+    elif isinstance(data, dict):
+        for k, key, label in (("five_hour", "session", "Session (5h)"), ("seven_day", "weekly", "Week"),
+                              ("seven_day_opus", "weekly_opus", "Week · Opus"),
+                              ("seven_day_sonnet", "weekly_sonnet", "Week · Sonnet")):
+            v = data.get(k)
+            if isinstance(v, dict):
+                p = pct_of(v.get("utilization"))
+                if p is not None:
+                    wins.append(window(key, label, p, v.get("resets_at")))
+    order = {"session": 0, "weekly": 1}
+    wins.sort(key=lambda w: order.get(w["key"], 2))
+    return {"source": "oauth-usage", "at": at, "plan": plan or "", "stale": False, "error": "", "windows": wins}
+
+
+# ---------------------------------------------------------------------------
+# Fetching (cache, backoff)
+
+def empty(plan=""):
+    return {"source": "oauth-usage", "at": "", "plan": plan or "", "stale": True, "error": "", "windows": []}
+
+
+def mark_stale(cache, plan, err):
+    u = dict(cache) if cache else empty(plan)
+    u["stale"], u["error"] = True, err
+    if plan and not u.get("plan"):
+        u["plan"] = plan
+    return u
+
+
+def fetch(force=False):
+    """Returns (usage, fetched_now). Honours the 4-minute cache and a 429
+    backoff unless force. Caller holds the Lock."""
+    cache = read_json(CACHE)
+    state = read_json(STATE, {}) or {}
+    now = time.time()
+    if not force and cache:
+        if now < (state.get("nextTryAt") or 0):
+            return cache, False
+        if now - (state.get("lastAttemptAt") or 0) < FRESH_S:
+            return cache, False
+    tok, plan, exp = credentials()
+    state["lastAttemptAt"] = now
+    if not tok:
+        u = mark_stale(cache, plan, "no Claude Code login found (run claude and log in)")
+    elif exp is not None and exp < now - 60:
+        u = mark_stale(cache, plan, EXPIRED)
+    else:
+        req = urllib.request.Request(URL, method="GET", headers={
+            "Authorization": "Bearer " + tok, "anthropic-beta": "oauth-2025-04-20",
+            "User-Agent": "claude-code/" + cc_version(state), "Content-Type": "application/json",
+            "Accept": "application/json"})
+        u = None
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read().decode("utf-8") or "{}")
+            u = normalise(data, plan, now_iso(now))
+            state.pop("nextTryAt", None)
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                u = mark_stale(cache, plan, EXPIRED)
+            elif e.code == 429:
+                wait = BACKOFF_S
+                try:
+                    wait = max(wait, int(e.headers.get("Retry-After") or 0))
+                except (TypeError, ValueError):
+                    pass
+                state["nextTryAt"] = now + wait
+                u = mark_stale(cache, plan, "rate limited by the usage endpoint — next try %s" % clock(now + wait))
+            else:
+                u = mark_stale(cache, plan, "usage endpoint said HTTP %d" % e.code)
+        except urllib.error.URLError as e:
+            u = mark_stale(cache, plan, "usage endpoint unreachable (%s)" % getattr(e, "reason", "network error"))
+        except (ValueError, OSError) as e:
+            u = mark_stale(cache, plan, "usage endpoint gave an unreadable answer")
+    write_json(CACHE, u)
+    write_json(STATE, state)
+    return u, True
+
+
+# ---------------------------------------------------------------------------
+# Formatting
+
+def clock(t):
+    return datetime.datetime.fromtimestamp(t).strftime("%H:%M")
+
+
+def span(secs):
+    secs = max(0, int(secs))
+    d, h, m = secs // 86400, secs % 86400 // 3600, secs % 3600 // 60
+    if d:
+        return "%dd %dh" % (d, h)
+    if h:
+        return "%dh %dm" % (h, m)
+    return "%dm" % m
+
+
+def resets_text(iso):
+    t = parse_ts(iso)
+    if t is None:
+        return "reset time unknown"
+    left = t - time.time()
+    if left <= 0:
+        return "resets %s (now)" % clock(t)
+    when = clock(t) if left < 86400 else datetime.datetime.fromtimestamp(t).strftime("%a %H:%M")
+    return "resets %s (in %s)" % (when, span(left))
+
+
+def fmt_pct(p):
+    p = float(p)
+    return ("%d" % p) if p == int(p) else ("%.1f" % p)
+
+
+def human(u):
+    lines = []
+    wins = u.get("windows") or []
+    width = max([len(w.get("label", "")) for w in wins] + [12])
+    for w in wins:
+        lines.append("%-*s  %5s%%   %s" % (width, w.get("label", w.get("key")), fmt_pct(w.get("pct", 0)), resets_text(w.get("resetsAt"))))
+    if not wins:
+        lines.append("no usage numbers yet")
+    t = parse_ts(u.get("at"))
+    tail = ("as of %s" % clock(t)) if t is not None else ""
+    if u.get("plan"):
+        tail += ("  " if tail else "") + "(plan %s)" % u["plan"]
+    if tail:
+        lines.append(tail)
+    if u.get("stale"):
+        lines.append("(stale: %s)" % (u.get("error") or "not refreshed"))
+    return "\n".join(lines)
+
+
+def window_name(w):
+    k = w.get("key", "")
+    if k == "session":
+        return "the 5-hour session"
+    if k == "weekly":
+        return "the weekly limit"
+    if k.startswith("weekly_"):
+        lab = w.get("label", "")
+        name = lab.split("·", 1)[1].strip() if "·" in lab else k[7:].replace("_", " ").title()
+        return "the weekly %s limit" % name
+    return "the %s limit" % (w.get("label") or k)
+
+
+def alert_text(w, threshold):
+    advice = ("Near the limit: hold new dispatches; only finish what's running." if threshold >= 90
+              else "Throttle: pause big executors, keep small work going.")
+    return "[MC] Usage: %s%% of %s, %s. %s" % (fmt_pct(w["pct"]), window_name(w), resets_text(w.get("resetsAt")), advice)
+
+
+# ---------------------------------------------------------------------------
+# Thresholds
+
+def thresholds():
+    raw = os.environ.get("MIA_USAGE_THRESHOLDS") or "80,95"
+    out = []
+    for p in raw.split(","):
+        try:
+            v = float(p.strip())
+        except ValueError:
+            continue
+        if 0 < v <= 100:
+            out.append(v)
+    return sorted(set(out))
+
+
+def period(w):
+    t = parse_ts(w.get("resetsAt"))
+    if t is None:
+        return w.get("key", "") + "@?"
+    return w.get("key", "") + "@" + now_iso(round(t / 3600.0) * 3600)
+
+
+def check_thresholds(u):
+    """New alerts for this usage; each threshold fires once per window period
+    (a reset re-arms it), and a jump past several fires only the highest.
+    Caller holds the Lock."""
+    if u.get("stale"):
+        return []
+    state = read_json(STATE, {}) or {}
+    ann = state.get("announced") or {}
+    alerts = []
+    T = thresholds()
+    for w in u.get("windows") or []:
+        key, per = w.get("key"), period(w)
+        rec = ann.get(key) or {}
+        if rec.get("period") != per:
+            rec = {"period": per, "levels": []}
+        crossed = [t for t in T if w.get("pct", 0) >= t]
+        new = [t for t in crossed if t not in rec["levels"]]
+        if new:
+            top = max(new)
+            alerts.append({"key": key, "threshold": int(top) if top == int(top) else top, "pct": w.get("pct"),
+                           "resetsAt": w.get("resetsAt", ""), "text": alert_text(w, top)})
+            rec["levels"] = sorted(set(rec["levels"]) | set(crossed))
+        ann[key] = rec
+    state["announced"] = ann
+    write_json(STATE, state)
+    return alerts
+
+
+# ---------------------------------------------------------------------------
+# Relay
+
+def relay_conf():
+    if os.environ.get("MC_USAGE_NO_SYNC") == "1":
+        return None, None
+    url = os.environ.get("MC_RELAY_URL", "").strip()
+    tok = os.environ.get("MC_TOKEN", "").strip()
+    if (not url or not tok) and os.environ.get("MC_DOC_NO_DEFAULTS") != "1":
+        def dflt(k):
+            try:
+                return subprocess.run(["defaults", "read", "com.agentwidget.mission-control", k], stdout=subprocess.PIPE,
+                                      stderr=subprocess.DEVNULL, timeout=10).stdout.decode().strip()
+            except (OSError, subprocess.SubprocessError):
+                return ""
+        url = url or dflt("remoteURL")
+        tok = tok or dflt("remoteToken")
+    url = url.rstrip("/")
+    if url.startswith("ws"):
+        url = "http" + url[2:]
+    return (url, tok) if url and tok else (None, None)
+
+
+def relay(method, path, body=None, timeout=20):
+    url, tok = relay_conf()
+    if not url:
+        raise RuntimeError("no relay configured")
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = urllib.request.Request(url + path, data=data, method=method,
+                                 headers={"Authorization": "Bearer " + tok, "Content-Type": "application/json", "User-Agent": UA})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as e:
+        raise RuntimeError("relay said HTTP %d" % e.code)
+    except urllib.error.URLError as e:
+        raise RuntimeError("relay unreachable (%s)" % getattr(e, "reason", e))
+    except ValueError:
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Commands
+
+def cmd_show(args):
+    pos, o = parse(args, {"--refresh": False, "--force": False, "--json": False})
+    if pos:
+        die("unknown usage command: %s (try: mia usage --help)" % pos[0])
+    with Lock():
+        u, _ = fetch(force=bool(o.get("--refresh") or o.get("--force")))
+    if o.get("--json"):
+        print(json.dumps(u, indent=2, ensure_ascii=False))
+    else:
+        print(human(u))
+
+
+def sync_once(force, quiet, as_json):
+    with Lock():
+        u, _ = fetch(force=force)
+        alerts = check_thresholds(u)
+    pushed, note = False, ""
+    try:
+        relay("PUT", "/api/v1/usage", u)
+        pushed = True
+    except RuntimeError as e:
+        note = str(e)
+    if as_json:
+        print(json.dumps({"usage": u, "alerts": alerts, "pushed": pushed}, ensure_ascii=False))
+    elif not quiet:
+        print(human(u))
+        print("pushed to the relay" if pushed else "not pushed: %s (not fatal)" % note)
+        for a in alerts:
+            print(a["text"])
+    sys.stdout.flush()
+
+
+def cmd_sync(args):
+    pos, o = parse(args, {"--force": False, "--quiet": False, "--json": False, "--loop": True})
+    if pos:
+        die("unknown option for sync: %s" % pos[0])
+    if "--loop" in o:
+        try:
+            every = max(30.0, float(o["--loop"]))
+        except ValueError:
+            die("--loop needs seconds")
+        while True:
+            sync_once(bool(o.get("--force")), bool(o.get("--quiet")), bool(o.get("--json")))
+            time.sleep(every)
+    sync_once(bool(o.get("--force")), bool(o.get("--quiet")), bool(o.get("--json")))
+
+
+HELP = """mia usage — Claude subscription usage (5-hour session + weekly limits).
+
+  mia usage [--refresh] [--json]      the windows, % used and when each resets
+                                      (cached 4 min; --refresh fetches now)
+  mia usage sync [--force] [--quiet] [--json] [--loop SECONDS]
+                                      fetch, push to the relay (/api/v1/usage) and
+                                      announce thresholds once per window period
+                                      (--json: {"usage", "alerts", "pushed"})
+  mia usage help
+
+The numbers come from Claude Code's own login (read only, never refreshed).
+Stale numbers say why: an expired login fixes itself the next time Claude Code
+makes a request. Alerts (default at 80% and 95%, MIA_USAGE_THRESHOLDS) arrive
+in Mia's terminal as `[MC] Usage: …`: at 80% pause big executors and keep
+small work going; at 95% hold new dispatches; resume after the reset time.
+
+Files: $MIA_DIR/usage.json (the numbers), $MIA_DIR/usage-state.json."""
+
+
+def main(argv):
+    if argv and argv[0] in ("help", "-h", "--help"):
+        print(HELP)
+        return
+    if argv and argv[0] == "sync":
+        cmd_sync(argv[1:])
+    elif argv and argv[0] == "show":
+        cmd_show(argv[1:])
+    else:
+        cmd_show(argv)
+
+
+if __name__ == "__main__":
+    try:
+        main(sys.argv[1:])
+    except KeyboardInterrupt:
+        sys.exit(130)
 """#
 }
