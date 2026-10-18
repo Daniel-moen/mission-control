@@ -2,6 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence, LayoutGroup, useReducedMotion } from 'motion/react';
 import { useMC, miaOpenQuestions } from '../../lib/store.js';
 import { spring } from '../../lib/motion.js';
+import { useMedia } from '../../lib/hooks.js';
 import { useHQ, useHQSync, useHQView, hqControl, useBusy, refreshHQ } from '../../lib/hq.js';
 import { companyInfo, boardSummary, feedOf, fmtWhen, pitchLabel, isOpenTask } from '../../lib/hqModel.js';
 import IconButton from '../../ui/IconButton.jsx';
@@ -11,13 +12,15 @@ import Segmented from '../../ui/Segmented.jsx';
 import EmptyState from '../../ui/EmptyState.jsx';
 import Spinner from '../../ui/Spinner.jsx';
 import Company from './Company.jsx';
+import Channels from '../channels/Channels.jsx';
 import { Photo, photoSrc, HealthChip, HealthDot, Trend, FeedList, FEED_FILTERS, filterFeed, SectionTitle } from './parts.jsx';
 
-// HQ — Jarvis's control centre (task 0199). Every company Mia looks after as a
+// HQ — Mia's control centre (task 0199; never "Jarvis" on screen, 0290). Every company Mia looks after as a
 // photo card: live health, the numbers that matter, how much she may do on her
 // own, what she's doing now, what she last found, what she's asking. Tap a
-// card for the company's page. The Jarvis switches (pause, pitch volume) sit
-// in the header strip because they're global.
+// card for the company's page. The global switches (pause, pitch volume) sit
+// in the header strip because they're global. Channels (task 0260) is HQ's
+// second section since 0290 — a Companies | Channels switch in the header.
 //
 // Data: lib/hq.js polls the relay for what the Mac's `mia jarvis sync` pushed
 // (registry.json + findings + tasks); every control goes to Mia as an [MC]
@@ -47,7 +50,7 @@ function SyncChip({ view }) {
 
 // Pause/resume + pitch volume. Global, so it sits above the board — one slim
 // row, not a card: it's a switch, the companies are the content.
-function JarvisStrip({ registry }) {
+function ControlStrip({ registry }) {
   const j = registry.jarvis || {};
   const paused = !!j.paused;
   const busyP = useBusy({ action: paused ? 'resume' : 'pause' });
@@ -63,7 +66,7 @@ function JarvisStrip({ registry }) {
       </motion.span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5 text-[13px] font-semibold tracking-tight text-ink">
-          Jarvis {paused ? 'paused' : 'on'}
+          {paused ? 'Mia paused' : 'Mia is on watch'}
           {syncing.paused && <span className="anim-pulse h-1.5 w-1.5 rounded-full bg-ink3" title="Syncing to the Mac" />}
         </div>
         <div className="hidden truncate text-[11.5px] text-ink3 sm:block">
@@ -84,7 +87,7 @@ function JarvisStrip({ registry }) {
         icon={paused ? 'play' : 'pause'}
         loading={busyP}
         data-pause
-        aria-label={paused ? 'Resume Jarvis' : 'Pause Jarvis'}
+        aria-label={paused ? 'Resume Mia' : 'Pause Mia'}
         onClick={() => hqControl({ action: paused ? 'resume' : 'pause' }, registry)}
       >
         <span className="hidden sm:inline">{paused ? 'Resume' : 'Pause'}</span>
@@ -209,7 +212,7 @@ function Board({ view, companies, onOpen, onOpenTask, scrollRef }) {
       className="noscroll min-h-0 flex-1 overflow-y-auto px-3 pb-28 sm:px-5"
       data-board
     >
-      <JarvisStrip registry={view.registry} />
+      <ControlStrip registry={view.registry} />
       <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 px-1 text-[12px] text-ink3" data-summary>
         <span>
           <span className="tnum text-ink">{sum.up}</span> of {sum.watched} live services up
@@ -241,7 +244,7 @@ function Board({ view, companies, onOpen, onOpenTask, scrollRef }) {
   );
 }
 
-export default function HQ({ onClose, onOpenDoc, onOpenTask, companyId = null, onCompany }) {
+export default function HQ({ onClose, onOpenDoc, onOpenTask, companyId = null, onCompany, section = 'companies', onSection, channelKey = null, onChannel }) {
   useHQSync();
   const view = useHQView();
   const error = useHQ((s) => s.error);
@@ -254,6 +257,7 @@ export default function HQ({ onClose, onOpenDoc, onOpenTask, companyId = null, o
   const open = onCompany || setLocalSel;
   const reduce = useReducedMotion();
   const boardScroll = useRef(0);
+  const wideHead = useMedia('(min-width: 640px)');
 
   const questions = useMemo(() => miaOpenQuestions(mia, miaLocal), [mia, miaLocal]);
   const companies = useMemo(() => {
@@ -267,19 +271,38 @@ export default function HQ({ onClose, onOpenDoc, onOpenTask, companyId = null, o
     <header className="flex flex-none items-center gap-2.5 px-4 pb-3 pt-3.5 sm:px-5">
       {current && <IconButton icon="back" label="All companies" size="sm" variant="glass" onClick={() => open(null)} data-back />}
       <div className="min-w-0 flex-1">
-        <h2 className="truncate text-[17px] font-semibold tracking-tight text-ink">{current ? current.company.name : 'HQ'}</h2>
-        <div className="truncate text-[12px] text-ink3">
+        <h2 className={`truncate text-[17px] font-semibold tracking-tight text-ink ${!current && onSection && !wideHead ? 'sr-only' : ''}`}>{current ? current.company.name : 'HQ'}</h2>
+        <div className={`truncate text-[12px] text-ink3 ${!current && section === 'channels' ? 'hidden' : !current && onSection && !wideHead ? 'hidden' : ''}`}>
           {current
             ? `${current.projects.length} project${current.projects.length === 1 ? '' : 's'}`
             : view
               ? `${companies.length} companies Mia looks after`
-              : 'Jarvis control centre'}
+              : 'Mia’s control centre'}
         </div>
       </div>
-      <SyncChip view={view} />
+      {!current && onSection && (
+        <Segmented
+          value={section}
+          onChange={onSection}
+          options={[
+            { value: 'companies', label: wideHead ? 'Companies' : 'HQ', icon: 'hq' },
+            { value: 'channels', label: 'Channels', icon: 'video' },
+          ]}
+        />
+      )}
+      {(current || section !== 'channels') && <span className="hidden sm:inline-flex"><SyncChip view={view} /></span>}
       {onClose && <IconButton icon="close" label="Close" size="sm" variant="glass" onClick={onClose} />}
     </header>
   );
+
+  if (section === 'channels' && !current) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col" data-hq data-hq-section="channels">
+        {header}
+        <Channels embedded channelKey={channelKey} onChannel={onChannel || (() => {})} />
+      </div>
+    );
+  }
 
   let body;
   if (!view) {
@@ -294,7 +317,7 @@ export default function HQ({ onClose, onOpenDoc, onOpenTask, companyId = null, o
         hint={
           error
             ? `${error}. It retries every 15 seconds.`
-            : 'HQ shows what the Mac pushes. On the Mac: mia jarvis seed, then mia jarvis install-agent (or mia jarvis sync once).'
+            : 'HQ shows what the Mac pushes. On the Mac, Mia runs the HQ sync (mia jarvis sync).'
         }
         action={
           <Button size="sm" icon="refresh" onClick={() => refreshHQ()}>

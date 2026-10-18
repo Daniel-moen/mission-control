@@ -27,7 +27,6 @@ import Insights from './views/insights/Insights.jsx';
 import Library from './views/library/Library.jsx';
 import Mia from './views/mia/Mia.jsx';
 import HQ from './views/hq/HQ.jsx';
-import Channels from './views/channels/Channels.jsx';
 import DocView from './views/library/DocView.jsx';
 import AgentView from './views/agent/AgentView.jsx';
 import TerminalConsole from './views/agent/TerminalConsole.jsx';
@@ -38,6 +37,8 @@ import TvMode from './views/modes/TvMode.jsx';
 import CarMode from './views/modes/CarMode.jsx';
 import { WakePill } from './views/mia/Wake.jsx';
 import { onWake } from './lib/wake.js';
+import { useUsageSync } from './lib/usage.js';
+import { attachToMia } from './lib/attach.js';
 
 // ---------------------------------------------------------------------------
 // The shell. A photograph fills the window; everything else is glass floating
@@ -54,6 +55,7 @@ const withHash = (h) => `${location.pathname}${location.search}${h ? '#' + h : '
 
 export default function App() {
   const needsToken = useMC((s) => s.needsToken);
+  useUsageSync();
   const [diagOn, setDiagOn] = useState(location.hash === '#diag');
   useEffect(() => {
     const f = () => setDiagOn(location.hash === '#diag');
@@ -74,6 +76,7 @@ export default function App() {
   const [win, setWin] = useState(null); // null | 'mia' | 'hq' | 'fleet' | 'insights' | 'library'
   const [hqCompany, setHqCompany] = useState(null); // HQ's open company page (task 0199)
   const [chKey, setChKey] = useState(null); // Channels' open channel page (task 0260)
+  const [hqSection, setHqSection] = useState('companies'); // HQ's Companies | Channels (task 0290)
   const [sel, setSel] = useState(null); // agent id → Agent window
   const [openDoc, setOpenDoc] = useState(null); // { id, edit }
   const [sheet, setSheet] = useState(null); // 'launch' | 'settings' | null
@@ -94,7 +97,14 @@ export default function App() {
     setOpenDoc(null);
     setSel(null);
     if (key === 'hq') setHqCompany(null);
-    if (key === 'channels') setChKey(null);
+    // Channels lives inside HQ since task 0290; the key still works (keyboard 7, `mia panel view channels`).
+    if (key === 'channels') {
+      setChKey(null);
+      setHqCompany(null);
+      setHqSection('channels');
+      setWin('hq');
+      return;
+    }
     setWin(key === 'home' ? null : key);
   }, []);
 
@@ -191,6 +201,7 @@ export default function App() {
       setOpenDoc(null);
       setSel(null);
       setHqCompany(id || null);
+      setHqSection('companies');
       setWin('hq');
     } else if (head === 'channels') {
       setSheet(null);
@@ -198,7 +209,9 @@ export default function App() {
       setOpenDoc(null);
       setSel(null);
       setChKey(id || null);
-      setWin('channels');
+      setHqCompany(null);
+      setHqSection('channels');
+      setWin('hq');
     } else if (head === 'mia' || head === 'fleet' || head === 'insights' || head === 'library') {
       setSheet(null);
       setConsole(null);
@@ -232,13 +245,13 @@ export default function App() {
     else if (openDoc) h = `doc/${openDoc.id}`;
     else if (sel) h = `agent/${sel}`;
     else if (win === 'hq' && hqCompany) h = `hq/${hqCompany}`;
-    else if (win === 'channels' && chKey) h = `channels/${chKey}`;
+    else if (win === 'hq' && hqSection === 'channels') h = chKey ? `channels/${chKey}` : 'channels';
     else if (win) h = win;
     const want = withHash(h);
     if (location.pathname + location.search + location.hash !== want) {
       history.replaceState(null, '', want);
     }
-  }, [tvOn, carOn, console_, sheet, openDoc, sel, win, hqCompany, chKey]);
+  }, [tvOn, carOn, console_, sheet, openDoc, sel, win, hqCompany, hqSection, chKey]);
 
   // ---- Mia drives the panel ------------------------------------------------
   // `mia panel …` frames (lib/panelCommands.js does the resolving and the
@@ -320,7 +333,7 @@ export default function App() {
         else if (openDoc) setOpenDoc(null);
         else if (sel) setSel(null);
         else if (win === 'hq' && hqCompany) setHqCompany(null);
-        else if (win === 'channels' && chKey) setChKey(null);
+        else if (win === 'hq' && hqSection === 'channels' && chKey) setChKey(null);
         else if (win) setWin(null);
         return;
       }
@@ -333,20 +346,25 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [tvOn, carOn, palette, console_, composer, sheet, openDoc, sel, win, hqCompany, chKey, nav, closeLaunch]);
+  }, [tvOn, carOn, palette, console_, composer, sheet, openDoc, sel, win, hqCompany, hqSection, chKey, nav, closeLaunch]);
 
   // ---- window composition ------------------------------------------------
   const mainKind = openDoc
     ? 'doc'
     : sel
       ? 'agent'
-      : win === 'insights' || win === 'library' || win === 'mia' || win === 'hq' || win === 'channels'
+      : win === 'insights' || win === 'library' || win === 'mia' || win === 'hq'
         ? win
         : null;
   // Desktop keeps at most two large windows: a 360px column plus one main.
   const leftKind = desktop && !openDoc && (win === 'fleet' || sel) ? 'fleet' : desktop && openDoc && win === 'library' ? 'library' : null;
   const phoneKind = mainKind || (win === 'fleet' ? 'fleet' : null);
-  const dockActive = sel || win === 'fleet' ? 'fleet' : win === 'insights' || win === 'library' || win === 'mia' || win === 'hq' || win === 'channels' ? win : 'home';
+  const dockActive = sel || win === 'fleet' ? 'fleet' : win === 'insights' || win === 'library' || win === 'mia' || win === 'hq' ? win : 'home';
+  // Task 0290: Mia's chat is just the chat — no dock under it, no top bar over
+  // it on iPad; a report keeps a compact dock and loses the top bar, so the
+  // document gets the height. Elsewhere the full chrome.
+  const shown = desktop ? mainKind : phoneKind;
+  const chrome = shown === 'mia' ? 'none' : shown === 'doc' ? 'compact' : 'full';
 
   const fleetWindow = (size) => (
     <Window
@@ -371,12 +389,16 @@ export default function App() {
   const mainWindow = (kind, size) => {
     if (kind === 'doc')
       return (
-        <Window key={`doc:${openDoc.id}`} size={size} onClose={() => setOpenDoc(null)}>
+        <Window key={`doc:${openDoc.id}`} size={size} onClose={() => setOpenDoc(null)} dock="compact">
           <DocView
             docId={openDoc.id}
             startEditing={openDoc.edit}
             onClose={() => setOpenDoc(null)}
             onLaunch={launchDoc}
+            onAskMia={(meta) => {
+              attachToMia({ kind: 'doc', id: meta.id, title: meta.title });
+              nav('mia');
+            }}
           />
         </Window>
       );
@@ -405,7 +427,7 @@ export default function App() {
       );
     if (kind === 'mia')
       return (
-        <Window key="mia" size={size} onClose={() => nav('home')}>
+        <Window key="mia" size={size} onClose={() => nav('home')} dock={false}>
           <Mia onOpenAgent={openAgent} onClose={() => nav('home')} focusTask={miaFocus} />
         </Window>
       );
@@ -418,13 +440,14 @@ export default function App() {
             onCompany={setHqCompany}
             onOpenDoc={(id) => setOpenDoc({ id, edit: false })}
             onOpenTask={(id) => panelApi.current.openTask(id)}
+            section={hqSection}
+            onSection={(v) => {
+              setHqSection(v);
+              setChKey(null);
+            }}
+            channelKey={chKey}
+            onChannel={setChKey}
           />
-        </Window>
-      );
-    if (kind === 'channels')
-      return (
-        <Window key="channels" size={size} onClose={() => nav('home')}>
-          <Channels onClose={() => nav('home')} channelKey={chKey} onChannel={setChKey} />
         </Window>
       );
     if (kind === 'fleet') return fleetWindow(size);
@@ -484,8 +507,9 @@ export default function App() {
     <div className="relative flex flex-col overflow-hidden" style={{ height: 'calc(100dvh + var(--vgap))' }}>
       <Backdrop />
       {/* A phone window covers the bar, and its icons would ghost through the glass. */}
-      {(desktop || !phoneKind) && (
+      {((desktop && chrome === 'full') || !phoneKind) && (
         <TopBar
+          onUsage={() => nav('fleet')}
           onPalette={() => setPalette(true)}
           onLaunch={() => setSheet('launch')}
           onSettings={() => setSheet('settings')}
@@ -496,7 +520,7 @@ export default function App() {
 
       <main
         className="relative z-10 flex min-h-0 flex-1 flex-col"
-        style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 92px)' }}
+        style={{ paddingBottom: `calc(env(safe-area-inset-bottom) + ${chrome === 'none' ? 14 : chrome === 'compact' ? 64 : 92}px)`, paddingTop: desktop && chrome !== 'full' ? 'calc(env(safe-area-inset-top) + 12px)' : undefined }}
       >
         {desktop ? (
           <div className="flex min-h-0 flex-1 gap-3 px-4 pt-1">
@@ -523,6 +547,7 @@ export default function App() {
       {!desktop && <AnimatePresence>{phoneKind ? mainWindow(phoneKind, 'full') : null}</AnimatePresence>}
 
       <Dock
+        mode={chrome}
         active={dockActive}
         badges={{ mia: miaCount }}
         onSelect={nav}
@@ -559,7 +584,7 @@ export default function App() {
       {/* Mia from anywhere but her own view (the viewer over it still counts
           as elsewhere); out of the way of sheets, the palette and the console. */}
       <MiniMia
-        hidden={(!viewerOn && (mainKind === 'mia' || phoneKind === 'mia')) || !!sheet || !!composer || !!console_ || palette}
+        hidden={(!viewerOn && (mainKind === 'mia' || phoneKind === 'mia' || shown === 'doc')) || !!sheet || !!composer || !!console_ || palette}
         onOpenMia={() => panelApi.current.view('mia')}
       />
       {talkHost}

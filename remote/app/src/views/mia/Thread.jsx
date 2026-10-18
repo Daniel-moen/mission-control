@@ -12,6 +12,8 @@ import Progress from '../../ui/Progress.jsx';
 import {
   pickFiles, stageFiles, unstage, sendStaged, retryUpload, dismissUpload, fmtSize, fileIcon, MAX_BYTES,
 } from '../../lib/upload.js';
+import { useAttach, detachRef, clearRefs, withRefs, splitRefs } from '../../lib/attach.js';
+import AttachSheet from './AttachSheet.jsx';
 
 // The Mia ↔ Daniel conversation (messages.jsonl), rendered as rows of ink on
 // glass — a name, a time, the words. No bubbles: who is speaking is carried by
@@ -115,6 +117,27 @@ function EventRow({ m }) {
   );
 }
 
+// A clipped report or task: tap opens it (a doc in the reader, a task on the board).
+function RefChip({ r, onTask, onRemove }) {
+  const open = () => (r.kind === 'doc' ? (location.hash = `doc/${encodeURIComponent(r.id)}`) : onTask?.(r.id));
+  return (
+    <span className="glass-soft inline-flex max-w-full items-center gap-1.5 rounded-xl py-1 pl-2 pr-1 text-[12.5px] text-ink2" data-ref={`${r.kind}:${r.id}`}>
+      <button onClick={open} className="flex min-w-0 items-center gap-1.5 hover:text-ink" title={r.kind === 'doc' ? `Open ${r.id}` : `Task ${r.id}`}>
+        <Icon name={r.kind === 'doc' ? 'doc' : 'tasks'} size={13} className="flex-none text-ink3" />
+        <span className="min-w-0 truncate">{r.title || r.id}</span>
+        {r.kind === 'task' && <span className="flex-none font-mono text-[11px] text-ink3">#{r.id}</span>}
+      </button>
+      {onRemove ? (
+        <button onClick={onRemove} aria-label={`Remove ${r.title || r.id}`} className="grid h-6 w-6 flex-none place-items-center rounded-lg text-ink3 hover:text-ink">
+          <Icon name="close" size={12} />
+        </button>
+      ) : (
+        <span className="w-1" />
+      )}
+    </span>
+  );
+}
+
 export function MessageRow({ m, head, mia, onTask, pending, upload, showCaption = true }) {
   const fromMia = m.from === 'mia';
   const isFile = m.kind === 'upload';
@@ -123,7 +146,9 @@ export function MessageRow({ m, head, mia, onTask, pending, upload, showCaption 
   const open = isQ && m.questionId && mia.openIds.has(m.questionId);
   const qState = isQ && !open ? miaQuestionState(mia.block, m.questionId, mia.local) : null;
   const answer = qState === 'answered' ? miaAnswerFor(mia.block, m.questionId, mia.local) : null;
-  const said = voiceText(m.text);
+  // Reports / tasks Daniel clipped in (task 0290) ride as lines in the text.
+  const clipped = !fromMia && !isFile ? splitRefs(m.text) : { text: m.text, refs: [] };
+  const said = voiceText(clipped.text);
 
   const rule = isNotify
     ? m.urgent
@@ -166,6 +191,13 @@ export function MessageRow({ m, head, mia, onTask, pending, upload, showCaption 
               <Icon name="mic" size={12} className="mr-1.5 inline-block align-[-1px] text-ink3" aria-label="Spoken" />
             )}
             {said.text}
+            {clipped.refs.length > 0 && (
+              <span className={`flex flex-wrap gap-1.5 ${said.text ? 'mt-1.5' : ''}`}>
+                {clipped.refs.map((r) => (
+                  <RefChip key={`${r.kind}:${r.id}`} r={r} onTask={onTask} />
+                ))}
+              </span>
+            )}
           </div>
         )}
         {(m.taskId || (pending && !isFile)) && (
@@ -220,6 +252,8 @@ export default function Thread({ mia, active = true, onTask }) {
   const link = useMC((s) => s.link);
   const staged = useMC((s) => s.miaStage);
   const uploads = useMC((s) => s.uploads);
+  const refs = useAttach((s) => s.refs);
+  const [attachOpen, setAttachOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
   const pageVisible = usePageVisible();
 
@@ -406,8 +440,15 @@ export default function Thread({ mia, active = true, onTask }) {
         )}
       </AnimatePresence>
 
-      <div className="flex-none border-t border-glass-line px-4 pb-4 pt-3 sm:px-5">
+      <div className="flex-none border-t border-glass-line px-3 pb-3 pt-2.5 sm:px-5" style={{ paddingBottom: 'max(12px, env(safe-area-inset-bottom))' }}>
         <div className="mx-auto max-w-[720px]">
+          {refs.length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-1.5" aria-label="Attached for Mia" data-composer-refs>
+              {refs.map((r) => (
+                <RefChip key={`${r.kind}:${r.id}`} r={r} onTask={onTask} onRemove={() => detachRef(r)} />
+              ))}
+            </div>
+          )}
           {staged.length > 0 && (
             <div className="mb-2.5 flex flex-wrap gap-2" aria-label="Files to send">
               {staged.map((x) => (
@@ -423,27 +464,34 @@ export default function Thread({ mia, active = true, onTask }) {
             </div>
           )}
           <MicField
-            onSend={(t) => (staged.length ? sendStaged(t) : miaSend(t))}
-            canSendEmpty={staged.length > 0}
+            onSend={(t) => {
+              const text = withRefs(t, refs);
+              const r = staged.length ? sendStaged(text) : miaSend(text);
+              if (r !== false && refs.length) clearRefs();
+              return r;
+            }}
+            canSendEmpty={staged.length > 0 || refs.length > 0}
             leading={
               <motion.button
                 {...press}
-                onClick={() => pickFiles()}
-                aria-label="Send Mia a file"
-                title={`Send Mia a file — PDF, photo, Office/iWork, text/CSV or audio, up to ${MAX_BYTES / 1024 / 1024} MB each`}
+                onClick={() => setAttachOpen(true)}
+                aria-label="Attach a report, task or file"
+                title={`Attach a Library report or a task — or send Mia a file (PDF, photo, Office/iWork, text/CSV or audio, up to ${MAX_BYTES / 1024 / 1024} MB)`}
+                data-attach-button
                 className="glass-soft glass-soft-hover grid h-12 w-12 flex-none place-items-center rounded-xl2 text-ink2"
               >
                 <Icon name="attach" size={20} />
               </motion.button>
             }
             placeholder={
-              staged.length
+              staged.length || refs.length
                 ? 'Add a note (optional)'
                 : mia.enabled ? 'Message Mia…' : 'Message Mia — she’ll read it when she starts'
             }
           />
         </div>
       </div>
+      <AttachSheet open={attachOpen} onClose={() => setAttachOpen(false)} onFiles={() => pickFiles()} />
     </div>
   );
 }

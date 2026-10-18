@@ -3,6 +3,7 @@ import { useMC, reconnectNow, dataAge } from '../lib/store.js';
 import { motion } from 'motion/react';
 import { fadeIn, press } from '../lib/motion.js';
 import IconButton from '../ui/IconButton.jsx';
+import { UsagePill } from '../views/fleet/Usage.jsx';
 
 const LINK = {
   linked: { dot: 'bg-accent', label: 'Live', ping: false },
@@ -13,7 +14,7 @@ const LINK = {
 // The scene's chrome, kept to one slim row: the time and date on the left,
 // what the link is doing and the three things you always need on the right.
 // Nothing else lives up here — every pixel it takes is a pixel a window loses.
-export default function TopBar({ onPalette, onLaunch, onSettings }) {
+export default function TopBar({ onPalette, onLaunch, onSettings, onUsage }) {
   const now = useNow();
   const link = useLink();
   const l = LINK[link] || LINK.offline;
@@ -43,6 +44,8 @@ export default function TopBar({ onPalette, onLaunch, onSettings }) {
       </div>
 
       <div className="ml-auto flex flex-none items-center gap-1.5">
+        {/* Claude usage past 80% (task 0290) — tap for the meter in Fleet. */}
+        <UsagePill onClick={onUsage} />
         <motion.button
           {...press}
           onClick={() => link !== 'linked' && reconnectNow()}

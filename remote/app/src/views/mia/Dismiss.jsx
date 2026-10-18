@@ -82,9 +82,9 @@ export function OldQuestionsBar({ shown, onToggle, className = '' }) {
           exit={{ opacity: 0, y: 4 }}
           transition={spring.smooth}
           data-old-questions={n}
-          className={`glass-soft flex items-center gap-2 rounded-xl2 py-1.5 pl-3.5 pr-1.5 ${className}`}
+          className={`flex items-center gap-2 rounded-xl border border-glass-line/70 py-0.5 pl-3 pr-1 ${className}`}
         >
-          <span className="min-w-0 flex-1 text-[12px] leading-snug text-ink2">
+          <span className="min-w-0 flex-1 truncate text-[11.5px] leading-snug text-ink3">
             {n} old question{n === 1 ? '' : 's'} hidden
             {age && <span className="text-ink3"> · over {age}</span>}
           </span>
@@ -93,7 +93,7 @@ export function OldQuestionsBar({ shown, onToggle, className = '' }) {
               {shown ? 'Hide' : 'Show'}
             </Button>
           )}
-          <Button size="sm" variant="secondary" icon="close" onClick={() => miaDismissOld()}>
+          <Button size="sm" variant="ghost" icon="close" onClick={() => miaDismissOld()}>
             Dismiss all old
           </Button>
         </motion.div>

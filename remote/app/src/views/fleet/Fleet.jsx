@@ -8,6 +8,7 @@ import { TONE } from '../../lib/tone.js';
 import { spring, press } from '../../lib/motion.js';
 import StatusDot from '../../ui/StatusDot.jsx';
 import Icon from '../../ui/Icon.jsx';
+import { UsageCard } from './Usage.jsx';
 
 // The agent roster — the app's spine. A compact, scannable list (not cards):
 // agents needing you sort first and wear amber, fleets group with their
@@ -130,6 +131,7 @@ export default function Fleet({ selectedId = null, onSelect }) {
 
   return (
     <div className="flex min-h-0 flex-col px-2 pb-4 pt-2">
+      <UsageCard className="mx-1 mb-2" />
       {agents.length > 6 && (
         <div className="relative px-1 pb-2">
           <Icon name="search" size={14} className="pointer-events-none absolute left-4 top-1/2 -translate-y-[60%] text-ink3" />

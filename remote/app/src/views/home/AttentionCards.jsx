@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useShallow } from 'zustand/react/shallow';
-import { useMC, attentionList, agentName, reply, kill, sendKey, miaOldQuestions } from '../../lib/store.js';
+import { useMC, attentionList, agentName, reply, kill, sendKey } from '../../lib/store.js';
 import { fmtAge } from '../../lib/format.js';
 import { spring, ease } from '../../lib/motion.js';
 import Icon from '../../ui/Icon.jsx';
 import Answer from '../mia/Answer.jsx';
-import { DismissButton, Swipeable, OldQuestionsBar } from '../mia/Dismiss.jsx';
+import { DismissButton, Swipeable } from '../mia/Dismiss.jsx';
+import { useNow } from '../../lib/hooks.js';
 
 // Bottom-left stack: every agent that needs a human, each as a frosted card
 // with INLINE answers — the parsed menu options as tappable pills — so most
@@ -14,6 +15,13 @@ import { DismissButton, Swipeable, OldQuestionsBar } from '../mia/Dismiss.jsx';
 // Cards leave the moment the agent stops waiting.
 
 const MAX = 3;
+// Home shows only what Mia asked in the last hour (task 0290); older open
+// questions wait in her chat, one small link away.
+export const RECENT_MS = 60 * 60 * 1000;
+export const isRecentQuestion = (q, now = Date.now()) => {
+  const t = Date.parse(q?.askedAt || '');
+  return !Number.isFinite(t) || now - t <= RECENT_MS;
+};
 
 function Pill({ tone = 'neutral', onClick, children, title }) {
   const cls =
@@ -156,9 +164,10 @@ export default function AttentionCards({ onOpen, onOpenMia }) {
   const agents = useMC(useShallow((s) => s.agents));
   const mia = useMC((s) => s.mia);
   useMC((s) => s.miaLocal); // an answer given here drops its card at once
-  const [showOld, setShowOld] = useState(false);
-  const old = showOld ? miaOldQuestions(mia).map((q) => ({ kind: 'mia', old: true, key: `mia-old:${q.questionId}`, question: q })) : [];
-  const items = [...attentionList(agents, mia), ...old];
+  const now = useNow() || Date.now();
+  const all = attentionList(agents, mia);
+  const items = all.filter((it) => it.kind !== 'mia' || isRecentQuestion(it.question, now));
+  const older = all.length - items.length;
   const [expanded, setExpanded] = useState(false);
 
   // Two-tap clear for an exited session: the first tap arms for 3s.
@@ -181,8 +190,10 @@ export default function AttentionCards({ onOpen, onOpenMia }) {
   const more = items.length - shown.length;
 
   return (
-    <div className="pointer-events-none relative z-20 flex w-full justify-start px-4 sm:px-6">
-      <div className="pointer-events-auto flex w-full max-w-[380px] flex-col gap-2.5">
+    <div className="pointer-events-none relative z-20 flex w-full justify-start px-4 sm:px-6 lg:justify-center">
+      {/* A column on phones and iPad portrait; a row of three on wide screens,
+          so the cards never climb over the greeting. */}
+      <div className="pointer-events-auto flex w-full max-w-[380px] flex-col gap-2.5 lg:grid lg:max-w-[1120px] lg:grid-cols-3 lg:items-start">
         <AnimatePresence initial={false}>
           {shown.map((it, i) => (
             <motion.div
@@ -203,13 +214,21 @@ export default function AttentionCards({ onOpen, onOpenMia }) {
         {(more > 0 || expanded) && items.length > MAX && (
           <button
             onClick={() => setExpanded((v) => !v)}
-            className="glass-soft glass-soft-hover pill self-start px-3.5 py-1.5 text-[12px] font-medium text-ink2 transition-colors"
+            className="glass-soft glass-soft-hover pill self-start px-3.5 py-1.5 text-[12px] font-medium text-ink2 transition-colors lg:col-span-3 lg:justify-self-start"
           >
             {expanded ? 'Show less' : `+${more} more`}
           </button>
         )}
 
-        <OldQuestionsBar shown={showOld} onToggle={() => setShowOld((v) => !v)} />
+        {older > 0 && (
+          <button
+            onClick={() => onOpenMia?.()}
+            data-older-questions={older}
+            className="self-start text-left text-[12px] font-medium text-ink3 underline-offset-2 transition-colors hover:text-ink2 hover:underline lg:col-span-3"
+          >
+            {older} older question{older === 1 ? '' : 's'} in Mia’s chat →
+          </button>
+        )}
       </div>
     </div>
   );

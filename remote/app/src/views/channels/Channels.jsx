@@ -612,7 +612,9 @@ function Card({ title, sub, children }) {
 }
 
 // ---- the view ---------------------------------------------------------------------------------------------------------
-export default function Channels({ onClose, channelKey, onChannel }) {
+// `embedded`: HQ's Channels section (task 0290) — HQ owns the title and the
+// close button, so only the tabs and the sync chip remain here.
+export default function Channels({ onClose, channelKey, onChannel, embedded = false }) {
   useChannelsSync();
   const view = useChannelsView();
   const error = useChannels((s) => s.error);
@@ -628,13 +630,22 @@ export default function Channels({ onClose, channelKey, onChannel }) {
   }, [view, ch, tab, onChannel]);
   return (
     <div className="flex h-full min-h-0 flex-col" data-view="channels">
-      <div className="flex flex-none items-center gap-2 px-4 pb-3 pt-4 sm:px-5">
-        <h1 className="text-[20px] font-semibold tracking-tight text-ink">Channels</h1>
-        <div className="min-w-0 flex-1"><SyncChip view={view} /></div>
-        <IconButton icon="close" label="Close Channels" size="sm" variant="glass" onClick={onClose} />
-      </div>
-      {!ch && (
-        <div className="flex-none px-4 pb-3 sm:px-5"><Segmented value={tab} onChange={setTab} options={TABS} /></div>
+      {embedded ? (
+        <div className="flex flex-none items-center gap-2 px-4 pb-3 sm:px-5">
+          {!ch && <Segmented value={tab} onChange={setTab} options={TABS.map((t) => (t.value === 'channels' ? { ...t, label: 'Overview' } : t))} />}
+          <div className="min-w-0 flex-1 truncate"><SyncChip view={view} /></div>
+        </div>
+      ) : (
+        <>
+          <div className="flex flex-none items-center gap-2 px-4 pb-3 pt-4 sm:px-5">
+            <h1 className="text-[20px] font-semibold tracking-tight text-ink">Channels</h1>
+            <div className="min-w-0 flex-1"><SyncChip view={view} /></div>
+            <IconButton icon="close" label="Close Channels" size="sm" variant="glass" onClick={onClose} />
+          </div>
+          {!ch && (
+            <div className="flex-none px-4 pb-3 sm:px-5"><Segmented value={tab} onChange={setTab} options={TABS} /></div>
+          )}
+        </>
       )}
       <div className="noscroll min-h-0 flex-1 overflow-y-auto px-4 pb-28 sm:px-5">
         {view ? <AnimatePresence mode="wait"><motion.div key={ch ? ch.key : tab} {...fadeUp}>{body}</motion.div></AnimatePresence> : (

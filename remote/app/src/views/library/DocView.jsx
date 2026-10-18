@@ -20,8 +20,10 @@ import PageFrame, { isPageDoc } from './PageFrame.jsx';
 // A live research report streams in here: the host rewrites the file as the
 // agent works, its `updatedAt` moves, the store drops the cached body, and the
 // fetch effect below re-pulls it — so an `active` doc visibly fills in. The
-// header action is kind-aware: a plan gets "Build" (hand it to a fleet), a
-// research/note gets "Continue" (pick it up and keep going).
+// header action is kind-aware: a plan gets "Build" (hand it to a fleet); every
+// doc gets "Ask Mia", which clips it into Mia's chat as a reference chip (task
+// 0290 — it replaced "Continue"). The metadata fields fold away behind
+// "Details" so the document gets the room.
 //
 // Chromeless: App gives this view a bare glass Window, so the header below is
 // the window's header.
@@ -57,7 +59,7 @@ const STATUS_OPTIONS = [
 
 const toTags = (s) => (s || '').split(',').map((t) => t.trim()).filter(Boolean);
 
-export default function DocView({ docId, startEditing = false, onClose, onLaunch }) {
+export default function DocView({ docId, startEditing = false, onClose, onLaunch, onAskMia }) {
   const meta = useMC((s) => s.docs.find((d) => d.id === docId) || null);
   const doc = useMC((s) => s.docDocs[docId] || null);
   const link = useMC((s) => s.link);
@@ -161,56 +163,87 @@ export default function DocView({ docId, startEditing = false, onClose, onLaunch
   const html = useMemo(() => (doc ? renderMarkdown(doc.content, { docId }) : ''), [doc, docId]);
   const [article, setArticle] = useState(null);
   useDocImages(article, html);
-  const launchLabel = kind === 'plan' ? 'Build' : 'Continue';
-  const launchIcon = kind === 'plan' ? 'launch' : 'bolt';
+  const [showMeta, setShowMeta] = useState(false);
   function doLaunch() {
     if (!meta) return toast('Still loading this document');
-    onLaunch?.(meta, kind === 'plan' ? 'build' : 'continue');
+    onLaunch?.(meta, 'build');
+  }
+  function askMia() {
+    if (!meta) return toast('Still loading this document');
+    if (onAskMia) onAskMia({ id: docId, title });
+    else onLaunch?.(meta, 'continue');
   }
 
-  // Below 640 the actions move to their own row — a phone-width header cannot
-  // hold a title AND three pills without crushing one of them.
+  // One header row at every width (task 0290): on a phone the secondary
+  // actions shrink to icons instead of taking a second row.
   const wide = useMedia('(min-width: 640px)');
+  const ask = (
+    <Button variant="primary" icon="mia" onClick={askMia} disabled={!meta} className="flex-none" data-doc-to-mia title="Clip this into Mia’s chat">
+      {wide ? 'Ask Mia' : 'Mia'}
+    </Button>
+  );
+  const build = kind === 'plan' && (
+    wide ? (
+      <Button icon="launch" onClick={doLaunch} disabled={!meta} className="flex-none">
+        Build
+      </Button>
+    ) : (
+      <IconButton icon="launch" label="Build" size="sm" variant="glass" onClick={doLaunch} disabled={!meta} />
+    )
+  );
   const actions = editing ? (
     <Button variant="primary" icon="check" onClick={save} className="flex-none">
       Save
     </Button>
   ) : page ? (
-    <Button variant="primary" icon={launchIcon} onClick={doLaunch} disabled={!meta} className="flex-none">
-      {launchLabel}
-    </Button>
+    <>
+      {build}
+      {ask}
+    </>
   ) : (
     <>
-      <DownloadButton docId={docId} meta={meta} title={title} compact={!wide} disabled={!meta} />
-      <Button icon="edit" onClick={startEdit} disabled={!doc} className="flex-none">
-        Edit
-      </Button>
-      <Button variant="primary" icon={launchIcon} onClick={doLaunch} disabled={!meta} className="flex-none">
-        {launchLabel}
-      </Button>
+      <DownloadButton docId={docId} meta={meta} title={title} compact disabled={!meta} />
+      {wide ? (
+        <Button icon="edit" onClick={startEdit} disabled={!doc} className="flex-none">
+          Edit
+        </Button>
+      ) : (
+        <IconButton icon="edit" label="Edit" size="sm" variant="glass" onClick={startEdit} disabled={!doc} />
+      )}
+      <IconButton
+        icon="more"
+        label={showMeta ? 'Hide details' : 'Details'}
+        size="sm"
+        variant="glass"
+        onClick={() => setShowMeta((v) => !v)}
+        aria-pressed={showMeta}
+        data-doc-details
+      />
+      {build}
+      {ask}
     </>
   );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* own header — this window is chromeless */}
-      <header className="flex-none px-4 pb-3 pt-4 sm:px-5">
-        <div className="flex items-center gap-3">
+      <header className="flex-none px-3 pb-2 pt-2.5 sm:px-4">
+        <div className="flex items-center gap-2 sm:gap-2.5">
           <IconButton
             icon={editing ? 'close' : 'back'}
             label={editing ? 'Cancel' : 'Close'}
-            size="md"
+            size="sm"
             variant="glass"
             onClick={editing ? cancelEdit : onClose}
           />
-          <span className={`grid h-9 w-9 flex-none place-items-center rounded-xl2 border ${tone.ring}`}>
-            <Icon name={tone.icon} size={17} />
+          <span className={`hidden h-8 w-8 flex-none place-items-center rounded-xl border sm:grid ${tone.ring}`}>
+            <Icon name={tone.icon} size={15} />
           </span>
           <div className="min-w-0 flex-1">
-            <h2 className="truncate text-[16px] font-semibold leading-tight tracking-tight text-ink">{title}</h2>
+            <h2 className="truncate text-[15px] font-semibold leading-tight tracking-tight text-ink">{title}</h2>
             {/* One line, always: a wrapping metadata strip pushed the title
                 out of a phone-width header. */}
-            <div className="noscroll mt-0.5 flex items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11.5px] text-ink3">
+            <div className="noscroll mt-0.5 flex items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11px] text-ink3">
               <span className={`flex-none ${tone.text}`}>{kindLabel(kind)}</span>
               {meta && (
                 <span
@@ -224,19 +257,18 @@ export default function DocView({ docId, startEditing = false, onClose, onLaunch
               {meta?.words && !page ? <span className="tnum flex-none">· {meta.words.toLocaleString()} words</span> : null}
             </div>
           </div>
-          {wide && <div className="flex flex-none items-center gap-2">{actions}</div>}
+          <div className="flex flex-none items-center gap-1.5 sm:gap-2">{actions}</div>
         </div>
-        {!wide && <div className="mt-3 flex items-center justify-end gap-2">{actions}</div>}
       </header>
 
       {/* Below 1024 this window is a full-screen sheet with the dock floating
           over it — content must clear the dock. */}
       {page && !editing ? (
-        <div className="min-h-0 flex-1 pb-24 lg:pb-0" data-reader="page" data-doc-id={docId}>
+        <div className="min-h-0 flex-1" data-reader="page" data-doc-id={docId}>
           <PageFrame docId={docId} title={title} updatedAt={meta?.updatedAt} stub={doc?.content} />
         </div>
       ) : (
-      <div className="noscroll min-h-0 flex-1 overflow-y-auto pb-24 lg:pb-0" data-reader="doc" data-doc-id={docId}>
+      <div className="noscroll min-h-0 flex-1 overflow-y-auto" data-reader="doc" data-doc-id={docId}>
         <AnimatePresence mode="wait" initial={false}>
           {editing ? (
             <motion.div key="editor" {...fadeIn} className="mx-auto flex h-full max-w-[860px] flex-col px-4 pb-4 sm:px-6">
@@ -254,7 +286,7 @@ export default function DocView({ docId, startEditing = false, onClose, onLaunch
             </motion.div>
           ) : doc ? (
             <motion.div key="reader" {...fadeUp}>
-              <div className="mx-auto max-w-[1600px] px-5 sm:px-8">
+              <div className="mx-auto max-w-[1600px] px-4 pt-2 sm:px-8">
                 {isActive && (
                   <div className="mb-4 flex items-center gap-3 rounded-xl2 border border-accent/30 bg-accent/[0.08] px-3.5 py-2.5">
                     <span className="relative flex h-2 w-2 flex-none">
@@ -270,7 +302,8 @@ export default function DocView({ docId, startEditing = false, onClose, onLaunch
                   </div>
                 )}
 
-                {/* metadata bar: calm, muted, never competing with the document */}
+                {/* metadata bar: calm, muted, folded away until asked for */}
+                {showMeta && (
                 <div className="mb-6 grid max-w-[860px] grid-cols-2 gap-2.5 rounded-xl3 border border-glass-line bg-white/[0.04] p-3 sm:grid-cols-4">
                   <Field label="Kind">
                     <Select
@@ -316,13 +349,14 @@ export default function DocView({ docId, startEditing = false, onClose, onLaunch
                     />
                   </Field>
                 </div>
+                )}
               </div>
 
               {/* Sanitized in md.js — docs quote arbitrary repo content. Full
                   width: prose caps itself near 80ch, tables and code don't. */}
               <article
                 ref={setArticle}
-                className="md mx-auto max-w-[1600px] px-5 pb-10 sm:px-8"
+                className="md mx-auto max-w-[1600px] px-4 pb-10 sm:px-8"
                 data-doc-id={docId}
                 dangerouslySetInnerHTML={{ __html: html }}
               />

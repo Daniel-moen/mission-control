@@ -1,11 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import {
-  useMC, miaStart, miaStop, miaRestart, miaSetModel, miaPushTest, miaOpenQuestions,
-  MIA_MODELS, miaModelLabel,
-} from '../../lib/store.js';
-import { enablePush } from '../../lib/push.js';
-import { modelLabel } from '../../lib/models.js';
+import { useMC, miaStart, miaOpenQuestions } from '../../lib/store.js';
+import { RestartOffer, StartStop } from './Controls.jsx';
 import { useMedia, usePane } from '../../lib/hooks.js';
 import { spring } from '../../lib/motion.js';
 import Icon from '../../ui/Icon.jsx';
@@ -54,190 +50,52 @@ function Presence({ mia, link }) {
         : mia.online
           ? { dot: 'bg-accent', text: 'text-ink2', label: 'Online' }
           : { dot: 'bg-warn', text: 'text-warn', label: 'Offline' };
+  // Online is the normal state: just the dot. Anything else says what's wrong.
+  const fine = s.label === 'Online';
   return (
-    <span className={`pill glass-soft inline-flex flex-none items-center gap-1.5 px-2.5 py-1 text-[11.5px] ${s.text}`}>
-      <span className={`h-1.5 w-1.5 flex-none rounded-full ${s.dot}`} />
-      {s.label}
+    <span className={`inline-flex flex-none items-center gap-1.5 text-[11.5px] ${s.text}`} title={s.label} aria-label={`Mia ${s.label}`} data-presence={s.label}>
+      <span className={`h-2 w-2 flex-none rounded-full ${s.dot}`} />
+      {!fine && s.label}
     </span>
   );
 }
 
-function Notifications() {
-  const push = useMC((s) => s.push);
-  if (push === 'on')
-    return (
-      <>
-        <span className="pill glass-soft inline-flex h-8 flex-none items-center gap-1.5 px-3 text-[12px] text-ink2">
-          <Icon name="bellOn" size={13} />
-          Notifications on
-        </span>
-        <Button size="sm" variant="ghost" onClick={() => miaPushTest()}>
-          Test
-        </Button>
-      </>
-    );
-  if (push === 'working')
-    return (
-      <Button size="sm" loading>
-        Notifications
-      </Button>
-    );
-  if (push === 'denied' || push === 'install')
-    return (
-      <span
-        className="pill glass-soft inline-flex h-8 flex-none items-center gap-1.5 px-3 text-[12px] text-ink3"
-        title={push === 'install' ? 'iOS delivers notifications only to the Home Screen app — Share › Add to Home Screen' : 'Allow notifications for this app in Settings'}
-      >
-        <Icon name="bellOff" size={13} />
-        {push === 'install' ? 'Add to Home Screen to get notifications' : 'Notifications blocked'}
-      </span>
-    );
-  if (push === 'unsupported') return null;
-  // idle | error — the tap handler must call enablePush directly (iOS only
-  // shows the permission prompt inside a user gesture).
-  return (
-    <Button size="sm" icon="bell" onClick={() => enablePush()}>
-      {push === 'error' ? 'Retry notifications' : 'Notify me'}
-    </Button>
-  );
-}
-
-function StartStop({ mia }) {
-  const [armed, setArmed] = useState(false);
-  const timer = useRef(null);
-  useEffect(() => () => clearTimeout(timer.current), []);
-  useEffect(() => setArmed(false), [mia?.enabled]);
-  if (!mia || !mia.enabled)
-    return (
-      <Button size="sm" variant="primary" icon="play" onClick={() => miaStart()}>
-        Start
-      </Button>
-    );
-  // Stopping kills her session — one confirming tap, like clearing an agent.
-  return (
-    <Button
-      size="sm"
-      variant={armed ? 'danger' : 'secondary'}
-      icon="stop"
-      onClick={() => {
-        if (armed) {
-          clearTimeout(timer.current);
-          setArmed(false);
-          miaStop();
-        } else {
-          setArmed(true);
-          clearTimeout(timer.current);
-          timer.current = setTimeout(() => setArmed(false), 3000);
-        }
-      }}
-    >
-      {armed ? 'Tap to stop' : 'Stop'}
-    </Button>
-  );
-}
-
-// The model picker in the header's top-right corner. It shows the model the
-// Mac has saved for her (the snapshot's `model` — never a panel default) and a
-// pick goes to the host as miaSetModel, which applies from her next start. A
-// native <select> sits invisibly over the pill, so iPad gets the system picker.
-function ModelPick({ mia }) {
-  const models = useMC((s) => s.models);
-  const value = mia?.model || '';
-  const label = miaModelLabel(value) || (value ? modelLabel(value, models) : 'Model');
-  const options = !value || MIA_MODELS.some((m) => m.value === value)
-    ? MIA_MODELS
-    : [...MIA_MODELS, { value, label }];
-  return (
-    <label
-      className="pill glass-soft glass-soft-hover relative inline-flex h-8 flex-none cursor-pointer items-center gap-1 pl-3 pr-2 text-[12.5px] text-ink transition-colors"
-      title="Mia's model — a change applies from her next start"
-      data-mia-model={value}
-    >
-      <span className="whitespace-nowrap">{label}</span>
-      <Icon name="chevronDown" size={13} className="text-ink3" />
-      <select
-        aria-label="Mia's model"
-        value={value}
-        onChange={(e) => e.target.value && e.target.value !== value && miaSetModel(e.target.value)}
-        className="absolute inset-0 cursor-pointer appearance-none opacity-0"
-      >
-        {!value && (
-          <option value="" disabled>
-            Model
-          </option>
-        )}
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-// After a switch she keeps running on the old model until she restarts: say
-// so, and offer the restart. Driven by the host's runningModel vs model; a Mac
-// app that doesn't report runningModel falls back to "switched from this panel
-// while she was online".
-function RestartOffer({ mia }) {
-  const [switched, setSwitched] = useState(null); // model picked here while she ran (old hosts)
-  const [restarting, setRestarting] = useState(false);
-  const timer = useRef(null);
-  useEffect(() => () => clearTimeout(timer.current), []);
-  const prev = useRef(mia?.model);
+// The ⋯ menu: the rarely-used switches, out of the chat's way (task 0290).
+// Notifications and the model live in Settings › Mia.
+function MoreMenu({ mia }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef(null);
   useEffect(() => {
-    if (prev.current && mia?.model && prev.current !== mia.model && mia.online) setSwitched(mia.model);
-    prev.current = mia?.model;
-  }, [mia?.model, mia?.online]);
-  const sid = useRef(mia?.sessionId);
-  useEffect(() => {
-    // A new session (or her going down) ends the offer for old hosts.
-    if (mia?.sessionId !== sid.current || !mia?.online) setSwitched(null);
-    sid.current = mia?.sessionId;
-  }, [mia?.sessionId, mia?.online]);
-
-  const running = mia?.runningModel || '';
-  const stale =
-    !!mia?.enabled && !!mia.model &&
-    (running ? mia.online && running !== mia.model : !!switched && switched === mia.model);
-  // "Restarting…" holds while she's down and ends once she's back on it.
-  const back = !!mia?.online && (running ? running === mia.model : !switched);
-  useEffect(() => {
-    if (back) {
-      clearTimeout(timer.current);
-      setRestarting(false);
-    }
-  }, [back, mia?.sessionId]);
-  if (!stale && !restarting) return null;
-  const now = miaModelLabel(mia.model) || mia.model;
-  const was = running ? miaModelLabel(running) || running : '';
+    if (!open) return undefined;
+    const off = (e) => box.current && !box.current.contains(e.target) && setOpen(false);
+    document.addEventListener('pointerdown', off);
+    return () => document.removeEventListener('pointerdown', off);
+  }, [open]);
   return (
-    <div
-      data-mia-restart={restarting ? 'restarting' : 'offer'}
-      className="glass-soft flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl2 px-3.5 py-2.5 text-[12.5px] text-ink2"
-    >
-      <span className="min-w-0 flex-1">
-        {restarting
-          ? `Restarting Mia on ${now}…`
-          : was
-            ? `Mia is still running on ${was}. ${now} applies from her next start.`
-            : `${now} applies from Mia's next start.`}
-      </span>
-      {!restarting && (
-        <Button
-          size="sm"
-          variant="primary"
-          icon="refresh"
-          onClick={() => {
-            if (!miaRestart()) return;
-            setRestarting(true);
-            clearTimeout(timer.current);
-            timer.current = setTimeout(() => setRestarting(false), 120000);
-          }}
+    <div ref={box} className="relative flex-none">
+      <IconButton icon="more" label="More" size="sm" variant="glass" onClick={() => setOpen((v) => !v)} data-mia-more />
+      {open && (
+        <motion.div
+          initial={{ opacity: 0, y: -4, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={spring.snappy}
+          className="glass-strong absolute right-0 top-10 z-30 flex w-[220px] flex-col items-stretch gap-2 rounded-xl2 p-2.5"
+          data-mia-menu
         >
-          Restart Mia now
-        </Button>
+          {talkSupported && <WakeToggle />}
+          <StartStop mia={mia} />
+          <Button
+            size="sm"
+            variant="ghost"
+            icon="settings"
+            onClick={() => {
+              setOpen(false);
+              location.hash = 'settings';
+            }}
+          >
+            Model &amp; notifications
+          </Button>
+        </motion.div>
       )}
     </div>
   );
@@ -293,37 +151,39 @@ export default function Mia({ onOpenAgent, onClose, focusTask }) {
   // both inside a gesture); the Talk view picks the session up when it mounts.
   const talkButton =
     talkSupported && mia && !talking ? (
-      <Button
-        size="sm"
-        variant="primary"
-        icon="mic"
-        onClick={() => (talkOn ? setTalkAside(false) : startTalk())}
-      >
-        {talkOn ? 'Back to talk' : 'Talk'}
-      </Button>
+      wide ? (
+        <Button size="sm" variant="primary" icon="mic" onClick={() => (talkOn ? setTalkAside(false) : startTalk())}>
+          {talkOn ? 'Back to talk' : 'Talk'}
+        </Button>
+      ) : (
+        <IconButton icon="mic" label={talkOn ? 'Back to talk' : 'Talk'} size="sm" variant="glass" onClick={() => (talkOn ? setTalkAside(false) : startTalk())} />
+      )
     ) : null;
 
-  const controls = (
-    <>
-      {!wide && talkSupported && mia && <WakeToggle />}
-      <StartStop mia={mia} />
-      <Notifications />
-    </>
-  );
-
+  // One slim row (task 0290): name + presence, the phone's Chat | Tasks
+  // switch, Talk, the tasks fold, ⋯, close. Everything else is in Settings.
   return (
-    <div ref={root} className="flex min-h-0 flex-1 flex-col">
-      <header className="flex flex-none flex-col gap-2.5 px-4 pb-3 pt-4 sm:px-5">
+    <div ref={root} className="flex min-h-0 flex-1 flex-col" data-mia-view>
+      <header className="flex flex-none flex-col gap-2 px-3 pb-2 pt-2.5 sm:px-4">
         <div className="flex items-center gap-2">
-          <h2 className="display flex items-center gap-2 text-[20px] font-semibold tracking-tight text-ink">
-            <Icon name="mia" size={18} className="text-ink2" />
+          <h2 className="flex flex-none items-center gap-1.5 pl-1 text-[16px] font-semibold tracking-tight text-ink">
+            <Icon name="mia" size={16} className="text-ink2" />
             Mia
           </h2>
           <Presence mia={mia} link={link} />
+          {!wide && mia && snapshot && !talking && (
+            <Segmented
+              className="ml-1 min-w-0"
+              value={tab}
+              onChange={setTab}
+              options={[
+                { value: 'thread', label: 'Chat', count: openQ || null },
+                { value: 'tasks', label: 'Tasks', count: liveTasks || null },
+              ]}
+            />
+          )}
           <span className="flex-1" />
-          {wide && talkSupported && mia && !talking && <WakeToggle />}
           {talkButton}
-          {wide && !talking && <div className="flex flex-wrap items-center justify-end gap-2">{controls}</div>}
           {wide && mia && !talking && (
             <IconButton
               icon={tasksFolded ? 'paneRightOpen' : 'paneRightClose'}
@@ -333,10 +193,9 @@ export default function Mia({ onOpenAgent, onClose, focusTask }) {
               onClick={toggleTasks}
             />
           )}
-          {mia && <ModelPick mia={mia} />}
+          {mia && !talking && <MoreMenu mia={mia} />}
           {onClose && <IconButton icon="close" label="Close" size="sm" variant="glass" onClick={onClose} />}
         </div>
-        {!wide && !talking && <div className="noscroll -mx-4 flex items-center gap-2 overflow-x-auto px-4 sm:-mx-5 sm:px-5">{controls}</div>}
         {mia && <RestartOffer mia={mia} />}
       </header>
 
@@ -357,7 +216,7 @@ export default function Mia({ onOpenAgent, onClose, focusTask }) {
         <TalkSlot />
       ) : wide ? (
         <div className="flex min-h-0 flex-1 border-t border-glass-line">
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col pt-3">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col pt-2">
             <Thread mia={mia} active onTask={showTask} />
           </div>
           {/* Folds like the desktop columns: the board keeps its width and is
@@ -406,16 +265,6 @@ export default function Mia({ onOpenAgent, onClose, focusTask }) {
         </div>
       ) : (
         <>
-          <div className="flex-none px-4 pb-3 sm:px-5">
-            <Segmented
-              value={tab}
-              onChange={setTab}
-              options={[
-                { value: 'thread', label: 'Thread', icon: 'chat', count: openQ || null },
-                { value: 'tasks', label: 'Tasks', icon: 'tasks', count: liveTasks || null },
-              ]}
-            />
-          </div>
           {/* Both stay mounted so scroll position and drafts survive the switch. */}
           <div className={`min-h-0 flex-1 flex-col ${tab === 'thread' ? 'flex' : 'hidden'}`}>
             <Thread mia={mia} active={tab === 'thread'} onTask={showTask} />

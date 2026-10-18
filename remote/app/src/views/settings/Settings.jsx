@@ -11,6 +11,7 @@ import { realtimeInfo, QUALITY_KEY, TRANSCRIPT_KEY } from '../../lib/realtime.js
 import Segmented from '../../ui/Segmented.jsx';
 import { WakeToggle, WAKE_HINT } from '../mia/Wake.jsx';
 import { wakeSupported } from '../../lib/wake.js';
+import MiaSection from './MiaSection.jsx';
 import AnnounceSection from './AnnounceSection.jsx';
 
 // Settings — the device's own page: what it is connected to, the two ambient
@@ -302,6 +303,7 @@ export default function Settings({ onClose }) {
           ))}
         </Section>
 
+        <MiaSection Section={Section} Row={Row} />
         <VoiceSection />
         <AnnounceSection Section={Section} Row={Row} />
         <QuestionsSection />

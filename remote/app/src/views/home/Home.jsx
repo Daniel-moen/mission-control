@@ -6,6 +6,7 @@ import { useNow } from '../../lib/hooks.js';
 import { spring, ease } from '../../lib/motion.js';
 import Ticker from '../../ui/Ticker.jsx';
 import Button from '../../ui/Button.jsx';
+import { isRecentQuestion } from './AttentionCards.jsx';
 
 // The centre stage. One greeting, one honest sentence about the fleet, one
 // button that does the most useful thing available right now, and a quiet row
@@ -31,7 +32,8 @@ export default function Home({ onOpenAgent, onFleet, onLaunch, onMia }) {
   const waiting = agents.filter((a) => agentStatus(a) === 'waiting' && !isMiaAgent(a));
   c.waiting = waiting.length;
   const first = waiting[0] || null;
-  const miaQs = useMC((st) => miaOpenQuestions(st.mia, st.miaLocal).length);
+  // Only the last hour's questions count here, like the cards below (task 0290).
+  const miaQs = useMC((st) => miaOpenQuestions(st.mia, st.miaLocal).filter((q) => isRecentQuestion(q, now || Date.now())).length);
   const s = summary || {};
 
   // One sentence, and it has to be true. Link trouble outranks fleet news —

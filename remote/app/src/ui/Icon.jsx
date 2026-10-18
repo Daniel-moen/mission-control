@@ -9,12 +9,13 @@ import {
   Download, Share, FileCode2, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen,
   Ear, EarOff, Paperclip, File, FileImage, FileAudio, FileSpreadsheet, Presentation, AppWindow,
   Building2, Pause, Telescope, ExternalLink, TrendingUp, TrendingDown, Undo2, ShieldCheck,
-  Volume1, Volume2, Wrench, Eye, CircleOff, Lightbulb, Clapperboard, Upload, Brain, Wand2, Quote,
+  Volume1, Volume2, Wrench, Eye, CircleOff, Lightbulb, Clapperboard, Upload, Brain, Wand2, Quote, Gauge,
 } from 'lucide-react';
 
 // Semantic name → lucide glyph. Views ask for meaning ("launch", "needs you"),
 // never for a specific drawing, so the icon set can be retuned in one place.
 const MAP = {
+  gauge: Gauge,
   agents: LayoutGrid,
   overview: Activity,
   library: BookOpen,

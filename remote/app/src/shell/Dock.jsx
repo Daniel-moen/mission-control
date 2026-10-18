@@ -8,7 +8,6 @@ const ITEMS = [
   { key: 'mia', label: 'Mia', icon: 'mia' },
   { key: 'home', label: 'Home', icon: 'sparkles' },
   { key: 'hq', label: 'HQ', icon: 'hq' },
-  { key: 'channels', label: 'Channels', icon: 'video' },
   { key: 'fleet', label: 'Fleet', icon: 'agents' },
   { key: 'insights', label: 'Insights', icon: 'overview' },
   { key: 'library', label: 'Library', icon: 'library' },
@@ -17,21 +16,28 @@ const ITEMS = [
 // The floating dock. One highlight glides between segments (shared layoutId);
 // the mic is the raised primary, because talking to the fleet is the fastest
 // thing you can do from a phone in a mount.
-export default function Dock({ active = 'home', badges = {}, onSelect, onMic, onLaunch }) {
+//
+// mode (task 0290): 'full'; 'compact' — icons only and slimmer, under a
+// report so the document gets the height; 'none' — gone (Mia's chat).
+// Channels lives inside HQ now, so it has no button of its own.
+export default function Dock({ mode = 'full', active = 'home', badges = {}, onSelect, onMic, onLaunch }) {
   const desktop = useMedia('(min-width: 1024px)');
+  if (mode === 'none') return null;
+  const slim = mode === 'compact';
   return (
     <LayoutGroup id="dock">
       <div
         // Above the phone's full-screen windows (z-50) so navigation never
         // disappears, and so a window's blur doesn't sample the dock.
         className="to-screen-bottom pointer-events-none fixed inset-x-0 bottom-0 z-[60] flex justify-center px-3"
-        style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 14px)' }}
+        style={{ paddingBottom: `calc(env(safe-area-inset-bottom) + ${slim ? 8 : 14}px)` }}
+        data-dock={mode}
       >
         <motion.nav
           initial={{ opacity: 0, y: 18 }}
           animate={{ opacity: 1, y: 0 }}
           transition={spring.smooth}
-          className="glass pointer-events-auto flex items-center gap-1 p-1.5"
+          className={`glass pointer-events-auto flex items-center ${slim ? 'gap-0.5 p-1' : 'gap-1 p-1.5'}`}
           style={{ borderRadius: 9999 }}
         >
           {ITEMS.map((it) => {
@@ -44,7 +50,7 @@ export default function Dock({ active = 'home', badges = {}, onSelect, onMic, on
                 onClick={() => onSelect?.(it.key)}
                 aria-label={badge ? `${it.label}, ${badge} new` : it.label}
                 aria-pressed={on}
-                className={`pill relative flex h-11 items-center gap-2 px-3 text-[13px] font-medium transition-colors sm:px-4 ${
+                className={`pill relative flex items-center gap-2 text-[13px] font-medium transition-colors ${slim ? 'h-9 px-3' : 'h-11 px-3 sm:px-4'} ${
                   on ? 'text-ink' : 'text-ink2 hover:text-ink'
                 }`}
               >
@@ -71,7 +77,7 @@ export default function Dock({ active = 'home', badges = {}, onSelect, onMic, on
                       </motion.span>
                     )}
                   </span>
-                  <span className="hidden sm:inline">{it.label}</span>
+                  {!slim && <span className="hidden sm:inline">{it.label}</span>}
                 </span>
               </motion.button>
             );
@@ -83,12 +89,12 @@ export default function Dock({ active = 'home', badges = {}, onSelect, onMic, on
             {...press}
             onClick={onMic}
             aria-label="Voice command"
-            className="grid h-11 w-11 flex-none place-items-center rounded-full bg-ink text-bg shadow-2"
+            className={`grid flex-none place-items-center rounded-full bg-ink text-bg shadow-2 ${slim ? 'h-9 w-9' : 'h-11 w-11'}`}
           >
-            <Icon name="mic" size={20} strokeWidth={2} />
+            <Icon name="mic" size={slim ? 17 : 20} strokeWidth={2} />
           </motion.button>
 
-          {desktop && (
+          {desktop && !slim && (
             <Button variant="secondary" icon="launch" onClick={onLaunch} className="ml-1 h-11">
               Launch
             </Button>

@@ -296,14 +296,14 @@ export function miaLine(c, reg) {
     case 'level': {
       const lv = levelOf(c.level);
       const was = p ? levelOf(p.autonomy) : null;
-      return `HQ: set ${name} autonomy to ${lv.label} (level ${lv.value}${was && was.value !== lv.value ? `, was ${was.label}` : ''}). Saved to the Jarvis registry.`;
+      return `HQ: set ${name} autonomy to ${lv.label} (level ${lv.value}${was && was.value !== lv.value ? `, was ${was.label}` : ''}). Saved to the HQ registry.`;
     }
     case 'pause':
-      return 'HQ: Jarvis pause. Stop everything proactive (scouting, pitches, auto-fixes) until I resume. Saved to the Jarvis registry.';
+      return 'HQ: pause. Stop everything proactive (scouting, pitches, auto-fixes) until I resume. Saved to the HQ registry.';
     case 'resume':
-      return 'HQ: Jarvis resume. Proactive mode back on. Saved to the Jarvis registry.';
+      return 'HQ: resume. Proactive mode back on. Saved to the HQ registry.';
     case 'pitch':
-      return `HQ: ${c.value === 'quieter' ? 'quieter' : 'louder'}. Pitch ${pitchLabel(stepPitch(reg?.jarvis?.pitchesPerDay ?? 1, c.value)).toLowerCase()} from now on. Saved to the Jarvis registry.`;
+      return `HQ: ${c.value === 'quieter' ? 'quieter' : 'louder'}. Pitch ${pitchLabel(stepPitch(reg?.jarvis?.pitchesPerDay ?? 1, c.value)).toLowerCase()} from now on. Saved to the HQ registry.`;
     case 'scout':
       return `HQ: scout ${name} now. Look at its numbers and health and tell me what you find.`;
     case 'action':

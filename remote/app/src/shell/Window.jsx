@@ -78,7 +78,9 @@ const DESK = {
   full: 'min-w-0 flex-1',
 };
 
-export default function Window({ title, subtitle, actions, onClose, size = 'center', pane, className = '', children }) {
+// `dock={false}`: the dock is hidden under this window (Mia's chat, task 0290),
+// so a phone sheet runs to the bottom edge; 'compact' leaves room for the slim dock.
+export default function Window({ title, subtitle, actions, onClose, size = 'center', pane, dock = true, className = '', children }) {
   const desktop = useMedia('(min-width: 1024px)');
   const drag = useDragControls();
   const foldable = desktop && size === 'column' && !!pane;
@@ -175,7 +177,7 @@ export default function Window({ title, subtitle, actions, onClose, size = 'cent
       className={`to-screen-bottom glass-strong fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden rounded-b-none ${className}`}
       // Leave room for the floating dock, which stays above every window.
       // --talkbar makes room for the voice pill above the window (shell/TalkHost.jsx).
-      style={{ paddingTop: 'calc(env(safe-area-inset-top) + var(--talkbar, 0px))', paddingBottom: 'calc(env(safe-area-inset-bottom) + 84px)' }}
+      style={{ paddingTop: 'calc(env(safe-area-inset-top) + var(--talkbar, 0px))', paddingBottom: dock === 'compact' ? 'calc(env(safe-area-inset-bottom) + 58px)' : dock ? 'calc(env(safe-area-inset-bottom) + 84px)' : 'env(safe-area-inset-bottom)' }}
     >
       <div
         onPointerDown={(e) => drag.start(e)}
