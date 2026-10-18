@@ -87,7 +87,7 @@ try {
   console.log('routing.json + mia routing');
   r = mia('routing');
   ok(r.status === 0 && r.stdout.includes('tier cheap\tclaude-haiku-5-5') && r.stdout.includes('kind scout\tcheap') && r.stdout.includes('kind build\tsmart'), 'mia routing prints the defaults');
-  ok(r.stdout.trim().split('\n').length === 3 + 16, 'one line per tier and kind');
+  ok(r.stdout.trim().split('\n').length === 3 + 18, 'one line per tier and kind (heartbeat + inbox added in 0292)');
   fs.writeFileSync(ROUTING, JSON.stringify({ tiers: { cheap: 'claude-tiny', mid: 'claude-middle' }, kinds: { scout: 'mid', poem: 'smart', bogus: 'huge' } }));
   r = mia('routing');
   ok(r.stdout.includes('tier cheap\tclaude-tiny') && r.stdout.includes('tier smart\tclaude-opus-5-5') && r.stdout.includes('kind scout\tmid') && r.stdout.includes('kind poem\tsmart') && !r.stdout.includes('bogus'), 'overrides merged over defaults');

@@ -56,6 +56,8 @@ final class MiaManager: ObservableObject {
     private let uploadsIndexPath: String
     /// Files from the panel (MiaUploads.swift); RemoteBridge feeds it offers.
     private(set) lazy var uploads = MiaUploads(root: dir)
+    /// mia-core, the job engine (MiaCore.swift, task 0292); idle unless core.json switches it on.
+    private(set) lazy var core = MiaCoreLink(dir: dir)
 
     private var timer: Timer?
     private var cancellables = Set<AnyCancellable>()
@@ -66,6 +68,12 @@ final class MiaManager: ObservableObject {
     private var nextLaunchAt = Date.distantPast
     private var consecutiveExits = 0
     private var miaUpSince: Date?
+    /// The session the last launch resumed (`miaResume`), and when; an early
+    /// exit marks it unresumable so the next launch starts fresh.
+    private var resumedSession: (sid: String, at: Date)?
+    /// `restart()` asks for a fresh session even with `miaResume` on.
+    private var forceFresh = false
+    private var miaDownSince: Date?
 
     // Event delivery
     private struct PendingEvent { let id: String; let kind: String; let tag: String?; let line: String }
@@ -234,6 +242,8 @@ final class MiaManager: ObservableObject {
     private func tick() {
         let now = Date()
         superviseMia(now: now)
+        core.supervise(now: now)
+        deliverCoreEvents()
         scanMessages()
         scanPanel(now: now)
         scanDispatch(now: now)
@@ -266,18 +276,25 @@ final class MiaManager: ObservableObject {
             if miaUpSince == nil { miaUpSince = now }
             if let up = miaUpSince, now.timeIntervalSince(up) > 300 { consecutiveExits = 0 }
             if (readState()["sessionId"] as? String) != run.sessionId {
-                updateState { $0["sessionId"] = run.sessionId }
+                updateState {
+                    $0["sessionId"] = run.sessionId
+                    $0["lastSessionId"] = run.sessionId
+                }
             }
+            if let r = resumedSession, now.timeIntervalSince(r.at) > 180 { resumedSession = nil }
             return
         }
         // She was up and is gone, or a launch never showed up: back off.
         if miaUpSince != nil {
             miaUpSince = nil
+            miaDownSince = now
+            resumeFailed(now: now)
             noteExit(now: now)
         }
         if let until = launchPendingUntil {
             guard now >= until else { return }
             launchPendingUntil = nil
+            resumeFailed(now: now)
             noteExit(now: now)
         }
         // Don't launch a second Mia before the first process scan could have
@@ -285,6 +302,26 @@ final class MiaManager: ObservableObject {
         guard manager.livenessReady, now.timeIntervalSince(bootedAt) > 30,
               now >= nextLaunchAt else { return }
         launchMia(now: now)
+    }
+
+    /// A resumed session that died (or never came up) within 3 min: don't
+    /// resume that one again.
+    private func resumeFailed(now: Date) {
+        guard let r = resumedSession else { return }
+        resumedSession = nil
+        guard now.timeIntervalSince(r.at) < 180 else { return }
+        updateState { $0["resumeFailed"] = r.sid }
+        NSLog("Mia: resuming session \(r.sid) failed; the next launch starts fresh")
+    }
+
+    /// The session to resume on this launch (task 0292), or nil for a fresh one.
+    private func sessionToResume(_ state: [String: Any]) -> String? {
+        guard core.reloadConfig().miaResume, !forceFresh,
+              let sid = state["lastSessionId"] as? String, !sid.isEmpty,
+              (state["resumeFailed"] as? String) != sid,
+              fm.fileExists(atPath: MiaCoreLink.transcriptPath(home: NSHomeDirectory(), cwd: dir, sessionId: sid))
+        else { return nil }
+        return sid
     }
 
     private func noteExit(now: Date) {
@@ -297,6 +334,9 @@ final class MiaManager: ObservableObject {
         guard let manager else { return }
         ensureLayout()
         var relaunch = false
+        let before = readState()
+        let resume = sessionToResume(before)
+        forceFresh = false
         updateState { s in
             if s["startedAt"] != nil {
                 relaunch = true
@@ -312,7 +352,7 @@ final class MiaManager: ObservableObject {
             s["enabled"] = true
             s["sessionId"] = NSNull()
         }
-        if relaunch {
+        if relaunch && resume == nil {
             enqueue(kind: "system",
                     line: "[MC] You were restarted. Run `mia inbox` and `mia status` to catch up.",
                     front: true)
@@ -320,8 +360,17 @@ final class MiaManager: ObservableObject {
         // Her own mailbox only: --strict-mcp-config, or with the iMessage
         // channel the allowlist settings that replace it (MiaChannels).
         let mcp = fm.fileExists(atPath: mcpPath) ? mcpPath : nil
-        let args = MiaChannels.launchArgs(mcpConfig: mcp, settingsPath: channelSettings(mcpConfig: mcp))
-        manager.launchSessions([.init(model: settings.miaModel, prompt: Self.miaPrompt,
+        var args = MiaChannels.launchArgs(mcpConfig: mcp, settingsPath: channelSettings(mcpConfig: mcp))
+        var prompt = Self.miaPrompt
+        if let resume {
+            // Same session, context intact; the catch-up note is its next message.
+            args += ["--resume", resume]
+            prompt = MiaCoreLink.resumeNote(restarts: (readState()["restarts"] as? Int) ?? 0,
+                                            downSince: miaDownSince)
+            resumedSession = (resume, now)
+        }
+        miaDownSince = nil
+        manager.launchSessions([.init(model: settings.miaModel, prompt: prompt,
                                       extraArgs: args, miaTooling: true)], in: dir)
         launchPendingUntil = now.addingTimeInterval(90)
     }
@@ -390,6 +439,17 @@ final class MiaManager: ObservableObject {
             deliverAt = pending.isEmpty ? nil : now.addingTimeInterval(2)
         } else {
             deliverAt = now.addingTimeInterval(5)   // terminal unreachable — retry
+        }
+    }
+
+    /// mia-core's events (inbox.jsonl) → Mia, like the app's own: recorded in
+    /// events.jsonl and typed into her session; `deliver: false` only records.
+    private func deliverCoreEvents() {
+        core.newEvents { events in
+            for e in events {
+                enqueue(kind: e.kind, line: e.text,
+                        mirror: e.mirror, taskId: e.taskId, deliver: e.deliver)
+            }
         }
     }
 
@@ -513,6 +573,12 @@ final class MiaManager: ObservableObject {
             if f.hasSuffix(".tell.json") {
                 handleTell(path: path, stem: String(f.dropLast(".tell.json".count)), now: now)
             } else if f.hasSuffix(".json") {
+                // legacyCap: hold the request (the file stays) while the
+                // executors already alive fill the cap.
+                if core.config.legacyCap, let manager,
+                   manager.agents.filter({ $0.miaTaskId != nil && $0.processAlive }).count >= core.config.maxConcurrent {
+                    continue
+                }
                 handleDispatch(path: path, stem: String(f.dropLast(".json".count)), now: now)
             }
         }
@@ -670,9 +736,15 @@ final class MiaManager: ObservableObject {
         for t in tasks {
             if let e = t["executor"] as? [String: Any], let sid = e["sessionId"] as? String { claimed.insert(sid) }
         }
+        let reap = core.config.reapLegacy
         for task in tasks {
             guard let tid = task["id"] as? String, let exec = task["executor"] as? [String: Any] else { continue }
+            // mia-core owns headless executors: their finish is its `result` line.
+            if (exec["headless"] as? Bool) == true { continue }
             let status = task["status"] as? String ?? ""
+            if reap, ["done", "failed", "cancelled"].contains(status) {
+                reapClosedExecutor(task, exec: exec, now: now)
+            }
             let finished = !(exec["finishedAt"] is NSNull) && exec["finishedAt"] != nil
             let dispatchedAt = Self.date(exec["dispatchedAt"]) ?? .distantPast
 
@@ -744,6 +816,19 @@ final class MiaManager: ObservableObject {
             }
         }
         keepAwake.sync(awake)
+    }
+
+    /// `reapLegacy`: a WezTerm executor idling at its prompt 10 min after
+    /// Mia closed its task is ended (its own pid only), freeing the RAM.
+    private func reapClosedExecutor(_ task: [String: Any], exec: [String: Any], now: Date) {
+        guard let manager, let sid = exec["sessionId"] as? String,
+              let run = manager.agent(withSessionId: sid), run.processAlive, run.pid > 0,
+              run.status == .done || run.turnEnded,
+              now.timeIntervalSince(run.lastModified) > 600,
+              now.timeIntervalSince(Self.date(task["updatedAt"]) ?? now) > 600 else { return }
+        let tid = task["id"] as? String ?? "?"
+        mutateTask(tid) { t in appendLog(&t, "Closed the idle executor session \(sid) (task \(t["status"] as? String ?? "closed"))") }
+        manager.destroy(run)
     }
 
     private func executorEnded(_ tid: String, sid: String?, key: String, finished: Bool,
@@ -880,8 +965,11 @@ final class MiaManager: ObservableObject {
         var last = readState()["lastHeartbeat"] as? [String: Any] ?? [:]
         var lastChanged = false
         let cal = Calendar.current
+        let coreBeats = core.config.heartbeatRuns ? core.config.beats : []
         for hb in heartbeats where (hb["enabled"] as? Bool) ?? true {
             guard let id = hb["id"] as? String else { continue }
+            // mia-core runs these as their own cheap sessions (task 0292).
+            if coreBeats.contains(id) { continue }
             let lastFire = Self.date(last[id])
             var due = false
             if let every = (hb["everyMinutes"] as? NSNumber)?.doubleValue, every > 0 {
@@ -1158,6 +1246,8 @@ final class MiaManager: ObservableObject {
         }
         // Her going away is deliberate: not an exit to back off from.
         miaUpSince = nil
+        // Asked for: a new session, even when crash relaunches resume.
+        forceFresh = true
         launchPendingUntil = nil
         consecutiveExits = 0
         // A moment for the old process to exit before the new one opens.
@@ -1279,6 +1369,7 @@ final class MiaManager: ObservableObject {
             "schedule": readJSON(schedulePath) ?? Self.defaultSchedule,
         ]
         if let pushKey { block["pushKey"] = pushKey }
+        if let jobs = core.jobsSnapshot() { block["jobs"] = jobs }
         return block
     }
 

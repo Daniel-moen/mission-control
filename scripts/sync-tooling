@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+# Regenerate the byte-for-byte copies ToolingInstaller.swift embeds from the
+# repo files (the readable source of truth). Run after editing any of them:
+#   python3 scripts/sync-tooling          rewrite the Swift literals
+#   python3 scripts/sync-tooling --check  exit 1 when they have drifted
+import os, re, sys
+
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+SWIFT = os.path.join(REPO, "Sources", "AgentWidget", "ToolingInstaller.swift")
+FILES = [("mcDoc", "scripts/mc-doc"), ("skill", "skills/mission-control-library/SKILL.md"),
+         ("mia", "scripts/mia"), ("miaJarvis", "scripts/mia-jarvis"), ("miaCore", "scripts/mia-core")]
+
+src = open(SWIFT, encoding="utf-8").read()
+out = src
+for name, rel in FILES:
+    body = open(os.path.join(REPO, rel), encoding="utf-8").read()
+    if body.endswith("\n"):
+        body = body[:-1]
+    if '"""#' in body or "\\#" in body:
+        sys.exit("sync-tooling: %s contains a sequence a #\"\"\" raw string cannot hold" % rel)
+    rx = re.compile(r'(private static let %s = #"""\n)(.*?)\n?("""#)' % re.escape(name), re.S)
+    if not rx.search(out):
+        sys.exit("sync-tooling: no literal for %s in ToolingInstaller.swift" % name)
+    out = rx.sub(lambda m: m.group(1) + body + "\n" + m.group(3), out, count=1)
+if "--check" in sys.argv:
+    if out != src:
+        print("ToolingInstaller.swift is out of date: python3 scripts/sync-tooling")
+        sys.exit(1)
+    print("ToolingInstaller.swift matches the repo files")
+elif out != src:
+    open(SWIFT, "w", encoding="utf-8").write(out)
+    print("ToolingInstaller.swift updated")
+else:
+    print("ToolingInstaller.swift already up to date")
