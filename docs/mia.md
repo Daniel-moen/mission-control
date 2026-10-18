@@ -516,14 +516,22 @@ shows "Mia wants to talk — tap to hear". After speaking, the pill offers a
 mic: it opens a talk session (Realtime or Basic) with that message as
 context, so "yes" or "option two" answers it.
 
-The voice: the panel POSTs the sentence to the relay's `/tts` (remote/tts.js:
-OpenAI `gpt-4o-mini-tts`, the realtime session's voice `marin`, calm/brief
-delivery instructions) and plays the mp3 on an `<audio>` element blessed by
-the first tap, fetched while the chime plays. Cost guard: each announcement is
-trimmed to `TTS_MAX_CHARS` (400, whole sentences), `TTS_DAILY_CHARS` (20 000)
-caps a day, the same text within 10 min is served from memory for free. Any
-failure (no key → 503, cap → 429, offline, won't play) falls back to device
-speech synthesis. Usage per day on `/health` (`tts`) and Settings › Voice.
+The voice (task 0287): Mia's own voice, made on the Mac — never OpenAI. The
+panel POSTs the sentence to the relay's `/tts` (remote/tts.js); the relay sends
+the host `{type:"tts", id, text}` and serves back the audio from its
+`{type:"ttsDone", id, ok, mime, audio(base64), engine}` answer (consumed by the
+relay, never fanned out; only to a Mac that lists `tts` in its snapshot caps).
+RemoteBridge runs `~/voice-lab/server/mia-tts`: Chatterbox Turbo (MLX 8-bit,
+temp 0.9, light style pass: pauses, an occasional `[chuckle]` on good news
+only) from the resident launchd service `com.mia.tts` on 127.0.0.1:8788, and
+Kokoro `af_heart` locally if that is down. The panel plays the m4a on an
+`<audio>` element blessed by the first tap, fetched while the chime plays.
+Guards: each announcement is trimmed to `TTS_MAX_CHARS` (400, whole
+sentences), `TTS_DAILY_CHARS` (50 000) caps a day, the same text within 10 min
+is served from memory. Any failure (Mac offline → 503, old Mac app → 501, Mac
+failed → 502, no answer in `TTS_WAIT_MS` → 504, cap → 429, won't play) falls
+back to device speech synthesis. Usage per day on `/health` (`tts`) and
+Settings › Voice.
 
 ### 8.4 Uploads (panel → relay → Mac)
 

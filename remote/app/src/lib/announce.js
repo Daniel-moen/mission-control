@@ -21,10 +21,11 @@ import { speakable, firstSentences } from './spoken.js';
 // quiet hours (default 22:00–07:00), and only on the panel the relay marks as
 // the one Daniel is using (store.panelPrimary).
 //
-// The words are spoken in Mia's realtime voice: the relay's POST /tts (tts.js,
-// OpenAI TTS with the realtime session's voice) returns mp3 that plays through
-// an <audio> element blessed on the first tap. If /tts fails (no key, daily
-// cap, offline) the device's speechSynthesis reads it instead.
+// The words are spoken in Mia's own voice: the relay's POST /tts (tts.js) has
+// the Mac make the audio (Chatterbox Turbo, Kokoro fallback; task 0287) and
+// returns it to play through an <audio> element blessed on the first tap. If
+// /tts fails (Mac offline, daily cap, slow) the device's speechSynthesis reads
+// it instead.
 //
 // iOS only lets a page make sound after a tap in this page session. The first
 // tap anywhere unlocks speech, the chime and the audio element; until then an
@@ -166,8 +167,9 @@ function stopAll() {
   stopSpeaking();
 }
 
-// Fetch the mp3 for `text` → a blob URL, or null (no key, cap, offline, slow).
-async function fetchTts(text, { timeoutMs = 8000 } = {}) {
+// Fetch the audio for `text` → a blob URL, or null (Mac offline, cap, slow).
+// The Mac usually answers in 2–4 s; a long announcement can take longer.
+async function fetchTts(text, { timeoutMs = 20000 } = {}) {
   const token = getMC().token;
   if (!token) return null;
   const ctl = new AbortController();

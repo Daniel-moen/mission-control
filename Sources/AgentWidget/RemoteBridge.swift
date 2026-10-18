@@ -14,6 +14,7 @@ import Combine
 ///                  {type:"push", title, body, tag?, url?, urgent?} Web Push for phones (Mia)
 ///                  {type:"panel", id, action, arg?, heading?}  `mia panel` → the most recently active panel
 ///                  {type:"uploadDone", id, ok, path?, detail?}  an offered upload was saved (relay deletes its copy)
+///                  {type:"ttsDone", id, ok, mime?, audio? (base64), engine?, ms?, detail?}  announcement audio
 ///   relay → host:  {type:"reply", sessionId, text} type into that agent's terminal
 ///                  {type:"broadcast", text}        send to every controllable agent
 ///                  {type:"kill", sessionId}        terminate that agent's process
@@ -31,6 +32,8 @@ import Combine
 ///                  {type:"panelResult", id, ok, action, arg, detail}   how a `mia panel` command landed
 ///                  {type:"upload", id, key, name, mime, size, sha256, caption?, batch?, batchId?}
 ///                                                  a file for Mia; fetch GET /upload/<id> (token + X-MC-Key)
+///                  {type:"tts", id, text}          speak an announcement in Mia's voice (task 0287): run
+///                                                  ~/voice-lab/server/mia-tts (Chatterbox, Kokoro fallback)
 final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     @Published private(set) var connected = false
     @Published private(set) var viewerCount = 0
@@ -230,6 +233,9 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
 
         case "upload":
             receiveUpload(obj)
+
+        case "tts":
+            speak(obj)
 
         case "reply":
             guard let sid = obj["sessionId"] as? String,
@@ -540,6 +546,51 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
             case .failure(let e):
                 self?.sendJSON(["type": "uploadDone", "id": offer.id, "ok": false, "detail": e.detail])
             }
+        }
+    }
+
+    /// Mia's voice for a panel announcement (task 0287). The audio is made
+    /// here, never on the relay: `mia-tts` asks the resident Chatterbox
+    /// service (launchd com.mia.tts, 127.0.0.1:8788) and falls back to Kokoro
+    /// af_heart locally — never OpenAI. Runs off the main thread; the relay
+    /// waits up to ~30 s and the panel uses the device voice on failure.
+    private func speak(_ obj: [String: Any]) {
+        guard let id = obj["id"] as? String, !id.isEmpty else { return }
+        let text = ((obj["text"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let cli = ProcessInfo.processInfo.environment["MIA_TTS_CLI"]
+            ?? (NSHomeDirectory() as NSString).appendingPathComponent("voice-lab/server/mia-tts")
+        guard !text.isEmpty, FileManager.default.isExecutableFile(atPath: cli) else {
+            sendJSON(["type": "ttsDone", "id": id, "ok": false, "detail": text.isEmpty ? "no text" : "mia-tts is not installed"])
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let out = (NSTemporaryDirectory() as NSString).appendingPathComponent("mc-tts-\(UUID().uuidString).m4a")
+            defer { try? FileManager.default.removeItem(atPath: out) }
+            let started = Date()
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: cli)
+            p.arguments = ["--format", "m4a", text, out]
+            let err = Pipe()
+            p.standardError = err
+            p.standardOutput = FileHandle.nullDevice
+            var frame: [String: Any] = ["type": "ttsDone", "id": id, "ok": false]
+            do {
+                try p.run()
+                let log = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                p.waitUntilExit()
+                if p.terminationStatus == 0, let data = FileManager.default.contents(atPath: out), !data.isEmpty {
+                    let engine = log.range(of: #"engine=(\w+)"#, options: .regularExpression)
+                        .map { String(log[$0].dropFirst("engine=".count)) } ?? "mac"
+                    frame = ["type": "ttsDone", "id": id, "ok": true, "mime": "audio/mp4", "engine": engine,
+                             "ms": Int(Date().timeIntervalSince(started) * 1000), "audio": data.base64EncodedString()]
+                } else {
+                    let last = log.split(separator: "\n").last.map(String.init) ?? "exit \(p.terminationStatus)"
+                    frame["detail"] = "mia-tts failed: \(last)"
+                }
+            } catch {
+                frame["detail"] = "mia-tts could not start: \(error.localizedDescription)"
+            }
+            DispatchQueue.main.async { self?.sendJSON(frame) }
         }
     }
 
@@ -957,8 +1008,9 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
             "type": "snapshot",
             "at": Date().timeIntervalSince1970,
             // Beyond the base protocol: "upload" = this app takes files for Mia;
-            // "miaRestart" = it restarts her in one step (else stop + start).
-            "caps": ["upload", "miaRestart"],
+            // "miaRestart" = it restarts her in one step (else stop + start);
+            // "tts" = it makes announcement audio in Mia's voice (task 0287).
+            "caps": ["upload", "miaRestart", "tts"],
             "summary": summary,
             "agents": agents,
             "fleets": fleets,

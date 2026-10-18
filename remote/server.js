@@ -39,9 +39,11 @@
 // and hang it up (watchdog). A durable per-day tally (Railway volume) and a
 // daily $ cap, shown on /health and in the panel's Settings.
 //
-// Announcement voice (tts.js): POST /tts turns a spoken announcement into mp3
-// in the same OpenAI voice as the realtime call, with a per-text cache, a
-// length cap and a daily character cap; tallied on /health and in Settings.
+// Announcement voice (tts.js): POST /tts turns a spoken announcement into
+// audio made ON THE MAC (Chatterbox Turbo, Kokoro fallback; task 0287): the
+// relay sends the host {type:"tts", id, text} and serves the {type:"ttsDone"}
+// audio it answers with — consumed here, never fanned out. Per-text cache,
+// length cap and daily character cap; tallied on /health and in Settings.
 //
 // Wake word: GET /wake/model.tar.gz serves the small Vosk model the panel
 // runs in the browser to hear "Hey Mia". Detection is entirely on-device.
@@ -89,10 +91,20 @@ function tokenOk(candidate) {
 const push = createPush({ tokenOk });
 const stt = createStt({ tokenOk });
 const realtime = createRealtime({ tokenOk });
-const tts = createTts({ tokenOk });
-// The Mac says it can take files by listing "upload" in its snapshot's caps;
-// an older app gets a clear refusal instead of a silent queue.
+// The Mac says it can take files by listing "upload" in its snapshot's caps
+// (and speak announcements with "tts"); an older app gets a clear refusal
+// instead of a silent queue.
 let hostCaps = [];
+const tts = createTts({
+  tokenOk,
+  sendToHost: (obj) => {
+    if (!host || host.readyState !== host.OPEN) return false;
+    sendTo(host, obj);
+    return true;
+  },
+  hostOnline: () => host !== null,
+  hostCanSpeak: () => hostCaps.includes('tts'),
+});
 const upload = createUpload({
   tokenOk,
   sendToHost: (obj) => sendTo(host, obj),
@@ -255,7 +267,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Announcements in Mia's realtime voice (token-auth) — see tts.js.
+  // Announcements in Mia's voice, made on the Mac (token-auth) — see tts.js.
   if (pathname === '/tts') {
     tts.handle(req, res, url).catch((err) => {
       console.error('tts error:', err);
@@ -592,6 +604,11 @@ wss.on('connection', (ws, req) => {
         routePanel(frame);
         return;
       }
+      if (frame.type === 'ttsDone') {
+        // Announcement audio the Mac made — relay-local, never fanned out.
+        tts.onHostFrame(frame);
+        return;
+      }
       if (frame.type === 'uploadDone') {
         // The Mac saved (or refused) an upload — relay-local, never fanned out.
         upload.onHostFrame(frame);
@@ -611,6 +628,7 @@ wss.on('connection', (ws, req) => {
       if (host === ws) {
         host = null;
         hostCaps = [];
+        tts.onHostGone();
         console.log('host disconnected');
         tellViewersHostState();
       }

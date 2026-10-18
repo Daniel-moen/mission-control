@@ -725,7 +725,7 @@ function snapshot() {
     at: Date.now() / 1000,
     // What this host can do beyond the base protocol (the relay gates uploads on it).
     // FAKE_HOST_CAPS='' impersonates an older Mac app.
-    caps: (process.env.FAKE_HOST_CAPS ?? 'upload,miaRestart').split(',').filter(Boolean),
+    caps: (process.env.FAKE_HOST_CAPS ?? 'upload,miaRestart,tts').split(',').filter(Boolean),
     summary: {
       active, idle, done, total: agents.length,
       attention: idle,
@@ -882,6 +882,14 @@ function connect() {
           log(`upload ${msg.id} failed: ${err.message}`);
           send({ type: 'uploadDone', id: msg.id, ok: false, detail: err.message });
         });
+        return;
+
+      case 'tts':
+        // Announcement audio (tts.js / RemoteBridge.speak): the real Mac runs
+        // ~/voice-lab/server/mia-tts. FAKE_HOST_TTS=real does the same here
+        // (local e2e with the real voice); otherwise canned bytes, and text
+        // starting "FAIL" is a failure.
+        speakTts(msg).then(send, (err) => send({ type: 'ttsDone', id: msg.id, ok: false, detail: err.message }));
         return;
 
       case 'panelResult':
@@ -1249,3 +1257,24 @@ async function receiveUpload(f) {
 
 connect();
 log(`fake host starting (relay port ${PORT}, token ${TOKEN === 'test' ? "'test'" : 'set'})`);
+
+// ---- announcement voice (task 0287) ----------------------------------------------
+async function speakTts(msg) {
+  const text = String(msg.text || '');
+  if (process.env.FAKE_HOST_TTS === 'real') {
+    const { execFile } = await import('node:child_process');
+    const out = path.join(os.tmpdir(), `fakehost-tts-${msg.id}.m4a`);
+    const cli = process.env.MIA_TTS_CLI || path.join(os.homedir(), 'voice-lab/server/mia-tts');
+    const t0 = Date.now();
+    const engine = await new Promise((resolve, reject) =>
+      execFile(cli, ['--format', 'm4a', text, out], { timeout: 60000 }, (err, _so, se) =>
+        err ? reject(new Error(String(se || err.message).trim().split('\n').pop())) : resolve((/engine=(\w+)/.exec(se) || [])[1] || 'mac')));
+    const audio = fs.readFileSync(out).toString('base64');
+    fs.rmSync(out, { force: true });
+    log(`tts ${engine} ${Date.now() - t0} ms: ${text.slice(0, 60)}`);
+    return { type: 'ttsDone', id: msg.id, ok: true, mime: 'audio/mp4', engine, ms: Date.now() - t0, audio };
+  }
+  if (/^FAIL/.test(text)) return { type: 'ttsDone', id: msg.id, ok: false, detail: 'mock refusal' };
+  if (/^SLOW/.test(text)) return new Promise(() => {}); // never answers (relay times out)
+  return { type: 'ttsDone', id: msg.id, ok: true, mime: 'audio/mp4', engine: 'chatterbox', audio: Buffer.from(`ftypfake-m4a:${text}`).toString('base64') };
+}

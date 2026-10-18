@@ -447,7 +447,7 @@ async function main() {
     rt5.close();
   }
 
-  console.log('announcement voice (/tts)');
+  console.log('announcement voice (/tts, made on the Mac)');
   {
     const TTS = `http://localhost:${PORT}/tts`;
     const bearer = { authorization: `Bearer ${TOKEN}` };
@@ -456,34 +456,27 @@ async function main() {
     ok((await say('Hello', { authorization: 'Bearer nope' })).status === 401, 'a wrong token is a 401 too');
     ok((await fetch(TTS)).status === 401, 'GET /tts needs the token');
     const info = await (await fetch(TTS, { headers: bearer })).json();
-    ok(info.ok && info.available && info.model === 'gpt-4o-mini-tts' && info.voice === 'marin', 'GET /tts: gpt-4o-mini-tts in the realtime voice (marin)');
+    ok(info.ok && info.available && info.engine === 'mac' && /Chatterbox/.test(info.voice), 'GET /tts: available, made on the Mac (Chatterbox)');
     ok(info.limits.maxChars === 400 && info.limits.dailyChars === 1000, 'GET /tts: length cap 400, daily cap from TTS_DAILY_CHARS');
 
-    const before = openaiSeen.length;
+    const openaiBefore = openaiSeen.filter((x) => x.url === '/v1/audio/speech').length;
     const r = await say('Task 17 is done.   Anything else?');
     const bytes = Buffer.from(await r.arrayBuffer()).toString();
-    ok(r.status === 200 && r.headers.get('content-type') === 'audio/mpeg' && bytes === 'ID3fake-mp3-bytes', 'POST /tts streams the mp3 back');
-    ok(r.headers.get('x-tts-cache') === 'miss' && r.headers.get('x-tts-chars') === '31', 'first time: a cache miss, whitespace normalised');
-    const call = openaiSeen.slice(before).find((x) => x.url === '/v1/audio/speech');
-    const cfg = call ? JSON.parse(call.body) : {};
-    ok(call && call.auth === 'Bearer sk-test-relay-only', 'the relay calls OpenAI with its own key');
-    ok(cfg.model === 'gpt-4o-mini-tts' && cfg.voice === 'marin' && cfg.response_format === 'mp3' && cfg.input === 'Task 17 is done. Anything else?', 'speech request: model, voice, mp3, the text');
-    ok(/Jarvis/.test(cfg.instructions || '') && /calm/i.test(cfg.instructions || ''), 'speech request: calm, brief, Jarvis-like delivery instructions');
+    ok(r.status === 200 && r.headers.get('content-type') === 'audio/mp4' && bytes === 'ftypfake-m4a:Task 17 is done. Anything else?', 'POST /tts serves the audio the Mac made for the (normalised) text');
+    ok(r.headers.get('x-tts-cache') === 'miss' && r.headers.get('x-tts-chars') === '31' && r.headers.get('x-tts-engine') === 'chatterbox', 'first time: a cache miss, whitespace normalised, engine reported');
     const r2 = await say('Task 17 is done. Anything else?');
-    ok(r2.headers.get('x-tts-cache') === 'hit' && Buffer.from(await r2.arrayBuffer()).toString() === 'ID3fake-mp3-bytes', 'the same text again comes from the cache');
-    ok(openaiSeen.filter((x) => x.url === '/v1/audio/speech').length === 1, '…without a second OpenAI call');
+    ok(r2.headers.get('x-tts-cache') === 'hit' && Buffer.from(await r2.arrayBuffer()).toString() === bytes, 'the same text again comes from the cache');
 
     const long = Array.from({ length: 30 }, (_, i) => `Sentence number ${i + 1} is here.`).join(' ');
     const r3 = await say(long);
-    await r3.arrayBuffer();
-    const sent = JSON.parse(openaiSeen.filter((x) => x.url === '/v1/audio/speech').at(-1).body).input;
+    const sent = Buffer.from(await r3.arrayBuffer()).toString().replace('ftypfake-m4a:', '');
     ok(sent.length <= 400 && sent.startsWith('Sentence number 1 is here.') && /here\.$/.test(sent), `a long announcement is trimmed to its first whole sentences (${sent.length} chars)`);
 
     ok((await say('   ')).status === 400, 'empty text is a 400');
-    ok((await say('FAIL please')).status === 502, 'an OpenAI refusal is a 502 (the panel falls back to the device voice)');
+    ok((await say('FAIL please')).status === 502, 'the Mac failing to speak is a 502 (the panel falls back to the device voice)');
+    ok(openaiSeen.filter((x) => x.url === '/v1/audio/speech').length === openaiBefore, 'OpenAI speech is never called, even with OPENAI_API_KEY set');
     const mid = await (await fetch(TTS, { headers: bearer })).json();
-    ok(mid.today.requests === 2 && mid.today.chars === 31 + sent.length && mid.today.cached === 1, 'usage: requests + characters per day; cache hits and refusals are free');
-    ok(Math.abs(mid.today.usd - (31 + sent.length) * (0.015 / 900)) < 0.0002, 'usage: cost estimate ≈ $0.015 per spoken minute');
+    ok(mid.today.requests === 2 && mid.today.chars === 31 + sent.length && mid.today.cached === 1 && mid.today.usd === 0, 'usage: requests + characters per day; cache hits and failures not counted; free');
 
     // Daily cap (1000 in this test): fill it up, then the next one is refused.
     let status = 200;
@@ -496,7 +489,7 @@ async function main() {
     const after = await (await fetch(TTS, { headers: bearer })).json();
     ok(after.today.chars <= 1000, `the daily cap is never exceeded (${after.today.chars} chars)`);
     const r4 = await say('Task 17 is done. Anything else?');
-    ok(r4.status === 200 && r4.headers.get('x-tts-cache') === 'hit', 'cached text still plays past the cap (costs nothing)');
+    ok(r4.status === 200 && r4.headers.get('x-tts-cache') === 'hit', 'cached text still plays past the cap');
     await r4.arrayBuffer();
     const health = await (await fetch(`http://localhost:${PORT}/health`)).json();
     ok(health.tts && health.tts.available === true && health.tts.today.chars === after.today.chars, '/health shows today\'s announcement characters');
@@ -505,12 +498,28 @@ async function main() {
     ok(Object.values(saved.days)[0]?.chars === after.today.chars, 'tts usage is persisted per day');
 
     const { createTts, trimText } = require('../tts.js');
-    const noKey = createTts({ tokenOk: (t) => t === TOKEN, env: { TTS_STORE: path.join(TMP, 'tts2.json') }, log: { log() {}, warn() {}, error() {} } });
+    const quietLog = { log() {}, warn() {}, error() {} };
     const fakeRes = () => { const x = { status: 0, body: '' }; x.writeHead = (st) => { x.status = st; }; x.end = (b) => { x.body = b; }; return x; };
     const fakeReq = (body) => { const { Readable } = require('node:stream'); const q = Readable.from([Buffer.from(JSON.stringify(body))]); q.method = 'POST'; q.headers = { authorization: `Bearer ${TOKEN}` }; return q; };
+    const offline = createTts({ tokenOk: (t) => t === TOKEN, env: { TTS_STORE: path.join(TMP, 'tts2.json') }, log: quietLog });
     const res503 = fakeRes();
-    await noKey.handle(fakeReq({ text: 'Hello' }), res503, new URL('http://x/tts'));
-    ok(res503.status === 503 && noKey.info().available === false, 'without OPENAI_API_KEY /tts is a 503 (the panel uses the device voice)');
+    await offline.handle(fakeReq({ text: 'Hello' }), res503, new URL('http://x/tts'));
+    ok(res503.status === 503 && offline.info().available === false, 'Mac offline: /tts is a 503 (the panel uses the device voice)');
+    const oldMac = createTts({ tokenOk: (t) => t === TOKEN, hostOnline: () => true, hostCanSpeak: () => false, env: { TTS_STORE: path.join(TMP, 'tts3.json') }, log: quietLog });
+    const res501 = fakeRes();
+    await oldMac.handle(fakeReq({ text: 'Hello' }), res501, new URL('http://x/tts'));
+    ok(res501.status === 501, 'a Mac app without the "tts" capability: 501, nothing is sent to it');
+    const sentFrames = [];
+    const slow = createTts({ tokenOk: (t) => t === TOKEN, hostOnline: () => true, hostCanSpeak: () => true, sendToHost: (f) => sentFrames.push(f), env: { TTS_STORE: path.join(TMP, 'tts4.json'), TTS_WAIT_MS: '150' }, log: quietLog });
+    const res504 = fakeRes();
+    await slow.handle(fakeReq({ text: 'Hello there' }), res504, new URL('http://x/tts'));
+    ok(res504.status === 504 && sentFrames[0]?.type === 'tts' && sentFrames[0].text === 'Hello there', 'the Mac never answering: 504 after TTS_WAIT_MS');
+    const resGone = fakeRes();
+    const p = slow.handle(fakeReq({ text: 'Bye' }), resGone, new URL('http://x/tts'));
+    await sleep(20);
+    slow.onHostGone();
+    await p;
+    ok(resGone.status === 503, 'the Mac disconnecting mid-request answers 503 at once');
     const one = trimText(`${'word '.repeat(120)}end.`, 400);
     ok(one.length <= 400 && one.endsWith('…'), 'one over-long sentence is cut at a word with "…"');
 

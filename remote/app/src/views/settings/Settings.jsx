@@ -67,7 +67,8 @@ function Row({ label, hint, children, last = false }) {
 }
 
 // Talk mode's engine (views/mia/Talk.jsx reads the same key) and the relay's
-// running tallies of realtime minutes and announcement speech (/tts).
+// running tallies of realtime minutes and announcement speech (/tts, made on
+// the Mac).
 async function ttsInfo(token) {
   try {
     const r = await fetch('/tts', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
@@ -171,11 +172,11 @@ function VoiceSection() {
       {tts?.available && (
         <Row
           label="Announcement voice"
-          hint={`Announcements use the same voice (${tts.voice}). Up to ${tts.limits.maxChars} characters each, ${tts.limits.dailyChars.toLocaleString()} a day — past that, the device voice.`}
+          hint={`Spoken in Mia’s own voice (${tts.voice}), made locally and free. Up to ${tts.limits.maxChars} characters each, ${tts.limits.dailyChars.toLocaleString()} a day — past that, or with the Mac offline, the device voice.`}
           last
         >
           <span className="tnum font-mono text-[12.5px] text-ink" data-tts-usage>
-            {`${tts.today.requests} said · ${tts.today.chars.toLocaleString()} chars · ≈ $${tts.today.usd.toFixed(3)}`}
+            {`${tts.today.requests} said · ${tts.today.chars.toLocaleString()} chars`}
           </span>
         </Row>
       )}

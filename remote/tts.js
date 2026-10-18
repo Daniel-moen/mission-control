@@ -1,26 +1,33 @@
-// Spoken announcements in Mia's realtime voice.
+// Spoken announcements in Mia's own voice, made on the Mac (task 0287).
 //
 // `mia say/notify/ask --speak` is read aloud on the primary panel
-// (app/src/lib/announce.js). To sound the same as the live conversation, the
-// panel asks the relay for audio: POST /tts → OpenAI's speech endpoint with
-// the realtime session's voice (marin) and short delivery instructions → mp3
-// streamed back. The panel falls back to the device's speechSynthesis when
-// this fails or there is no key.
+// (app/src/lib/announce.js). The panel asks the relay for audio: POST /tts.
+// The relay doesn't synthesise anything itself any more (OpenAI TTS is gone:
+// no credit, and Daniel chose Chatterbox). It hands the text to the Mac over
+// the host socket and serves back what the Mac made:
 //
-// OPENAI_API_KEY is for the voice layer only (realtime.js, this file).
+//   relay → host  {type:"tts", id, text}
+//   host  → relay {type:"ttsDone", id, ok, mime?, audio? (base64), engine?, ms?, detail?}
 //
-// Cost guard: one announcement is trimmed to ~400 characters (whole
-// sentences), a daily character cap stops synthesis (429 → the panel uses the
-// device voice), and repeats of the same text within TTS_CACHE_SECONDS come
-// from memory at no cost. Usage is tallied per day (/health, Settings › Voice).
+// On the Mac, RemoteBridge runs ~/voice-lab/server/mia-tts: Chatterbox Turbo
+// (resident service com.mia.tts on 127.0.0.1:8788), falling back to Kokoro
+// af_heart locally. Never OpenAI. The ttsDone frame stops here (never fanned
+// out). Mac offline, an older Mac app without the "tts" capability, a failure
+// or a timeout → 503/501/502/504 and the panel falls back to the device's
+// speechSynthesis.
 //
-// Env: OPENAI_API_KEY, TTS_MODEL (gpt-4o-mini-tts), TTS_VOICE (REALTIME_VOICE
-// or marin), TTS_MAX_CHARS (400), TTS_DAILY_CHARS (20000), TTS_CACHE_SECONDS
-// (600), TTS_STORE (usage file), OPENAI_BASE_URL (tests point this at a mock).
+// Guards: one announcement is trimmed to ~400 characters (whole sentences);
+// repeats of the same text within TTS_CACHE_SECONDS come from memory; a daily
+// character cap keeps a runaway loop from keeping the Mac's GPU busy. Usage
+// is tallied per day (/health, Settings › Voice). It's free, so usd stays 0.
+//
+// Env: TTS_MAX_CHARS (400), TTS_DAILY_CHARS (50000), TTS_CACHE_SECONDS (600),
+// TTS_WAIT_MS (30000, how long to wait for the Mac), TTS_STORE (usage file).
 //
 // HTTP (token auth, same as /api, /stt and /realtime):
-//   GET  /tts   → { ok, available, model, voice, limits, today, days }
-//   POST /tts   body { text } → audio/mpeg (headers X-TTS-Chars, X-TTS-Cache)
+//   GET  /tts   → { ok, available, engine, voice, limits, today, days }
+//   POST /tts   body { text } → audio (audio/mp4 from the Mac), headers
+//               X-TTS-Chars, X-TTS-Cache, X-TTS-Engine
 
 'use strict';
 
@@ -29,18 +36,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { dataFile } = require('./datafile');
 
-// gpt-4o-mini-tts: $0.60 / 1M text tokens in, $12 / 1M audio tokens out —
-// OpenAI's own estimate is ≈ $0.015 per spoken minute. Speech runs at about
-// 15 characters a second, so ≈ $0.0000167 per character. Only used for the
-// running estimate.
-const USD_PER_MINUTE = 0.015;
-const CHARS_PER_SECOND = 15;
-const USD_PER_CHAR = USD_PER_MINUTE / (60 * CHARS_PER_SECOND);
-
-const INSTRUCTIONS = `Voice: Mia, a calm, capable personal assistant — like Jarvis. Composed, warm but understated, quietly confident.
-Pacing: even and unhurried, slightly brisk; no long pauses.
-Tone: matter-of-fact. No excitement, no drama, no sing-song; a light, dry touch at most.
-Delivery: say exactly the text, clearly, as a brief spoken heads-up.`;
+const VOICE = 'Chatterbox Turbo (on the Mac)';
 
 const day = (t = Date.now()) => new Date(t).toISOString().slice(0, 10);
 
@@ -63,18 +59,15 @@ function trimText(text, max = 400) {
   return `${(sp > max * 0.5 ? cut.slice(0, sp) : cut).replace(/[\s,;:–—-]+$/, '')}…`;
 }
 
-function createTts({ tokenOk, env = process.env, log = console, fetchImpl = globalThis.fetch } = {}) {
-  const key = env.OPENAI_API_KEY || '';
-  const base = (env.OPENAI_BASE_URL || 'https://api.openai.com').replace(/\/+$/, '');
-  const model = env.TTS_MODEL || 'gpt-4o-mini-tts';
-  const voice = env.TTS_VOICE || env.REALTIME_VOICE || 'marin';
+function createTts({ tokenOk, sendToHost = () => false, hostOnline = () => false, hostCanSpeak = () => false, env = process.env, log = console } = {}) {
   const maxChars = Number(env.TTS_MAX_CHARS) || 400;
-  const dailyChars = Number(env.TTS_DAILY_CHARS) || 20000;
+  const dailyChars = Number(env.TTS_DAILY_CHARS) || 50000;
   const cacheMs = (Number(env.TTS_CACHE_SECONDS) || 600) * 1000;
+  const waitMs = Number(env.TTS_WAIT_MS) || 30000;
   const storePath = dataFile('tts-usage.json', { override: env.TTS_STORE, env, log, tag: 'tts' });
   const limits = { maxChars, dailyChars };
 
-  if (key) log.log(`tts: ${model} / ${voice}, ${dailyChars} chars/day · tally ${storePath}`);
+  log.log(`tts: made on the Mac (Chatterbox), ${dailyChars} chars/day · tally ${storePath}`);
 
   // ---- usage tally: { days: { 'YYYY-MM-DD': { requests, chars, cached, usd } } }
   let store = { days: {} };
@@ -107,12 +100,12 @@ function createTts({ tokenOk, env = process.env, log = console, fetchImpl = glob
   }
   function summary(d = day()) {
     const r = store.days[d] || { requests: 0, chars: 0, cached: 0, usd: 0 };
-    return { day: d, requests: r.requests, chars: r.chars, cached: r.cached, usd: Math.round(r.usd * 10000) / 10000 };
+    return { day: d, requests: r.requests, chars: r.chars, cached: r.cached, usd: Math.round((r.usd || 0) * 10000) / 10000 };
   }
 
-  // ---- short-lived cache: sha256(voice|model|text) → { buf, at }
+  // ---- short-lived cache: sha256(text) → { buf, mime, engine, at }
   const cache = new Map();
-  const hashOf = (text) => crypto.createHash('sha256').update(`${model}|${voice}|${text}`).digest('hex');
+  const hashOf = (text) => crypto.createHash('sha256').update(`mac|${text}`).digest('hex');
   function cacheGet(h) {
     const hit = cache.get(h);
     if (!hit) return null;
@@ -120,11 +113,52 @@ function createTts({ tokenOk, env = process.env, log = console, fetchImpl = glob
       cache.delete(h);
       return null;
     }
-    return hit.buf;
+    return hit;
   }
-  function cachePut(h, buf) {
-    cache.set(h, { buf, at: Date.now() });
+  function cachePut(h, rec) {
+    cache.set(h, { ...rec, at: Date.now() });
     for (const [k, v] of cache) if (cache.size > 40 || Date.now() - v.at > cacheMs) cache.delete(k);
+  }
+
+  // ---- requests waiting for the Mac: id → { resolve, timer }
+  const pending = new Map();
+  function askHost(text) {
+    return new Promise((resolve) => {
+      const id = crypto.randomBytes(8).toString('hex');
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        resolve({ ok: false, status: 504, detail: 'The Mac took too long to speak' });
+      }, waitMs);
+      timer.unref?.();
+      pending.set(id, { resolve, timer });
+      if (sendToHost({ type: 'tts', id, text }) === false) {
+        clearTimeout(timer);
+        pending.delete(id);
+        resolve({ ok: false, status: 503, detail: 'Mac is offline' });
+      }
+    });
+  }
+  // host → relay {type:"ttsDone", …}
+  function onHostFrame(frame) {
+    const p = pending.get(frame?.id);
+    if (!p) return;
+    pending.delete(frame.id);
+    clearTimeout(p.timer);
+    let buf = null;
+    try {
+      buf = frame.ok && typeof frame.audio === 'string' ? Buffer.from(frame.audio, 'base64') : null;
+    } catch {}
+    if (!buf || !buf.length) return p.resolve({ ok: false, status: 502, detail: frame.detail || 'The Mac could not make the audio' });
+    const mime = /^audio\/[\w.+-]+$/.test(frame.mime || '') ? frame.mime : 'audio/mp4';
+    p.resolve({ ok: true, buf, mime, engine: String(frame.engine || 'mac').replace(/[^\w.-]/g, '').slice(0, 20) });
+  }
+  // The Mac went away: everyone waiting gets the device voice now, not in 30 s.
+  function onHostGone() {
+    for (const [id, p] of pending) {
+      clearTimeout(p.timer);
+      p.resolve({ ok: false, status: 503, detail: 'Mac went offline' });
+      pending.delete(id);
+    }
   }
 
   function json(res, status, obj) {
@@ -154,66 +188,42 @@ function createTts({ tokenOk, env = process.env, log = console, fetchImpl = glob
     });
   }
 
+  function sendAudio(res, text, rec, cacheState) {
+    res.writeHead(200, {
+      'content-type': rec.mime,
+      'cache-control': 'no-store',
+      'content-length': String(rec.buf.length),
+      'x-tts-chars': String(text.length),
+      'x-tts-cache': cacheState,
+      'x-tts-engine': rec.engine,
+    });
+    res.end(rec.buf);
+  }
+
   async function speak(res, text) {
     const h = hashOf(text);
     const hit = cacheGet(h);
-    const head = (extra) => ({ 'content-type': 'audio/mpeg', 'cache-control': 'no-store', 'x-tts-chars': String(text.length), ...extra });
     if (hit) {
       dayRec(day()).cached += 1;
       save();
-      res.writeHead(200, head({ 'x-tts-cache': 'hit', 'content-length': String(hit.length) }));
-      return res.end(hit);
+      return sendAudio(res, text, hit, 'hit');
     }
+    if (!hostOnline()) return json(res, 503, { ok: false, error: 'Mac is offline' });
+    if (!hostCanSpeak()) return json(res, 501, { ok: false, error: 'This Mac app can’t speak yet (update Mission Control)' });
     const today = summary();
     if (today.chars + text.length > dailyChars) return json(res, 429, { ok: false, error: `Daily speech limit reached (${dailyChars} characters)` });
 
-    const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), 20000);
-    let r;
-    try {
-      r = await fetchImpl(`${base}/v1/audio/speech`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ model, voice, input: text, instructions: INSTRUCTIONS, response_format: 'mp3' }),
-        signal: ctl.signal,
-      });
-    } catch (e) {
-      clearTimeout(timer);
-      log.error('tts: request failed:', e.message);
-      return json(res, 502, { ok: false, error: `Speech failed: ${e.message}` });
+    const r = await askHost(text);
+    if (!r.ok) {
+      log.error('tts: the Mac did not speak:', r.detail);
+      return json(res, r.status, { ok: false, error: `Speech failed: ${r.detail}` });
     }
-    if (!r.ok || !r.body) {
-      clearTimeout(timer);
-      const data = await r.json().catch(() => ({}));
-      const msg = data?.error?.message || `status ${r.status}`;
-      log.error('tts: OpenAI refused:', msg);
-      return json(res, 502, { ok: false, error: `Speech failed: ${msg}` });
-    }
-    // Charged once OpenAI accepted it, whether or not the panel hears it all.
     const rec = dayRec(day());
     rec.requests += 1;
     rec.chars += text.length;
-    rec.usd += text.length * USD_PER_CHAR;
     save();
-
-    // Stream through to the panel while keeping a copy for the cache.
-    res.writeHead(200, head({ 'x-tts-cache': 'miss' }));
-    const parts = [];
-    let complete = false;
-    try {
-      for await (const chunk of r.body) {
-        const b = Buffer.from(chunk);
-        parts.push(b);
-        res.write(b);
-      }
-      complete = true;
-    } catch (e) {
-      log.error('tts: stream broke:', e.message);
-    } finally {
-      clearTimeout(timer);
-      res.end();
-    }
-    if (complete) cachePut(h, Buffer.concat(parts));
+    cachePut(h, r);
+    sendAudio(res, text, r, 'miss');
   }
 
   async function handle(req, res, url) {
@@ -223,24 +233,29 @@ function createTts({ tokenOk, env = process.env, log = console, fetchImpl = glob
 
     if (req.method === 'GET') {
       const days = Object.keys(store.days).sort().slice(-14).map((d) => summary(d));
-      return json(res, 200, { ok: true, available: !!key, model, voice, limits, today: summary(), days });
+      return json(res, 200, { ok: true, ...info(), days });
     }
     if (req.method === 'POST') {
       const body = await readJson(req);
       const text = trimText(body.text, maxChars);
       if (!text) return json(res, 400, { ok: false, error: 'no text' });
-      if (!key) return json(res, 503, { ok: false, error: 'OPENAI_API_KEY is not set on the relay' });
       return speak(res, text);
     }
     return json(res, 405, { ok: false, error: 'method not allowed' });
   }
 
+  function info() {
+    return { available: hostOnline() && hostCanSpeak(), engine: 'mac', voice: VOICE, limits, today: summary() };
+  }
+
   return {
     handle,
-    info: () => ({ available: !!key, model, voice, limits, today: summary() }),
+    onHostFrame,
+    onHostGone,
+    info,
     // Write a pending save now (SIGTERM on redeploy).
     close() { if (saveTimer) { clearTimeout(saveTimer); flushStore(); } },
   };
 }
 
-module.exports = { createTts, trimText, INSTRUCTIONS, USD_PER_CHAR };
+module.exports = { createTts, trimText };
