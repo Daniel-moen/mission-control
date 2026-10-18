@@ -17,6 +17,7 @@ import time
 import unittest
 import warnings
 
+sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 MIA = os.path.join(REPO, "scripts", "mia")

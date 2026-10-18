@@ -317,7 +317,8 @@ final class MiaManager: ObservableObject {
     /// The session to resume on this launch (task 0292), or nil for a fresh one.
     private func sessionToResume(_ state: [String: Any]) -> String? {
         guard core.reloadConfig().miaResume, !forceFresh,
-              let sid = state["lastSessionId"] as? String, !sid.isEmpty,
+              // sessionId: what an older build recorded before lastSessionId existed.
+              let sid = (state["lastSessionId"] as? String) ?? (state["sessionId"] as? String), !sid.isEmpty,
               (state["resumeFailed"] as? String) != sid,
               fm.fileExists(atPath: MiaCoreLink.transcriptPath(home: NSHomeDirectory(), cwd: dir, sessionId: sid))
         else { return nil }
