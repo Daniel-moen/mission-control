@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useMC, getMC, miaSend, miaAnswer, miaRead, VOICE_TAG, voiceText } from '../../lib/store.js';
 import {
-  openMic, takePrimed, primeTalk, transcribe, sttInfo, unlockSpeech, speak, stopSpeaking, listVoices, onVoices,
+  openMic, takePrimed, transcribe, sttInfo, unlockSpeech, stopSpeaking, listVoices, onVoices,
   ttsSupported, PAUSES,
 } from '../../lib/voice.js';
 import { useLocalStorage } from '../../lib/hooks.js';
@@ -11,33 +11,35 @@ import Button from '../../ui/Button.jsx';
 import Select from '../../ui/Select.jsx';
 import Segmented from '../../ui/Segmented.jsx';
 import { LABEL, HINT, isMiaMsg, micError, spokenFor, Orb, Line } from './TalkParts.jsx';
-import RealtimeTalk from './RealtimeTalk.jsx';
+import { speakMia, stopMia } from '../../lib/announce.js';
 import { consumeWake } from '../../lib/wake.js';
 import { talkPhase, registerEngine, getTalk } from '../../lib/talkSession.js';
 
-// TALK — hands-free conversation with Mia, in one of two engines (Settings ›
-// Voice, or the switch in the talk controls): Realtime (RealtimeTalk.jsx —
-// OpenAI speech-to-speech that hands the work to Mia) or Basic, below. Basic
-// is also where Realtime falls back to when it can't start or drops.
+// TALK — hands-free conversation with Mia. It never uses OpenAI (task 0290:
+// the Realtime engine, RealtimeTalk.jsx, is no longer reachable from here —
+// OpenAI is out of credit and Basic is free).
 //
-// BASIC — one tap opens the mic and it stays
-// open: Daniel talks, a pause ends his turn, the relay transcribes it (stt.js)
-// and it goes to Mia as an ordinary message tagged "(voice)". Whatever Mia says
-// back while talk mode is on is read aloud, then the panel listens again.
-// Talking over her (or tapping the orb) stops her mid-sentence.
+// One tap opens the mic and it stays
+// open: Daniel talks, a pause ends his turn, the relay transcribes it (stt.js,
+// whisper.cpp on the relay) and it goes to Mia as an ordinary message tagged
+// "(voice)". Whatever Mia says back while talk mode is on is read aloud in her
+// own voice — the relay's /tts, made on the Mac (Kokoro, af_heart), first
+// sentence first (announce.js speakMia); the device voice only when that
+// fails — then the panel listens again. Talking over her (or tapping the orb)
+// stops her mid-sentence.
 //
 // Phases: starting → listening ⇄ hearing → transcribing → thinking → speaking
 // → listening …, plus paused (mic muted by a tap), interrupted (iOS took the
 // audio session away — a tap brings it back) and error.
 
-function BasicTalk({ mia, onExit, media = null, fellBack = '' }) {
+function BasicTalk({ mia, onExit }) {
   const link = useMC((s) => s.link);
   const local = useMC((s) => s.miaLocal);
 
   const [phase, setPhaseState] = useState('starting');
   const levels = useRef(new Set()).current;
   const [error, setError] = useState('');
-  const [note, setNote] = useState(fellBack ? `Realtime voice unavailable (${fellBack}) — using the basic voice.` : ''); // transient line under the orb
+  const [note, setNote] = useState(''); // transient line under the orb
   const [heard, setHeard] = useState([]); // turns awaiting transcription/echo
   const [speakingId, setSpeakingId] = useState('');
   const [stt, setStt] = useState(undefined); // undefined = checking, null = unavailable
@@ -47,7 +49,6 @@ function BasicTalk({ mia, onExit, media = null, fellBack = '' }) {
 
   const phaseRef = useRef('starting');
   const mic = useRef(null);
-  const handed = useRef(media);
   const seen = useRef(null); // Mia message ids that existed before / were handled
   const queue = useRef([]); // Mia messages waiting to be spoken
   const awaiting = useRef(false); // a turn went out and Mia hasn't answered
@@ -87,7 +88,7 @@ function BasicTalk({ mia, onExit, media = null, fellBack = '' }) {
     lastQ.current = m.kind === 'question' && m.questionId ? m : null;
     setSpeakingId(m.id || '');
     setPhase('speaking');
-    await speak(spokenFor(m), { voiceURI: opts.current.voiceURI });
+    await speakMia(spokenFor(m), { voiceURI: opts.current.voiceURI });
     if (!alive.current) return;
     setSpeakingId('');
     if (phaseRef.current === 'speaking') {
@@ -97,6 +98,7 @@ function BasicTalk({ mia, onExit, media = null, fellBack = '' }) {
   }
 
   function bargeIn() {
+    stopMia();
     stopSpeaking();
     queue.current = [];
     setSpeakingId('');
@@ -161,16 +163,15 @@ function BasicTalk({ mia, onExit, media = null, fellBack = '' }) {
       onState: (s) => {
         if (!alive.current) return;
         if (s === 'interrupted' && phaseRef.current !== 'paused') {
+          stopMia();
           stopSpeaking();
           setPhase('interrupted');
         }
       },
     };
-    // First start: adopt the mic the Talk tap already opened (or the one the
-    // realtime view handed over when it failed). A retry from the orb is its
-    // own tap, so opening fresh there is fine.
-    const primed = handed.current || takePrimed();
-    handed.current = null;
+    // First start: adopt the mic the Talk tap already opened. A retry from the
+    // orb is its own tap, so opening fresh there is fine.
+    const primed = takePrimed();
     consumeWake(); // basic has no greeting; just clear the flag
     if (!primed) unlockSpeech();
     try {
@@ -233,6 +234,7 @@ function BasicTalk({ mia, onExit, media = null, fellBack = '' }) {
       alive.current = false;
       clearTimeout(noteTimer.current);
       clearTimeout(thinkTimer.current);
+      stopMia();
       stopSpeaking();
       mic.current?.close();
       mic.current = null;
@@ -248,6 +250,7 @@ function BasicTalk({ mia, onExit, media = null, fellBack = '' }) {
   useEffect(() => {
     const on = () => {
       if (document.visibilityState !== 'visible') {
+        stopMia();
         stopSpeaking();
         return;
       }
@@ -323,9 +326,7 @@ function BasicTalk({ mia, onExit, media = null, fellBack = '' }) {
           : 'Reconnecting…'
         : mia && !mia.enabled
           ? 'Mia is off — what you say waits for her.'
-          : !ttsSupported
-            ? 'This browser can’t speak — Mia’s replies show here as text.'
-            : '';
+          : '';
 
   const voiceOptions = [{ value: '', label: 'Auto voice' }, ...voices.slice(0, 12).map((v) => ({ value: v.voiceURI, label: v.name }))];
 
@@ -385,9 +386,8 @@ function BasicTalk({ mia, onExit, media = null, fellBack = '' }) {
             ]}
           />
           {ttsSupported && voices.length > 1 && (
-            <Select className="w-[150px]" aria-label="Mia's voice" value={voiceURI} onChange={setVoiceURI} options={voiceOptions} />
+            <Select className="w-[150px]" aria-label="Fallback voice" value={voiceURI} onChange={setVoiceURI} options={voiceOptions} />
           )}
-          <EngineSwitch />
           <Button variant="danger" icon="close" onClick={onExit}>
             End
           </Button>
@@ -398,42 +398,8 @@ function BasicTalk({ mia, onExit, media = null, fellBack = '' }) {
 }
 
 
-// Realtime (OpenAI speech-to-speech, hands jobs to Mia) or Basic (whisper on
-// the relay + the device's own voice). Realtime falls back to Basic by itself
-// when it can't start or drops, handing over the mic it already holds.
-export const ENGINE_KEY = 'mc.talk.engine';
-
-function EngineSwitch() {
-  const [engine, setEngine] = useLocalStorage(ENGINE_KEY, 'realtime');
-  return (
-    <Segmented
-      value={engine}
-      onChange={(v) => {
-        if (v === engine) return;
-        primeTalk(); // the tap re-arms mic + audio for the engine that mounts next
-        setEngine(v);
-        window.dispatchEvent(new CustomEvent('mc:talk-engine', { detail: v }));
-      }}
-      options={[
-        { value: 'realtime', label: 'Realtime' },
-        { value: 'basic', label: 'Basic' },
-      ]}
-    />
-  );
-}
-
+// Talk is Basic only. An old 'realtime' choice saved on a device (mc.talk.engine)
+// is ignored, so nothing here can open an OpenAI session.
 export default function Talk({ mia, onExit }) {
-  const [engine, setEngine] = useLocalStorage(ENGINE_KEY, 'realtime');
-  const [fallback, setFallback] = useState(null); // { reason, media }
-  useEffect(() => {
-    const on = (e) => {
-      setFallback(null);
-      setEngine(e.detail);
-    };
-    window.addEventListener('mc:talk-engine', on);
-    return () => window.removeEventListener('mc:talk-engine', on);
-  }, [setEngine]);
-  if (engine === 'realtime' && !fallback)
-    return <RealtimeTalk mia={mia} onExit={onExit} onFallback={(reason, media) => setFallback({ reason, media })} switcher={<EngineSwitch />} />;
-  return <BasicTalk key={fallback ? 'fb' : 'basic'} mia={mia} onExit={onExit} media={fallback?.media} fellBack={fallback?.reason} />;
+  return <BasicTalk mia={mia} onExit={onExit} />;
 }

@@ -36,7 +36,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { dataFile } = require('./datafile');
 
-const VOICE = 'Chatterbox Turbo (on the Mac)';
+const VOICE = 'Kokoro (Heart)';
 
 const day = (t = Date.now()) => new Date(t).toISOString().slice(0, 10);
 
@@ -67,7 +67,7 @@ function createTts({ tokenOk, sendToHost = () => false, hostOnline = () => false
   const storePath = dataFile('tts-usage.json', { override: env.TTS_STORE, env, log, tag: 'tts' });
   const limits = { maxChars, dailyChars };
 
-  log.log(`tts: made on the Mac (Chatterbox), ${dailyChars} chars/day · tally ${storePath}`);
+  log.log(`tts: made on the Mac (${VOICE}), ${dailyChars} chars/day · tally ${storePath}`);
 
   // ---- usage tally: { days: { 'YYYY-MM-DD': { requests, chars, cached, usd } } }
   let store = { days: {} };

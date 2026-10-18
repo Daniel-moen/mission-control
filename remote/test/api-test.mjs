@@ -456,7 +456,7 @@ async function main() {
     ok((await say('Hello', { authorization: 'Bearer nope' })).status === 401, 'a wrong token is a 401 too');
     ok((await fetch(TTS)).status === 401, 'GET /tts needs the token');
     const info = await (await fetch(TTS, { headers: bearer })).json();
-    ok(info.ok && info.available && info.engine === 'mac' && /Chatterbox/.test(info.voice), 'GET /tts: available, made on the Mac (Chatterbox)');
+    ok(info.ok && info.available && info.engine === 'mac' && /Kokoro \(Heart\)/.test(info.voice), 'GET /tts: available, made on the Mac (Kokoro Heart)');
     ok(info.limits.maxChars === 400 && info.limits.dailyChars === 1000, 'GET /tts: length cap 400, daily cap from TTS_DAILY_CHARS');
 
     const openaiBefore = openaiSeen.filter((x) => x.url === '/v1/audio/speech').length;

@@ -3,7 +3,7 @@ import { getMC } from './store.js';
 import { getTalk } from './talkSession.js';
 import { speak, stopSpeaking, unlockSpeech, newAudioContext, ttsSupported, blessedAudio } from './voice.js';
 import { spokenFor, isMiaMsg } from '../views/mia/TalkParts.jsx';
-import { speakable, firstSentences } from './spoken.js';
+import { speakable, firstSentences, ttsParts } from './spoken.js';
 
 // ANNOUNCEMENTS — Mia speaks up on an open panel even when talk mode is off
 // ("Hey Daniel, I have a question for you…"), docs/mia.md §8.3.
@@ -22,7 +22,7 @@ import { speakable, firstSentences } from './spoken.js';
 // the one Daniel is using (store.panelPrimary).
 //
 // The words are spoken in Mia's own voice: the relay's POST /tts (tts.js) has
-// the Mac make the audio (Chatterbox Turbo, Kokoro fallback; task 0287) and
+// the Mac make the audio (Kokoro, voice af_heart; task 0287) and
 // returns it to play through an <audio> element blessed on the first tap. If
 // /tts fails (Mac offline, daily cap, slow) the device's speechSynthesis reads
 // it instead.
@@ -169,7 +169,7 @@ function stopAll() {
 
 // Fetch the audio for `text` → a blob URL, or null (Mac offline, cap, slow).
 // The Mac usually answers in 2–4 s; a long announcement can take longer.
-async function fetchTts(text, { timeoutMs = 20000 } = {}) {
+export async function fetchTts(text, { timeoutMs = 20000 } = {}) {
   const token = getMC().token;
   if (!token) return null;
   const ctl = new AbortController();
@@ -193,7 +193,7 @@ async function fetchTts(text, { timeoutMs = 20000 } = {}) {
 
 // Play a blob URL on the blessed element. → true when it played to the end
 // (or was stopped), false when it couldn't start (then the device voice speaks).
-function playUrl(url) {
+export function playUrl(url) {
   return new Promise((resolve) => {
     const a = player;
     if (!a) return resolve(false);
@@ -242,6 +242,44 @@ async function play(msg, text) {
   const next = queue.shift();
   if (next) play(next.msg, next.text);
   else show({ msg, text, state: 'said', at: Date.now() });
+}
+
+// ---- talk mode: Mia's replies in her own voice (task 0290) ------------------------
+// Talk mode never uses OpenAI. Each reply is cut into /tts-sized pieces
+// (ttsParts), the first sentence on its own: it's fetched first and plays as
+// soon as it's back while the next piece is already being made. A piece /tts
+// can't make (Mac offline, daily cap, slow) is read by the device voice — the
+// last resort, not the default. → true when it finished, false if stopped.
+let talkGen = 0;
+export async function speakMia(text, { voiceURI = '' } = {}) {
+  const gen = ++talkGen;
+  const parts = ttsParts(text);
+  const audio = [];
+  const want = (i) => {
+    if (i < parts.length && !audio[i]) audio[i] = player && getMC().token ? fetchTts(parts[i], { timeoutMs: i ? 30000 : 12000 }) : Promise.resolve(null);
+    return audio[i];
+  };
+  const drop = (from) => audio.slice(from).forEach((p) => p?.then((u) => u && URL.revokeObjectURL(u)));
+  for (let i = 0; i < parts.length; i++) {
+    const url = await want(i);
+    want(i + 1); // the next piece is made while this one plays
+    if (gen !== talkGen) {
+      if (url) URL.revokeObjectURL(url);
+      drop(i + 1);
+      return false;
+    }
+    const played = url ? await playUrl(url) : false;
+    if (gen !== talkGen) {
+      drop(i + 1);
+      return false;
+    }
+    if (!played && !(await speak(parts[i], { voiceURI })) && gen !== talkGen) return false;
+  }
+  return gen === talkGen;
+}
+export function stopMia() {
+  talkGen += 1;
+  stopAll();
 }
 
 // A link Mia opened that the browser blocked (no tap): offered in the pill.

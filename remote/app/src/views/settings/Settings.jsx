@@ -6,8 +6,6 @@ import Sheet from '../../ui/Sheet.jsx';
 import Button from '../../ui/Button.jsx';
 import Icon from '../../ui/Icon.jsx';
 import { spring } from '../../lib/motion.js';
-import { useLocalStorage } from '../../lib/hooks.js';
-import { realtimeInfo, QUALITY_KEY, TRANSCRIPT_KEY } from '../../lib/realtime.js';
 import Segmented from '../../ui/Segmented.jsx';
 import { WakeToggle, WAKE_HINT } from '../mia/Wake.jsx';
 import { wakeSupported } from '../../lib/wake.js';
@@ -67,9 +65,7 @@ function Row({ label, hint, children, last = false }) {
   );
 }
 
-// Talk mode's engine (views/mia/Talk.jsx reads the same key) and the relay's
-// running tallies of realtime minutes and announcement speech (/tts, made on
-// the Mac).
+// The relay's /tts: Mia's own voice, made on the Mac, and today's tally.
 async function ttsInfo(token) {
   try {
     const r = await fetch('/tts', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
@@ -82,105 +78,48 @@ async function ttsInfo(token) {
 
 function VoiceSection() {
   const token = useMC((s) => s.token);
-  const [engine, setEngine] = useLocalStorage('mc.talk.engine', 'realtime');
-  const [quality, setQuality] = useLocalStorage(QUALITY_KEY, 'standard');
-  const [transcript, setTranscript] = useLocalStorage(TRANSCRIPT_KEY, false);
-  const [info, setInfo] = useState(undefined);
-  const [tts, setTts] = useState(null);
+  const [tts, setTts] = useState(undefined);
   useEffect(() => {
     let dead = false;
-    realtimeInfo(token).then((i) => !dead && setInfo(i));
     ttsInfo(token).then((i) => !dead && setTts(i));
     return () => {
       dead = true;
     };
   }, [token]);
-  const today = info?.today;
-  const week = info?.week;
-  const usage = today ? `${today.minutes} min · ${today.sessions} session${today.sessions === 1 ? '' : 's'} · ≈ $${today.usd.toFixed(2)}` : '';
-  const weekUsage = week ? `${week.minutes} min · ${week.sessions} session${week.sessions === 1 ? '' : 's'} · ≈ $${week.usd.toFixed(2)}` : '';
-  const budget = info?.budget;
-  const models = info?.models || {};
-  const hint =
-    info === undefined
-      ? 'Checking the relay…'
-      : !info
-        ? 'Couldn’t reach the relay.'
-        : !info.available
-          ? 'Realtime needs OPENAI_API_KEY on the relay — Basic is used until then.'
-          : `Realtime: natural voice (${info.voice}), hands jobs to Mia. Basic: free, on-device voice + whisper on the relay. Realtime falls back to Basic by itself.`;
+  // Talk mode never uses OpenAI (task 0290): whisper.cpp on the relay hears
+  // Daniel, Mia answers in her own voice made on the Mac, the device voice only
+  // when the Mac can't. No Realtime engine, no OpenAI calls from this page.
+  const voice = tts?.voice || 'Kokoro (Heart)';
   return (
     <Section title="Voice">
-      <Row label="Talk engine" hint={hint} last={!info?.available}>
-        <Segmented
-          value={engine}
-          onChange={setEngine}
-          options={[
-            { value: 'realtime', label: 'Realtime' },
-            { value: 'basic', label: 'Basic' },
-          ]}
-        />
+      <Row
+        label="Talk mode"
+        hint={`Free and local: whisper on the relay hears you, Mia answers in her own voice — ${voice}, made on the Mac — first sentence first. The device voice only if the Mac can’t. OpenAI Realtime is off.`}
+      >
+        <span className="text-[12.5px] font-medium text-ink" data-talk-engine="basic">
+          Basic
+        </span>
       </Row>
       {wakeSupported && (
         <Row label="Wake word" hint={WAKE_HINT}>
           <WakeToggle />
         </Row>
       )}
-      {info?.available && (
-        <>
-          <Row
-            label="Voice quality"
-            hint={`Standard (${models.standard || 'mini'}) costs about a third of Premium (${models.premium || 'gpt-realtime-2.1'}). Applies from the next call.`}
-          >
-            <Segmented
-              value={quality === 'premium' ? 'premium' : 'standard'}
-              onChange={setQuality}
-              options={[
-                { value: 'standard', label: 'Standard' },
-                { value: 'premium', label: 'Premium' },
-              ]}
-            />
-          </Row>
-          <Row label="Show what I say" hint="Writes your words on screen during a realtime call. Transcription is billed separately, so it’s off by default.">
-            <Segmented
-              value={transcript === true ? 'on' : 'off'}
-              onChange={(v) => setTranscript(v === 'on')}
-              options={[
-                { value: 'off', label: 'Off' },
-                { value: 'on', label: 'On' },
-              ]}
-            />
-          </Row>
-          <Row
-            label="Realtime today"
-            hint={`Ends after ${info.limits.idleSeconds}s of quiet, when the app is hidden, or at ${Math.round(info.limits.maxSeconds / 60)} min.${
-              budget ? ` Daily budget $${budget.cap.toFixed(2)} — past it, the basic voice.` : ''
-            }`}
-          >
-            <span className={`tnum font-mono text-[12.5px] ${budget?.warn ? 'text-warn' : 'text-ink'}`} data-rt-usage>
-              {usage}
-            </span>
-          </Row>
-          {week && (
-            <Row label="Last 7 days" hint={week.days.filter((d) => d.sessions).map((d) => `${d.day.slice(5)} $${d.usd.toFixed(2)}`).join(' · ') || 'No calls yet.'} last={!tts?.available}>
-              <span className="tnum font-mono text-[12.5px] text-ink" data-rt-week>
-                {weekUsage}
-              </span>
-            </Row>
-          )}
-        </>
-      )}
-      {tts?.available && (
-        <Row
-          label="Announcement voice"
-          hint={`Spoken in Mia’s own voice (${tts.voice}), made locally and free. Up to ${tts.limits.maxChars} characters each, ${tts.limits.dailyChars.toLocaleString()} a day — past that, or with the Mac offline, the device voice.`}
-          last
-        >
-          <span className="tnum font-mono text-[12.5px] text-ink" data-tts-usage>
-            {`${tts.today.requests} said · ${tts.today.chars.toLocaleString()} chars`}
-          </span>
-        </Row>
-      )}
+      <Row
+        label="Mia’s voice"
+        hint={
+          tts === undefined
+            ? 'Checking the relay…'
+            : tts?.available
+              ? `${voice}, made on the Mac and free — for talk mode and announcements. Up to ${tts.limits.maxChars} characters a piece, ${tts.limits.dailyChars.toLocaleString()} a day — past that, or with the Mac offline, the device voice.`
+              : 'The Mac can’t make speech right now — the device voice is used until it can.'
+        }
+        last
+      >
+        <span className="tnum font-mono text-[12.5px] text-ink" data-tts-usage>
+          {tts?.today ? `${tts.today.requests} said · ${tts.today.chars.toLocaleString()} chars` : tts?.available === false ? 'device voice' : ''}
+        </span>
+      </Row>
     </Section>
   );
 }

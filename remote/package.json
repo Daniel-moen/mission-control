@@ -10,7 +10,6 @@
     "start": "node server.js",
     "test:wire": "node test/wire-test.mjs",
     "test:api": "node test/api-test.mjs",
-    "test:realtime": "node test/realtime-e2e.mjs",
     "test:panel": "node test/panel-e2e.mjs",
     "test:upload": "node test/upload-test.mjs",
     "test:upload-panel": "node test/upload-panel-e2e.mjs",

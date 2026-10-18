@@ -16,6 +16,10 @@
 //     the doc into the chat; the message Mia gets carries id, title and path
 //   • chat clip → Reports → pick → chip → send
 //   • no sideways scroll, zero console errors
+//   • talk mode never uses OpenAI: Basic even with an old 'realtime' choice
+//     saved, Mia's reply spoken through /tts (the Mac's Kokoro voice) first
+//     sentence first, the device voice only when /tts fails; Settings › Voice
+//     has no Realtime engine
 
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -246,7 +250,98 @@ async function main() {
   ok((await p.locator('[data-usage="crit"]').count()) === 1, 'the pill opens Fleet’s meter, red');
   await api('PUT', '/api/v1/usage', usageBody(40, 50));
   await p.context().close();
+
+  await talkNoOpenAI(browser);
   await browser.close();
+}
+
+// ---- talk mode: never OpenAI, Mia's own voice first ----------------------------------
+const TALK_INIT = () => {
+  navigator.mediaDevices.getUserMedia = async () => {
+    const ctx = new AudioContext();
+    const d = ctx.createMediaStreamDestination();
+    const o = ctx.createOscillator();
+    o.connect(d);
+    o.start();
+    return d.stream;
+  };
+  window.__said = [];
+  Object.defineProperty(window, 'speechSynthesis', {
+    configurable: true,
+    value: {
+      paused: false, speaking: false, cancel() {}, resume() {}, getVoices: () => [], addEventListener() {}, removeEventListener() {},
+      speak(u) { if (String(u.text).trim()) window.__said.push(u.text); setTimeout(() => u.onend && u.onend(), 30); },
+    },
+  });
+  // The /tts audio "plays" for 120 ms (headless Chromium can't decode the fake bytes).
+  window.__played = [];
+  const play = HTMLMediaElement.prototype.play;
+  HTMLMediaElement.prototype.play = function () {
+    if (!String(this.src).startsWith('blob:')) return play.call(this);
+    window.__played.push({ src: this.src, at: performance.now() });
+    setTimeout(() => this.dispatchEvent(new Event('ended')), 120);
+    return Promise.resolve();
+  };
+};
+
+async function talkNoOpenAI(browser) {
+  console.log('Talk mode: never OpenAI, Mia’s own voice');
+  const ctx = await browser.newContext({ viewport: { width: 1180, height: 820 }, hasTouch: true });
+  await ctx.addInitScript(TALK_INIT);
+  // A device that chose Realtime before 0290.
+  await ctx.addInitScript(() => { try { localStorage.setItem('mc.talk.engine', JSON.stringify('realtime')); } catch {} });
+  const page = await ctx.newPage();
+  page.errors = [];
+  page.on('pageerror', (e) => page.errors.push(`pageerror: ${e.message}`));
+  const openai = [];
+  page.on('request', (r) => { if (/\/realtime|openai\.com/.test(r.url())) openai.push(`${r.method()} ${r.url()}`); });
+  const tts = [];
+  let ttsFails = false;
+  await page.route('**/tts', async (r) => {
+    if (r.request().method() !== 'POST') return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, available: true, engine: 'mac', voice: 'Kokoro (Heart)', limits: { maxChars: 400, dailyChars: 50000 }, today: { requests: 0, chars: 0 } }) });
+    const text = JSON.parse(r.request().postData() || '{}').text || '';
+    tts.push({ text, at: Date.now() });
+    if (ttsFails) return r.fulfill({ status: 503, contentType: 'application/json', body: '{"ok":false}' });
+    await sleep(tts.length === 1 ? 150 : 400);
+    return r.fulfill({ status: 200, contentType: 'audio/mp4', body: Buffer.from(`fake-m4a:${text}`) });
+  });
+  await page.goto(`${BASE}/?token=${TOKEN}#mia`);
+  await page.waitForSelector('[aria-label="Live"]', { timeout: 15000, state: 'attached' });
+  await sleep(1200);
+  await page.mouse.click(5, 300); // a tap: unlocks audio like Daniel's first touch
+  await page.getByRole('button', { name: 'Talk', exact: true }).first().click();
+  const phase = () => page.getAttribute('[data-talk]', 'data-talk').catch(() => null);
+  ok(await until(async () => ['listening', 'thinking'].includes(await phase()), 8000, 'talk').then(() => true, () => false), `talk opens in Basic with a saved 'realtime' choice (phase ${await phase()})`);
+  ok(!(await page.locator('[data-talk] button', { hasText: /^Realtime$/ }).count()), 'no Realtime switch in the talk controls');
+
+  const long = 'Your build finished and every check passed on the first run. ' +
+    'I also tidied the three reports you asked about, filed them in the Library, and flagged the one that still needs a decision from you. ' +
+    'Nothing else is waiting; the fleet is quiet and the usage meter is well under the limit for this session and the week. ' +
+    'If you want, I can start on the Phoenix intro next, or hold until you have looked at the flagged report.';
+  fs.appendFileSync(path.join(MIA_DIR, 'messages.jsonl'), JSON.stringify({ id: 't_1', at: new Date().toISOString(), from: 'mia', kind: 'chat', text: long }) + '\n');
+  await until(async () => (await page.evaluate(() => window.__played.length)) >= 2 && (await phase()) !== 'speaking', 15000, 'spoken').catch(() => {});
+  const played = await page.evaluate(() => window.__played.length);
+  const said = await page.evaluate(() => window.__said.slice());
+  ok(tts.length >= 2 && tts[0].text === 'Your build finished and every check passed on the first run.', `Mia’s reply goes to /tts, the first sentence on its own first (${tts.length} pieces: ${JSON.stringify(tts[0]?.text)})`);
+  ok(tts.every((t) => t.text.length <= 400) && tts.map((t) => t.text).join(' ').includes('flagged report'), 'the rest follows in /tts-sized pieces, nothing dropped');
+  ok(played === tts.length, `every piece is played in Mia’s own voice (${played}/${tts.length})`);
+  ok(!said.some((t) => /build finished|Phoenix/.test(t)), `the device voice stays quiet while /tts works (${JSON.stringify(said)})`);
+
+  ttsFails = true;
+  fs.appendFileSync(path.join(MIA_DIR, 'messages.jsonl'), JSON.stringify({ id: 't_2', at: new Date().toISOString(), from: 'mia', kind: 'chat', text: 'Mac voice is down, so this comes from the device.' }) + '\n');
+  await until(async () => (await page.evaluate(() => window.__said.slice())).some((t) => /Mac voice is down/.test(t)), 8000, 'fallback').catch(() => {});
+  ok((await page.evaluate(() => window.__said.slice())).some((t) => /Mac voice is down/.test(t)), 'when /tts fails, the device voice reads it (last resort)');
+
+  await page.getByRole('button', { name: 'End', exact: true }).click().catch(() => {});
+  await sleep(400);
+  await page.evaluate(() => { location.hash = 'settings'; });
+  await sleep(1200);
+  const body = await page.evaluate(() => document.body.innerText);
+  ok((await page.locator('[data-talk-engine="basic"]').count()) === 1 && /OpenAI Realtime is off/.test(body), 'Settings › Voice: talk mode is Basic, OpenAI Realtime off');
+  ok(!(await page.getByRole('button', { name: 'Realtime', exact: true }).count()) && /Kokoro \(Heart\)/.test(body), 'no Realtime engine to pick; Mia’s voice reads Kokoro (Heart)');
+  ok(openai.length === 0, `no request to /realtime or OpenAI at all (${openai.join(', ')})`);
+  ok(!page.errors.length, `talk: no page errors (${page.errors.join(' | ')})`);
+  await ctx.close();
 }
 
 const cleanup = () => {
