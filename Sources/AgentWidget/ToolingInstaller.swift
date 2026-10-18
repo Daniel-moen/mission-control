@@ -11,12 +11,12 @@ import Foundation
 /// touches nothing.
 ///
 /// The embedded strings mirror, byte for byte, `scripts/mc-doc`, `scripts/mia`,
-/// `scripts/mia-jarvis`
+/// `scripts/mia-jarvis`, `scripts/mia-core`
 /// and `skills/mission-control-library/SKILL.md` in the repo (the short Mia
 /// skill lives only here). Those are the
 /// readable, testable source of truth; the app ships as a bundle, so a copy has
-/// to live in the binary. Edit the repo files and regenerate — do not let the
-/// two diverge.
+/// to live in the binary. Edit the repo files and regenerate with
+/// `python3 scripts/sync-tooling` — do not let the two diverge.
 enum ToolingInstaller {
     static func install() {
         // Off the main thread: this does filesystem work at launch and the only
@@ -31,6 +31,8 @@ enum ToolingInstaller {
                         name: "mia", body: mia, executable: true)
             installFile(dir: home + "/.mission-control/bin",
                         name: "mia-jarvis", body: miaJarvis, executable: true)
+            installFile(dir: home + "/.mission-control/bin",
+                        name: "mia-core", body: miaCore, executable: true)
             installFile(dir: home + "/.claude/skills/mission-control-mia",
                         name: "SKILL.md", body: miaSkill, executable: false)
         }
@@ -1651,7 +1653,7 @@ TIERS = ["cheap", "mid", "smart"]
 DEFAULT_TIER_MODELS = {"cheap": "claude-haiku-5-5", "mid": "claude-sonnet-5-5",
                        "smart": "claude-opus-5-5"}
 DEFAULT_KINDS = {}
-for _tier, _kinds in (("cheap", "scout summary triage classify stats health"),
+for _tier, _kinds in (("cheap", "scout summary triage classify stats health heartbeat inbox"),
                       ("mid", "research fix docs content refresh"),
                       ("smart", "build design release verify review")):
     for _k in _kinds.split():
@@ -1709,8 +1711,10 @@ def resolve_route(model=None, tier=None, kind=None):
     return tier, kind, model or tiers[tier]
 
 
-def dispatch_locked(t, brief, d, tier=None, kind=None, model=None):
-    """Write the brief + dispatch request for task t. Caller holds Lock()."""
+def dispatch_locked(t, brief, d, tier=None, kind=None, model=None, headless=False):
+    """Write the brief + dispatch request for task t. Caller holds Lock().
+    headless: no dispatch file — the caller hands the job to mia-core
+    (core_enqueue) once the lock is released."""
     tid = t["id"]
     if not d:
         die("task %s has no folder; pass --dir" % tid)
@@ -1723,9 +1727,14 @@ def dispatch_locked(t, brief, d, tier=None, kind=None, model=None):
     if tier or kind:
         req["tier"] = tier
         req["kind"] = kind
-    write_json(os.path.join(DISPATCH, tid + ".json"), req)
+    if not headless:
+        write_json(os.path.join(DISPATCH, tid + ".json"), req)
+    else:
+        # In the executor pipeline now (the app does this on pickup for a
+        # WezTerm dispatch); `mia jobs` says if it is still waiting for a slot.
+        t["status"] = "running"
     t["dir"] = d
-    line = "Dispatch requested in " + d
+    line = ("Queued for a headless executor in " if headless else "Dispatch requested in ") + d
     if tier:
         line += " (%s \u00b7 %s)" % (tier, model)
         prev = t.get("routing") if isinstance(t.get("routing"), dict) else {}
@@ -1736,6 +1745,70 @@ def dispatch_locked(t, brief, d, tier=None, kind=None, model=None):
     t.setdefault("log", []).append({"at": req["at"], "text": line})
     save_task(t)
     return d
+
+
+# ---- mia-core: the job engine (Mia v2, task 0292) ----------------------------
+# With "headless" on in $MIA_DIR/core.json, dispatches go into mia-core's
+# SQLite queue and run as `claude -p` instead of a WezTerm tab, and `mia tell`
+# resumes the executor's session. Off (the default), nothing here changes.
+
+CORE_CONFIG = os.path.join(D, "core.json")
+
+
+def core_config():
+    c = read_json(CORE_CONFIG, {})
+    return c if isinstance(c, dict) else {}
+
+
+def core_script():
+    me = os.environ.get("MIA_SELF") or ""
+    for c in (os.path.join(os.path.dirname(os.path.realpath(me)), "mia-core") if me else "",
+              os.path.expanduser("~/.mission-control/bin/mia-core")):
+        if c and os.path.isfile(c):
+            return c
+    die("mia-core is not installed next to mia (update Mission Control)")
+
+
+def core_run(args, stdin=None):
+    import subprocess
+    p = subprocess.run(["python3", core_script()] + list(args), input=stdin,
+                       capture_output=True, text=True)
+    if p.returncode != 0:
+        die((p.stderr or p.stdout).strip().replace("mia-core: ", "") or "mia-core failed")
+    return p.stdout
+
+
+def core_enqueue(tid, d, brief_path, model, kind, tier, priority, urgent=False):
+    """Queue the task's executor in mia-core. Returns the job JSON."""
+    args = ["enqueue", "--task", tid, "--dir", d, "--prompt-file", brief_path,
+            "--priority", str(priority), "--json"]
+    if not model:
+        # Same default as a WezTerm dispatch: Mia's own model.
+        model = (read_json(STATE, {}) or {}).get("model") or None
+    if model:
+        args += ["--model", model]
+    if kind:
+        args += ["--kind", kind]
+    if tier:
+        args += ["--tier", tier]
+    if urgent:
+        args.append("--urgent")
+    return json.loads(core_run(args))
+
+
+def guess_route(t, brief):
+    """routeByDefault: a dispatch with no --model/--tier/--kind gets a kind
+    guessed from its title and brief (mia-core guess-kind)."""
+    text = (t.get("title") or "") + "\n" + brief[:4000]
+    return core_run(["guess-kind", text]).strip() or None
+
+
+def cmd_core(args):
+    os.execvp("python3", ["python3", core_script()] + list(args))
+
+
+def cmd_jobs(args):
+    cmd_core(["jobs"] + list(args))
 
 
 # ---- Jarvis registry lookups -------------------------------------------------
@@ -1912,12 +1985,12 @@ def cmd_task(args):
 
 def cmd_dispatch(args):
     pos, o = parse(args, {"--dir": True, "--model": True, "--tier": True, "--kind": True,
-                          "--brief-file": True, "--stdin": False})
+                          "--brief-file": True, "--stdin": False, "--urgent": False,
+                          "--legacy": False})
     if len(pos) != 1:
         die("usage: mia dispatch <id> [--dir <d>] [--tier cheap|mid|smart] [--kind <k>] "
-            "[--model <m>] --brief-file <f> | --stdin")
+            "[--model <m>] [--urgent] [--legacy] --brief-file <f> | --stdin")
     tid = norm_id(pos[0])
-    tier, kind, model = resolve_route(o.get("--model"), o.get("--tier"), o.get("--kind"))
     if o.get("--stdin"):
         brief = sys.stdin.read()
     elif o.get("--brief-file"):
@@ -1926,10 +1999,27 @@ def cmd_dispatch(args):
         die("give the brief with --brief-file <f> or --stdin")
     if not brief.strip():
         die("the brief is empty")
+    cc = core_config()
+    kind_flag = o.get("--kind")
+    guessed = False
+    if cc.get("routeByDefault") and not (o.get("--model") or o.get("--tier") or kind_flag):
+        kind_flag = guess_route(load_task(tid), brief)
+        guessed = bool(kind_flag)
+    tier, kind, model = resolve_route(o.get("--model"), o.get("--tier"), kind_flag)
+    headless = bool(cc.get("headless")) and not o.get("--legacy")
     with Lock():
         t = load_task(tid)
         d = expand_dir(o["--dir"]) if o.get("--dir") else (t.get("dir") or "")
-        dispatch_locked(t, brief, d, tier, kind, model)
+        dispatch_locked(t, brief, d, tier, kind, model, headless=headless)
+        if guessed and isinstance(t.get("routing"), dict):
+            t["routing"]["guessed"] = True
+            save_task(t)
+        prio = t.get("priority", 3)
+    if headless:
+        j = core_enqueue(tid, d, os.path.join(BRIEFS, tid + ".md"), model, kind, tier, prio,
+                         urgent=bool(o.get("--urgent")))
+        print("dispatch %s queued in %s (headless job %s, %s)" % (tid, d, j["jobId"], j.get("model") or "default model"))
+        return
     print("dispatch %s queued in %s" % (tid, d))
 
 
@@ -1972,13 +2062,16 @@ def cmd_verify(args):
         brief = VERIFY_BRIEF.format(orig=orig, title=title, dir=d,
                                     report=os.path.join(BRIEFS, orig + ".report.md"),
                                     out=os.path.join(BRIEFS, tid + ".report.md"))
-        dispatch_locked(t, brief, d, tier, kind, model)
+        headless = bool(core_config().get("headless"))
+        dispatch_locked(t, brief, d, tier, kind, model, headless=headless)
         r = ot.get("routing") if isinstance(ot.get("routing"), dict) else {}
         r["verifiedBy"] = tid
         ot["routing"] = r
         ot.setdefault("log", []).append({"at": now_iso(), "text": "Verification: task %s (%s \u00b7 %s)"
                                          % (tid, tier, model)})
         save_task(ot)
+    if headless:
+        core_enqueue(tid, d, os.path.join(BRIEFS, tid + ".md"), model, kind, tier, t.get("priority", 3))
     print(tid)
 
 
@@ -1994,12 +2087,21 @@ def cmd_routing(args):
 
 
 def cmd_tell(args):
-    if len(args) < 2:
-        die("usage: mia tell <id> \"<text>\"")
-    tid = norm_id(args[0])
-    text = text_arg(args[1:], "text")
+    pos, o = parse(args, {"--now": False})
+    if len(pos) < 2:
+        die("usage: mia tell <id> \"<text>\" [--now]")
+    tid = norm_id(pos[0])
+    text = text_arg(pos[1:], "text")
     with Lock():
-        load_task(tid)
+        t = load_task(tid)
+        e = t.get("executor") if isinstance(t.get("executor"), dict) else {}
+    if e.get("headless"):
+        # Headless executor: resume its session with the message (no length
+        # limit, nothing typed into a terminal). --now interrupts its turn.
+        print(core_run(["tell", tid, "--", text] if not o.get("--now")
+                       else ["tell", "--interrupt", tid, "--", text]).strip())
+        return
+    with Lock():
         path = os.path.join(DISPATCH, tid + ".tell.json")
         old = read_json(path)
         if isinstance(old, dict) and old.get("text"):
@@ -2535,14 +2637,18 @@ HELP = """mia — Mia's line to Daniel and the Mission Control task list.
                                                     (company "" clears company + project)
   mia task note <id> "<text>"                       append to the task's log
   mia dispatch <id> [--dir <d>] [--tier cheap|mid|smart] [--kind <k>] [--model <m>]
-               --brief-file <f> | --stdin           launch an executor for the task
+               [--urgent] [--legacy] --brief-file <f> | --stdin
+                                                    launch an executor for the task
                                                     --model wins, then --tier, then --kind;
-                                                    none of them = Mia's own model
+                                                    none of them = Mia's own model (or a guessed
+                                                    kind with routeByDefault on); --urgent skips
+                                                    the Opus budget pause; --legacy forces WezTerm
   mia verify <id> [--tier smart] [--dir <d>]        new task that checks <id>'s claimed work
                                                     (smart tier); prints the new id
   mia routing                                       tier -> model and kind -> tier tables
                                                     ($MIA_DIR/routing.json overrides)
-  mia tell <id> "<text>"                            type text into the task's executor
+  mia tell <id> "<text>" [--now]                    message the task's executor (headless: resumes its
+                                                    session after the current turn; --now interrupts it)
   mia remind --at <ISO-8601|HH:MM|+2h|+30m> "<text>" [--task <id>]
   mia remind list [--all]                           pending reminders (--all: fired too)
   mia remind cancel <reminder-id>
@@ -2576,6 +2682,9 @@ HELP = """mia — Mia's line to Daniel and the Mission Control task list.
                                                     (old = hidden from Daniel; never deleted)
   mia jarvis <show|set-level|metric|finding|pause|resume|…>
                                                     the HQ registry (mia jarvis help)
+  mia jobs [--all] [--json]                         the job queue (mia-core): running, queued, cost
+  mia core status|log <task|#job> [-f]|cancel <task|#job>|budget|config [get|set <k> <v>]|beat <id>
+                                                    the job engine and its settings ($MIA_DIR/core.json)
   mia status [--all]                                tasks, open questions, reminders
                                                     (--all: old questions too)
   mia help
@@ -2604,7 +2713,8 @@ def main(argv):
              "tell": cmd_tell, "remind": cmd_remind,
              "heartbeat": cmd_heartbeat, "inbox": cmd_inbox, "status": cmd_status,
              "panel": cmd_panel, "uploads": cmd_uploads,
-             "question": cmd_question, "questions": cmd_question, "jarvis": cmd_jarvis}
+             "question": cmd_question, "questions": cmd_question, "jarvis": cmd_jarvis,
+             "core": cmd_core, "jobs": cmd_jobs}
     if cmd not in table:
         die("unknown command: %s (try: mia help)" % cmd)
     table[cmd](rest)
@@ -4514,6 +4624,1679 @@ def main(argv):
     if cmd not in table:
         die("unknown jarvis command: %s (try: mia jarvis help)" % cmd)
     table[cmd](rest)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
+"""#
+
+    /// Mirror of scripts/mia-core (task 0292) — Mia's job engine: SQLite queue,
+    /// headless executors, cap, routing + budget, heartbeat runs.
+    private static let miaCore = #"""
+#!/usr/bin/env python3
+# mia-core — Mia's job engine (Mia v2 phase 1, task 0292).
+#
+# A small, dumb, deterministic service: it stores jobs, starts and stops
+# headless workers, counts tokens and tells Mia when something happened. It
+# never "thinks". Mia (Opus) still decides what to do; this runs it.
+#
+#   jobs.db        SQLite (WAL): jobs, runs, events (unique idempotency key), meta
+#   runs/<job>/    each run's raw `claude -p --output-format stream-json` log,
+#                  its prompt, stderr and the pidfile workers register servers in
+#   inbox.jsonl    events for Mia, one line each, written exactly once; the
+#                  Mission Control app tails it and types them into her session
+#   jobs.json      a small snapshot (running, queue, budget, log tails) for
+#                  the app / panel
+#   core.json      settings (see DEFAULTS); everything is off until switched on
+#
+# Workers are ordinary `claude -p` processes started in their own process
+# group with stdout going straight to a file, so they outlive a restart of
+# this service (or of the app); on start it adopts them again by pid + log.
+# The final `result` line of a run is the authoritative finish.
+#
+# Portable on purpose: Python 3 standard library only, no macOS-only calls
+# except optional, guarded ones (caffeinate while jobs run). Runs the same on
+# Windows (msvcrt locking, taskkill, CREATE_NEW_PROCESS_GROUP).
+#
+# Repo source of truth: scripts/mia-core. ToolingInstaller.swift embeds a
+# byte-for-byte copy (scripts/sync-tooling regenerates it) and installs it to
+# ~/.mission-control/bin/mia-core.
+
+import argparse
+import datetime
+import json
+import os
+import re
+import shutil
+import signal
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+
+WINDOWS = os.name == "nt"
+if WINDOWS:
+    import msvcrt
+else:
+    import fcntl
+
+D = os.path.abspath(os.path.expanduser(os.environ.get("MIA_DIR") or "~/.mission-control/mia"))
+TASKS = os.path.join(D, "tasks")
+BRIEFS = os.path.join(D, "briefs")
+DB_PATH = os.path.join(D, "jobs.db")
+RUNS = os.path.join(D, "runs")
+INBOX = os.path.join(D, "inbox.jsonl")
+SNAPSHOT = os.path.join(D, "jobs.json")
+CONFIG = os.path.join(D, "core.json")
+SCHED = os.path.join(D, "schedule.json")
+ROUTING = os.path.join(D, "routing.json")
+MCP = os.path.join(D, "mcp.json")
+CORE_LOCK = os.path.join(D, "core.lock")
+CORE_PID = os.path.join(D, "core.pid")
+
+# Every switch defaults to today's behaviour. `mia core set <key> <json>`.
+DEFAULTS = {
+    "headless": False,          # mia dispatch -> this queue + `claude -p`, not a WezTerm tab
+    "maxConcurrent": 4,         # running jobs at once (heartbeat runs included)
+    "nightMaxConcurrent": None,  # e.g. 2: lower cap between night.from and night.to
+    "night": {"from": "22:00", "to": "07:00"},
+    "resumeRetries": 1,         # a run that dies is resumed this many times, then failed
+    "retryDelaySeconds": 20,    # wait before that resume
+    "reapGraceSeconds": 30,     # after the result line, the run's process tree gets this long
+    "keepAwake": True,          # hold the machine awake while jobs run (caffeinate / Windows API)
+    "routeByDefault": False,    # mia dispatch without --model/--tier/--kind guesses the kind
+    "defaultKind": "build",
+    "budget": {
+        "enabled": False,       # pause NEW Opus work near the limit
+        "pauseAt": 0.8,         # fraction of the limit
+        "opusDailyOutputTokens": 1500000,  # fallback meter: Opus output tokens per local day
+        "usageCommand": True,   # read `mia usage --json` (task 0290) when it exists
+    },
+    "heartbeats": {
+        "enabled": False,       # run these schedule.json beats as their own cheap runs
+        "beats": {"hb_health": "health", "hb_scout": "scout", "hb_inbox": "triage"},
+    },
+    "miaResume": False,         # app: relaunch Mia with --resume <last session> (Swift reads this)
+    "legacyCap": False,         # app: hold WezTerm dispatches above maxConcurrent
+    "reapLegacy": False,        # app: close an idle WezTerm executor once its task is closed
+    "claude": None,             # claude binary (default: on PATH); $MIA_CLAUDE_BIN wins
+    "permissionMode": "skip",   # skip = --dangerously-skip-permissions, else --permission-mode X
+    "maxBudgetUsd": {},         # per tier, e.g. {"cheap": 1}: --max-budget-usd for one run
+}
+
+# Same tables as `mia routing` (scripts/mia); routing.json overrides both.
+TIERS = ["cheap", "mid", "smart"]
+DEFAULT_TIER_MODELS = {"cheap": "claude-haiku-5-5", "mid": "claude-sonnet-5-5",
+                       "smart": "claude-opus-5-5"}
+DEFAULT_KINDS = {}
+for _tier, _kinds in (("cheap", "scout summary triage classify stats health heartbeat inbox"),
+                      ("mid", "research fix docs content refresh"),
+                      ("smart", "build design release verify review")):
+    for _k in _kinds.split():
+        DEFAULT_KINDS[_k] = _tier
+
+EXECUTOR_PROMPT = """You are executing Mission Control task {id} for Mia, Daniel's assistant. Work in this folder only. Do the task described below fully, run tests where they exist, and commit nothing unless the brief says to.
+
+Do NOT ask Daniel anything and do not use AskUserQuestion. If you are blocked or need a decision, write it with `mia task note {id} "BLOCKED: …"` and stop — Mia will answer via a message starting with `[MC]`.
+
+When finished, write a short report (what you did, what you verified, anything left) to {briefs}/{id}.report.md, then `mia task note {id} "DONE"` and end your turn.
+
+You run headless: nobody watches this session and your final message is what Mia sees first, so end with a two-line summary. If you start a long-running process (a dev server, a watcher), append its PID to the file named in $MIA_RUN_PIDFILE; it is stopped when your run ends.
+
+BRIEF
+{brief}"""
+
+BEAT_PROMPT = """You are a routine check for Mia, Daniel's assistant (heartbeat "{label}", run headless on a cheap model so Mia's own session stays free).
+
+{prompt}
+
+Rules: do the check yourself, read only. Do not message Daniel (no `mia say`/`notify`/`ask`), do not dispatch or change tasks, do not send mail. Your final message goes to Mia, and only if it matters:
+- If nothing needs Mia or Daniel, your whole final message is exactly: HEARTBEAT_OK
+- Otherwise your final message is the finding in at most five short lines (what, why it matters, suggested action)."""
+
+RESUME_NOTE = ("resume — your previous run stopped before it finished ({why}). Carry on where you "
+               "left off; check what is already done before redoing anything.")
+
+
+# ---- small helpers -----------------------------------------------------------
+
+def die(msg, code=1):
+    sys.stderr.write("mia-core: %s\n" % msg)
+    sys.exit(code)
+
+
+def now():
+    return time.time()
+
+
+def iso(t=None):
+    t = now() if t is None else t
+    return datetime.datetime.fromtimestamp(t, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_iso(v):
+    try:
+        return datetime.datetime.strptime(v, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=datetime.timezone.utc).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def local_day(t=None):
+    return datetime.datetime.fromtimestamp(now() if t is None else t).strftime("%Y-%m-%d")
+
+
+def clock(t):
+    return datetime.datetime.fromtimestamp(t).strftime("%H:%M")
+
+
+def read_text(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except (IOError, OSError):
+        return ""
+
+
+def read_json(path, default=None):
+    t = read_text(path)
+    if not t.strip():
+        return default
+    try:
+        return json.loads(t)
+    except ValueError:
+        return default
+
+
+def write_atomic(path, text):
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".mia.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        try:
+            os.chmod(tmp, 0o644)
+        except OSError:
+            pass
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def write_json(path, obj):
+    write_atomic(path, json.dumps(obj, indent=2, ensure_ascii=False) + "\n")
+
+
+def shown_path(p):
+    """~/… for paths under the home folder, as the prompts have always said."""
+    home = os.path.expanduser("~")
+    return "~" + p[len(home):] if p == home or p.startswith(home + os.sep) else p
+
+
+def short(n):
+    n = int(n or 0)
+    if n >= 1000000:
+        return "%.1fM" % (n / 1e6)
+    if n >= 1000:
+        return "%dk" % round(n / 1e3)
+    return str(n)
+
+
+def model_label(m):
+    m = m or ""
+    for k in ("opus", "sonnet", "haiku", "fable"):
+        if k in m:
+            return k
+    return m or "default"
+
+
+def is_opus(model):
+    return "opus" in (model or "").lower()
+
+
+class FileLock(object):
+    """Exclusive lock on a file, portable (flock on POSIX, msvcrt on Windows).
+    On POSIX this is the same flock the `mia` CLI and the app take on .lock."""
+
+    def __init__(self, path, blocking=True):
+        self.path, self.blocking, self.fd = path, blocking, None
+
+    def acquire(self):
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        self.fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            if WINDOWS:
+                mode = msvcrt.LK_LOCK if self.blocking else msvcrt.LK_NBLCK
+                os.lseek(self.fd, 0, 0)
+                msvcrt.locking(self.fd, mode, 1)
+            else:
+                fcntl.flock(self.fd, fcntl.LOCK_EX | (0 if self.blocking else fcntl.LOCK_NB))
+        except OSError:
+            os.close(self.fd)
+            self.fd = None
+            return False
+        return True
+
+    def release(self):
+        if self.fd is None:
+            return
+        try:
+            if WINDOWS:
+                os.lseek(self.fd, 0, 0)
+                msvcrt.locking(self.fd, msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(self.fd, fcntl.LOCK_UN)
+        finally:
+            os.close(self.fd)
+            self.fd = None
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        self.release()
+        return False
+
+
+def mia_lock():
+    return FileLock(os.path.join(D, ".lock"))
+
+
+# ---- settings ----------------------------------------------------------------
+
+def merge(base, over):
+    out = dict(base)
+    for k, v in (over or {}).items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = merge(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+def load_config():
+    c = read_json(CONFIG, {})
+    return merge(DEFAULTS, c if isinstance(c, dict) else {})
+
+
+def set_config(key, raw):
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        value = raw
+    with FileLock(CONFIG + ".lock"):
+        c = read_json(CONFIG, {})
+        c = c if isinstance(c, dict) else {}
+        cur = c
+        parts = key.split(".")
+        for p in parts[:-1]:
+            if not isinstance(cur.get(p), dict):
+                cur[p] = {}
+            cur = cur[p]
+        if value is None and raw.strip() == "default":
+            cur.pop(parts[-1], None)
+        else:
+            cur[parts[-1]] = value
+        write_json(CONFIG, c)
+    return value
+
+
+def get_path(c, key):
+    for p in key.split("."):
+        if not isinstance(c, dict) or p not in c:
+            return None
+        c = c[p]
+    return c
+
+
+def cap_now(cfg, t=None):
+    cap = int(cfg.get("maxConcurrent") or 4)
+    night = cfg.get("nightMaxConcurrent")
+    if night:
+        w = cfg.get("night") or {}
+        hm = datetime.datetime.fromtimestamp(now() if t is None else t).strftime("%H:%M")
+        a, b = w.get("from", "22:00"), w.get("to", "07:00")
+        inside = (a <= hm or hm < b) if a > b else (a <= hm < b)
+        if inside:
+            cap = min(cap, int(night))
+    return max(1, cap)
+
+
+def load_routing():
+    tiers, kinds = dict(DEFAULT_TIER_MODELS), dict(DEFAULT_KINDS)
+    r = read_json(ROUTING, {})
+    if isinstance(r, dict):
+        for k, v in (r.get("tiers") or {}).items():
+            if k in TIERS and isinstance(v, str) and v.strip():
+                tiers[k] = v.strip()
+        for k, v in (r.get("kinds") or {}).items():
+            if v in TIERS:
+                kinds[str(k).strip()] = v
+    return tiers, kinds
+
+
+def route(kind):
+    tiers, kinds = load_routing()
+    tier = kinds.get(kind, "smart")
+    return tier, tiers[tier]
+
+
+# ---- processes (portable) ----------------------------------------------------
+
+def pid_alive(pid):
+    if not pid or pid <= 0:
+        return False
+    if WINDOWS:
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        code = ctypes.c_ulong()
+        ok = k.GetExitCodeProcess(h, ctypes.byref(code))
+        k.CloseHandle(h)
+        return bool(ok) and code.value == 259  # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    # A zombie child of ours is gone for our purposes.
+    try:
+        wpid, _ = os.waitpid(pid, os.WNOHANG)
+        if wpid == pid:
+            return False
+    except ChildProcessError:
+        pass
+    except OSError:
+        pass
+    return True
+
+
+def claude_session_of(pid):
+    """Claude Code registers each live session in ~/.claude/sessions/<pid>.json;
+    a pid that names another session there was reused by a different process."""
+    s = read_json(os.path.join(os.path.expanduser("~/.claude/sessions"), "%d.json" % pid), None)
+    return s.get("sessionId") if isinstance(s, dict) else None
+
+
+def kill_tree(pid, hard=False):
+    """Stop a run's whole process group (its shells, dev servers it spawned)."""
+    if not pid or pid <= 0:
+        return
+    if WINDOWS:
+        args = ["taskkill", "/T", "/PID", str(pid)] + (["/F"] if hard else [])
+        subprocess.call(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return
+    sig = signal.SIGKILL if hard else signal.SIGTERM
+    try:
+        os.killpg(pid, sig)  # started with start_new_session: pgid == pid
+    except OSError:
+        try:
+            os.kill(pid, sig)
+        except OSError:
+            pass
+
+
+def kill_pid(pid, hard=False):
+    if not pid or pid <= 0:
+        return
+    if WINDOWS:
+        subprocess.call(["taskkill", "/T", "/PID", str(pid)] + (["/F"] if hard else []),
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return
+    try:
+        os.kill(pid, signal.SIGKILL if hard else signal.SIGTERM)
+    except OSError:
+        pass
+
+
+def clean_env(extra):
+    """A worker is a top-level session: drop the markers that would make
+    `claude` think it is nested inside another Claude Code session."""
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith("CLAUDE_CODE") and k not in ("CLAUDECODE", "AI_AGENT", "CLAUDE_PID")}
+    # The `mia` next to this script first (same version), then the installed one.
+    bins = [os.path.dirname(os.path.realpath(__file__))]
+    if os.path.expanduser("~/.mission-control/bin") not in bins:
+        bins.append(os.path.expanduser("~/.mission-control/bin"))
+    env["PATH"] = os.pathsep.join(bins + [env.get("PATH", "")])
+    env["MIA_DIR"] = D
+    env.update({k: str(v) for k, v in extra.items() if v is not None})
+    return env
+
+
+def claude_bin(cfg):
+    b = os.environ.get("MIA_CLAUDE_BIN") or cfg.get("claude") or shutil.which("claude")
+    if not b:
+        # Started by a GUI app or a service: PATH may not have the user's bins.
+        for c in ("~/.local/bin/claude", "~/.claude/local/claude", "/opt/homebrew/bin/claude",
+                  "/usr/local/bin/claude", "~/AppData/Roaming/npm/claude.cmd", "~/.local/bin/claude.exe"):
+            if os.path.isfile(os.path.expanduser(c)):
+                b = c
+                break
+    return os.path.expanduser(b or "claude")
+
+
+class KeepAwake(object):
+    """Hold the machine awake while jobs run. macOS: a `caffeinate -i -w <us>`
+    child (it ends with us). Windows: SetThreadExecutionState on this thread."""
+
+    def __init__(self):
+        self.proc = None
+        self.on = False
+
+    def sync(self, want):
+        if want == self.on:
+            if want and self.proc is not None and self.proc.poll() is not None:
+                self.proc = None
+                self.on = False
+            else:
+                return
+        if want:
+            if WINDOWS:
+                import ctypes
+                ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000001)
+            elif sys.platform == "darwin" and shutil.which("caffeinate"):
+                self.proc = subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())],
+                                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.on = True
+        else:
+            self.release()
+
+    def release(self):
+        if WINDOWS and self.on:
+            import ctypes
+            ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
+        if self.proc is not None:
+            if self.proc.poll() is None:
+                self.proc.terminate()
+                try:
+                    self.proc.wait(5)
+                except subprocess.TimeoutExpired:
+                    self.proc.kill()
+            self.proc = None
+        self.on = False
+
+
+# ---- database ----------------------------------------------------------------
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id TEXT, source TEXT NOT NULL DEFAULT 'dispatch', beat_id TEXT,
+  kind TEXT, tier TEXT, model TEXT, dir TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  priority INTEGER NOT NULL DEFAULT 3, urgent INTEGER NOT NULL DEFAULT 0,
+  session_id TEXT NOT NULL, session_started INTEGER NOT NULL DEFAULT 0,
+  next_message TEXT, next_mode TEXT NOT NULL DEFAULT 'fresh',
+  pending_tell TEXT, turn INTEGER NOT NULL DEFAULT 1,
+  attempts INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0,
+  not_before REAL, wait_reason TEXT, error TEXT, result TEXT,
+  report_mtime REAL, use_mcp INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL NOT NULL DEFAULT 0, input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0, opus_output_tokens INTEGER NOT NULL DEFAULT 0,
+  created_at REAL NOT NULL, updated_at REAL NOT NULL,
+  started_at REAL, finished_at REAL
+);
+CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status);
+CREATE INDEX IF NOT EXISTS jobs_task ON jobs(task_id);
+CREATE TABLE IF NOT EXISTS runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL, attempt INTEGER NOT NULL, turn INTEGER NOT NULL,
+  mode TEXT NOT NULL, model TEXT, pid INTEGER, log_path TEXT, err_path TEXT,
+  pidfile TEXT, started_at REAL NOT NULL, result_at REAL, ended_at REAL,
+  outcome TEXT, is_error INTEGER, error TEXT, result TEXT, session_seen INTEGER NOT NULL DEFAULT 0,
+  log_offset INTEGER NOT NULL DEFAULT 0, exit_code INTEGER,
+  cost_usd REAL, input_tokens INTEGER, output_tokens INTEGER, opus_output_tokens INTEGER,
+  num_turns INTEGER, interrupted INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS runs_job ON runs(job_id);
+CREATE TABLE IF NOT EXISTS events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  key TEXT NOT NULL UNIQUE, at REAL NOT NULL, kind TEXT NOT NULL,
+  task_id TEXT, job_id INTEGER, text TEXT NOT NULL, mirror TEXT,
+  deliver INTEGER NOT NULL DEFAULT 1, written INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
+"""
+
+
+def connect():
+    os.makedirs(D, exist_ok=True)
+    db = sqlite3.connect(DB_PATH, timeout=15, isolation_level=None)
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA journal_mode=WAL")
+    db.execute("PRAGMA busy_timeout=15000")
+    db.executescript(SCHEMA)
+    return db
+
+
+class Tx(object):
+    """BEGIN IMMEDIATE … COMMIT: one writer at a time across processes."""
+
+    def __init__(self, db):
+        self.db = db
+
+    def __enter__(self):
+        self.db.execute("BEGIN IMMEDIATE")
+        return self.db
+
+    def __exit__(self, et, ev, tb):
+        self.db.execute("COMMIT" if et is None else "ROLLBACK")
+        return False
+
+
+def meta_get(db, k, default=None):
+    r = db.execute("SELECT v FROM meta WHERE k=?", (k,)).fetchone()
+    if r is None:
+        return default
+    try:
+        return json.loads(r["v"])
+    except ValueError:
+        return default
+
+
+def meta_set(db, k, v):
+    db.execute("INSERT INTO meta(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+               (k, json.dumps(v)))
+
+
+def update_job(db, jid, **f):
+    f["updated_at"] = now()
+    cols = ", ".join("%s=?" % k for k in f)
+    db.execute("UPDATE jobs SET %s WHERE id=?" % cols, list(f.values()) + [jid])
+
+
+def get_job(db, jid):
+    return db.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone()
+
+
+def emit(db, key, kind, text, task_id=None, job_id=None, mirror=None, deliver=True):
+    """Record an event for Mia once: a second emit with the same key is a no-op
+    (UNIQUE key). Returns True when it was new."""
+    cur = db.execute("INSERT OR IGNORE INTO events(key, at, kind, task_id, job_id, text, mirror, deliver)"
+                     " VALUES(?,?,?,?,?,?,?,?)", (key, now(), kind, task_id, job_id, text, mirror,
+                                                  1 if deliver else 0))
+    return cur.rowcount == 1
+
+
+def pump_events(db):
+    """Copy new events to inbox.jsonl (the app's feed). A crash between the
+    append and the mark can repeat a line; its id lets the reader drop it."""
+    rows = db.execute("SELECT * FROM events WHERE written=0 ORDER BY id").fetchall()
+    if not rows:
+        return 0
+    with FileLock(INBOX + ".lock"):
+        with open(INBOX, "a", encoding="utf-8") as f:
+            for r in rows:
+                o = {"id": "c_%d" % r["id"], "key": r["key"], "at": iso(r["at"]), "kind": r["kind"],
+                     "text": r["text"], "deliver": bool(r["deliver"])}
+                if r["task_id"]:
+                    o["taskId"] = r["task_id"]
+                if r["mirror"]:
+                    o["mirror"] = r["mirror"]
+                f.write(json.dumps(o, ensure_ascii=False, separators=(",", ":")) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+    db.execute("UPDATE events SET written=1 WHERE id IN (%s)" % ",".join(str(r["id"]) for r in rows))
+    return len(rows)
+
+
+# ---- task files (the human record stays as it is) ----------------------------
+
+def task_path(tid):
+    return os.path.join(TASKS, tid + ".json")
+
+
+def mutate_task(tid, change):
+    if not tid:
+        return None
+    with mia_lock():
+        t = read_json(task_path(tid))
+        if not isinstance(t, dict):
+            return None
+        change(t)
+        t["updatedAt"] = iso()
+        write_json(task_path(tid), t)
+        return t
+
+
+def task_log(t, text):
+    t.setdefault("log", []).append({"at": iso(), "text": text})
+
+
+def report_path(tid):
+    return os.path.join(BRIEFS, tid + ".report.md")
+
+
+def mtime(path):
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return None
+
+
+# ---- the stream-json log -----------------------------------------------------
+
+def scan_log(db, run):
+    """Read what the run wrote since last time. Returns (result dict or None,
+    rate-limit info or None) and records session start + offset."""
+    path = run["log_path"]
+    result, rate, seen = None, None, bool(run["session_seen"])
+    try:
+        with open(path, "rb") as f:
+            f.seek(run["log_offset"])
+            data = f.read()
+    except (IOError, OSError):
+        return None, None
+    end = data.rfind(b"\n")
+    if end < 0:
+        return None, None
+    for line in data[:end].split(b"\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            o = json.loads(line.decode("utf-8", "replace"))
+        except ValueError:
+            continue
+        t = o.get("type")
+        if t == "system" and o.get("subtype") == "init":
+            seen = True
+        elif t == "result":
+            result = o
+        elif t == "rate_limit_event":
+            rate = o.get("rate_limit_info")
+        elif t in ("assistant", "user"):
+            seen = True
+    db.execute("UPDATE runs SET log_offset=?, session_seen=? WHERE id=?",
+               (run["log_offset"] + end + 1, 1 if seen else 0, run["id"]))
+    if seen and not run["session_seen"]:
+        db.execute("UPDATE jobs SET session_started=1 WHERE id=?", (run["job_id"],))
+    return result, rate
+
+
+def result_usage(res):
+    u = res.get("usage") or {}
+    inp = int(u.get("input_tokens") or 0) + int(u.get("cache_creation_input_tokens") or 0)
+    out = int(u.get("output_tokens") or 0)
+    opus = 0
+    mu = res.get("modelUsage") or {}
+    if mu:
+        for m, v in mu.items():
+            if is_opus(m) and isinstance(v, dict):
+                opus += int(v.get("outputTokens") or 0)
+    return float(res.get("total_cost_usd") or 0), inp, out, opus
+
+
+def result_error(res):
+    errs = res.get("errors")
+    if isinstance(errs, list) and errs:
+        return "; ".join(str(e) for e in errs)[:300]
+    if res.get("api_error_status"):
+        return "API error %s" % res["api_error_status"]
+    r = res.get("result")
+    if isinstance(r, str) and r.strip():
+        return r.strip()[:300]
+    return res.get("subtype") or "error"
+
+
+def pretty_lines(path, limit=None, offset=0):
+    """Human lines from a stream-json log: assistant text, tool calls, result."""
+    out = []
+    try:
+        with open(path, "rb") as f:
+            f.seek(offset)
+            data = f.read()
+    except (IOError, OSError):
+        return out, offset
+    end = data.rfind(b"\n")
+    if end < 0:
+        return out, offset
+    for raw in data[:end].split(b"\n"):
+        try:
+            o = json.loads(raw.decode("utf-8", "replace"))
+        except ValueError:
+            continue
+        t = o.get("type")
+        if t == "system" and o.get("subtype") == "init":
+            out.append("· session %s (%s) in %s" % (o.get("session_id"), o.get("model"), o.get("cwd")))
+        elif t == "assistant":
+            for c in (o.get("message") or {}).get("content") or []:
+                if c.get("type") == "text" and c.get("text", "").strip():
+                    out.append("» " + " ".join(c["text"].split())[:400])
+                elif c.get("type") == "tool_use":
+                    inp = c.get("input") or {}
+                    arg = inp.get("command") or inp.get("file_path") or inp.get("pattern") or \
+                        inp.get("description") or inp.get("url") or ""
+                    out.append("  %s %s" % (c.get("name"), " ".join(str(arg).split())[:200]))
+        elif t == "result":
+            cost, inp, outt, _ = result_usage(o)
+            out.append("■ %s · %s · $%.2f · %s out · %s turns" % (
+                "error: " + result_error(o) if o.get("is_error") else "done", o.get("subtype"),
+                cost, short(outt), o.get("num_turns")))
+    if limit:
+        out = out[-limit:]
+    return out, offset + end + 1
+
+
+# ---- budget ------------------------------------------------------------------
+
+def usage_from_command(cfg, db):
+    """`mia usage --json` (task 0290) when it exists: the highest utilisation
+    it reports, as a fraction. Cached five minutes. None when unavailable."""
+    if not (cfg.get("budget") or {}).get("usageCommand", True):
+        return None
+    cached = meta_get(db, "usage_cmd")
+    if cached and now() - cached.get("at", 0) < 300:
+        return cached.get("value")
+    value = None
+    me = os.path.dirname(os.path.realpath(__file__))
+    mia = os.path.join(me, "mia")
+    if not os.path.isfile(mia):
+        mia = shutil.which("mia")
+    if mia:
+        try:
+            cmd = ["bash", mia] if not WINDOWS else [sys.executable, mia]
+            p = subprocess.run(cmd + ["usage", "--json"], capture_output=True, text=True, timeout=15,
+                               env=dict(os.environ, MIA_DIR=D))
+            if p.returncode == 0 and p.stdout.strip().startswith(("{", "[")):
+                value = max_utilisation(json.loads(p.stdout))
+        except (OSError, ValueError, subprocess.SubprocessError):
+            value = None
+    meta_set(db, "usage_cmd", {"at": now(), "value": value})
+    return value
+
+
+def max_utilisation(obj):
+    """Walk any JSON shape and take the largest 'used' share: keys like pct,
+    percent, used_pct, utilization (0-1 or 0-100). Returns (fraction, label)."""
+    best = [None, None]
+
+    def walk(o, label):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                kl = str(k).lower()
+                if isinstance(v, (int, float)) and not isinstance(v, bool) and re.search(
+                        r"(pct|percent|utili[sz]ation|usedfraction|used_fraction)", kl):
+                    f = float(v)
+                    if "pct" in kl or "percent" in kl or f > 1.0:
+                        f = f / 100.0
+                    if 0 <= f <= 1.5 and (best[0] is None or f > best[0]):
+                        best[0], best[1] = f, label or kl
+                else:
+                    walk(v, k if isinstance(v, dict) else label)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v, label)
+    walk(obj, None)
+    return None if best[0] is None else [best[0], best[1] or "usage"]
+
+
+def budget_state(cfg, db):
+    """{level, source, detail, paused}. Order: `mia usage --json`, else the
+    larger of the newest rate-limit utilisation seen in a run (under 30 min
+    old) and today's Opus output tokens against the daily allowance."""
+    b = cfg.get("budget") or {}
+    pause_at = float(b.get("pauseAt") or 0.8)
+    level, source, detail = None, None, ""
+    u = usage_from_command(cfg, db)
+    if u:
+        level, source = u[0], "mia usage"
+        detail = "%d%% (%s, mia usage)" % (round(u[0] * 100), u[1])
+    else:
+        rl = meta_get(db, "ratelimit")
+        if rl and now() - rl.get("at", 0) < 1800:
+            wins = (rl.get("info") or {}).get("unifiedWindows") or {}
+            for name, w in wins.items():
+                ut = w.get("utilization") if isinstance(w, dict) else None
+                if isinstance(ut, (int, float)) and (level is None or ut > level):
+                    resets = w.get("resetsAt")
+                    level, source = float(ut), "rate limit"
+                    detail = "%d%% of the %s window%s" % (round(ut * 100), name.replace("_", "-"),
+                                                          (", resets %s" % clock(resets)) if resets else "")
+        allow = int(b.get("opusDailyOutputTokens") or 0)
+        if allow > 0:
+            today = opus_tokens_today(db)
+            frac = today / float(allow)
+            if level is None or frac > level:
+                level, source = frac, "tokens"
+                detail = "%s of %s Opus output tokens today" % (short(today), short(allow))
+    paused = bool(b.get("enabled")) and level is not None and level >= pause_at
+    return {"level": level, "source": source, "detail": detail, "paused": paused, "pauseAt": pause_at}
+
+
+def opus_tokens_today(db):
+    start = datetime.datetime.combine(datetime.date.today(), datetime.time()).timestamp()
+    r = db.execute("SELECT COALESCE(SUM(opus_output_tokens),0) AS n FROM runs WHERE result_at>=?",
+                   (start,)).fetchone()
+    return int(r["n"] or 0)
+
+
+# ---- the engine --------------------------------------------------------------
+
+class Core(object):
+    def __init__(self, db=None):
+        self.db = db or connect()
+        self.procs = {}          # run id -> Popen we started (to reap zombies, read exit codes)
+        self.awake = KeepAwake()
+        self.last_tick = None
+        self.last_snapshot = None
+        self.snap_at = 0.0
+
+    # -- enqueue / tell / cancel ----------------------------------------------
+
+    def enqueue(self, task_id, d, prompt, model=None, kind=None, tier=None, priority=3,
+                urgent=False, source="dispatch", beat_id=None, use_mcp=False):
+        db = self.db
+        t = now()
+        with Tx(db):
+            if task_id:
+                # One live job per task: a re-dispatch replaces a queued or
+                # finished one (its session is kept for the record only).
+                for old in db.execute("SELECT id, status FROM jobs WHERE task_id=? AND status IN "
+                                      "('queued','running')", (task_id,)).fetchall():
+                    if old["status"] == "running":
+                        raise SystemExit("mia-core: task %s already has a running job (%d); "
+                                         "`mia tell` it or `mia core cancel %d` first" % (task_id, old["id"], old["id"]))
+                    update_job(db, old["id"], status="cancelled", error="replaced by a new dispatch",
+                               finished_at=t)
+            cur = db.execute(
+                "INSERT INTO jobs(task_id, source, beat_id, kind, tier, model, dir, status, priority, urgent,"
+                " session_id, next_message, next_mode, use_mcp, created_at, updated_at, report_mtime)"
+                " VALUES(?,?,?,?,?,?,?,'queued',?,?,?,?,'fresh',?,?,?,?)",
+                (task_id, source, beat_id, kind, tier, model, d, int(priority), 1 if urgent else 0,
+                 str(uuid.uuid4()), prompt, 1 if use_mcp else 0, t, t,
+                 mtime(report_path(task_id)) if task_id else None))
+            return cur.lastrowid
+
+    def latest_job(self, task_id):
+        return self.db.execute("SELECT * FROM jobs WHERE task_id=? ORDER BY id DESC LIMIT 1",
+                               (task_id,)).fetchone()
+
+    def tell(self, task_id, text, interrupt=False):
+        db = self.db
+        with Tx(db):
+            j = db.execute("SELECT * FROM jobs WHERE task_id=? ORDER BY id DESC LIMIT 1",
+                           (task_id,)).fetchone()
+            if j is None:
+                raise SystemExit("mia-core: task %s has no headless job" % task_id)
+            st = j["status"]
+            if st == "running":
+                pt = (j["pending_tell"] + "\n" + text) if j["pending_tell"] else text
+                update_job(db, j["id"], pending_tell=pt)
+                how = "after its current turn"
+                if interrupt:
+                    r = db.execute("SELECT * FROM runs WHERE job_id=? AND ended_at IS NULL AND outcome IS NULL"
+                                   " ORDER BY id DESC LIMIT 1", (j["id"],)).fetchone()
+                    if r is not None:
+                        db.execute("UPDATE runs SET interrupted=1 WHERE id=?", (r["id"],))
+                        kill_tree(r["pid"])
+                    how = "now (current turn interrupted)"
+            elif st == "queued":
+                msg = (j["next_message"] or "") + "\n\nMessage from Mia: " + text
+                update_job(db, j["id"], next_message=msg)
+                how = "with its queued run"
+            else:
+                if j["session_started"]:
+                    update_job(db, j["id"], status="queued", next_mode="resume", next_message=text,
+                               turn=j["turn"] + 1, failures=0, error=None, not_before=None,
+                               pending_tell=None, finished_at=None, report_mtime=mtime(report_path(task_id)))
+                else:
+                    update_job(db, j["id"], status="queued", next_mode="fresh",
+                               next_message=(j["next_message"] or "") + "\n\nMessage from Mia: " + text,
+                               turn=j["turn"] + 1, failures=0, error=None, not_before=None, finished_at=None)
+                how = "by resuming its session"
+        def note(t):
+            if t.get("status") == "checking":
+                t["status"] = "running"
+            task_log(t, "Mia → executor (%s): %s" % (how.split(" (")[0], text))
+        mutate_task(task_id, note)
+        return how
+
+    def cancel(self, jid, why="cancelled"):
+        db = self.db
+        with Tx(db):
+            j = get_job(db, jid)
+            if j is None or j["status"] in ("finished", "failed", "cancelled"):
+                return False
+            update_job(db, jid, status="cancelled", error=why, finished_at=now())
+            for r in db.execute("SELECT * FROM runs WHERE job_id=? AND ended_at IS NULL", (jid,)):
+                db.execute("UPDATE runs SET interrupted=1 WHERE id=?", (r["id"],))
+                kill_tree(r["pid"])
+        return True
+
+    # -- one pass ---------------------------------------------------------------
+
+    def tick(self):
+        cfg = load_config()
+        t = now()
+        if self.last_tick is not None and t - self.last_tick > 90:
+            # Slept (or was suspended): workers may have died on the API side.
+            with Tx(self.db):
+                emit(self.db, "wake:%d" % int(t), "sleep", "[MC] mia-core: the machine slept %s–%s; "
+                     "reconciling jobs." % (clock(self.last_tick), clock(t)), deliver=False)
+        self.last_tick = t
+        self.follow_tasks()
+        self.reconcile(cfg)
+        self.fire_beats(cfg)
+        self.start_jobs(cfg)
+        pump_events(self.db)
+        self.write_snapshot(cfg)
+        running = self.db.execute("SELECT COUNT(*) AS n FROM jobs WHERE status='running'").fetchone()["n"]
+        if cfg.get("keepAwake"):
+            self.awake.sync(running > 0)
+        else:
+            self.awake.sync(False)
+
+    def follow_tasks(self):
+        """Daniel or Mia closed the task: stop its job."""
+        for j in self.db.execute("SELECT id, task_id FROM jobs WHERE status IN ('queued','running')"
+                                 " AND task_id IS NOT NULL").fetchall():
+            t = read_json(task_path(j["task_id"]))
+            if isinstance(t, dict) and t.get("status") in ("cancelled", "done", "failed"):
+                self.cancel(j["id"], "task %s" % t["status"])
+
+    def reconcile(self, cfg):
+        db = self.db
+        grace = float(cfg.get("reapGraceSeconds") or 30)
+        for r in db.execute("SELECT * FROM runs WHERE ended_at IS NULL").fetchall():
+            p = self.procs.get(r["id"])
+            exit_code = p.poll() if p is not None else None
+            alive = (exit_code is None) if p is not None else pid_alive(r["pid"])
+            if alive and p is None and r["pid"]:
+                j = get_job(db, r["job_id"])
+                other = claude_session_of(r["pid"])
+                if other and j is not None and other != j["session_id"]:
+                    alive = False   # pid reused by another session
+            with Tx(db):
+                res, rate = scan_log(db, r)
+                if rate:
+                    meta_set(db, "ratelimit", {"at": now(), "info": rate})
+                r = db.execute("SELECT * FROM runs WHERE id=?", (r["id"],)).fetchone()
+                if r["outcome"] is None and res is not None:
+                    self.finish_run(r, res, None, cfg)
+                elif r["outcome"] is None and not alive:
+                    why = "interrupted" if r["interrupted"] else \
+                        "the process exited without a result%s" % (
+                            " (exit %d)" % exit_code if exit_code is not None else "")
+                    tail = read_text(r["err_path"]).strip().splitlines()[-1:] if r["err_path"] else []
+                    if tail and not r["interrupted"]:
+                        why += ": " + tail[0][:200]
+                    self.finish_run(r, None, why, cfg)
+                r = db.execute("SELECT * FROM runs WHERE id=?", (r["id"],)).fetchone()
+                if r["outcome"] is not None:
+                    if not alive:
+                        db.execute("UPDATE runs SET ended_at=?, exit_code=? WHERE id=?",
+                                   (now(), exit_code, r["id"]))
+                        self.reap_registered(r)
+                        self.procs.pop(r["id"], None)
+                    elif now() - (r["result_at"] or now()) > grace:
+                        # Finished but lingering (a background shell, a server):
+                        # stop its process group, then whatever it registered.
+                        hard = now() - (r["result_at"] or now()) > grace * 2
+                        kill_tree(r["pid"], hard=hard)
+                        self.reap_registered(r, hard=hard)
+
+    def reap_registered(self, r, hard=False):
+        for line in read_text(r["pidfile"] or "").split():
+            try:
+                pid = int(line)
+            except ValueError:
+                continue
+            if pid > 1 and pid != os.getpid() and pid_alive(pid):
+                kill_pid(pid, hard=hard)
+
+    def finish_run(self, r, res, why, cfg):
+        """Inside a Tx. One run ended (result line, or the process is gone)."""
+        db = self.db
+        j = get_job(db, r["job_id"])
+        cost = inp = out = opus = 0
+        ok = res is not None and not res.get("is_error")
+        if res is not None:
+            cost, inp, out, opus = result_usage(res)
+            if not ok:
+                why = result_error(res)
+            text = res.get("result") if isinstance(res.get("result"), str) else None
+        else:
+            text = None
+        db.execute("UPDATE runs SET outcome=?, is_error=?, error=?, result=?, result_at=?, cost_usd=?,"
+                   " input_tokens=?, output_tokens=?, opus_output_tokens=?, num_turns=? WHERE id=?",
+                   ("ok" if ok else ("interrupted" if r["interrupted"] else "error"),
+                    0 if ok else 1, None if ok else why, (text or "")[:4000], now(), cost, inp, out, opus,
+                    (res or {}).get("num_turns"), r["id"]))
+        update_job(db, j["id"], cost_usd=j["cost_usd"] + cost, input_tokens=j["input_tokens"] + inp,
+                   output_tokens=j["output_tokens"] + out, opus_output_tokens=j["opus_output_tokens"] + opus)
+        j = get_job(db, j["id"])
+        if j["status"] != "running":
+            return   # cancelled meanwhile: nothing to report
+        if j["pending_tell"]:
+            # Mia sent more: resume with it instead of reporting this turn.
+            update_job(db, j["id"], status="queued", next_mode="resume" if j["session_started"] else "fresh",
+                       next_message=j["pending_tell"] if j["session_started"] else
+                       (j["next_message"] or "") + "\n\nMessage from Mia: " + j["pending_tell"],
+                       pending_tell=None, turn=j["turn"] + 1, failures=0, not_before=None,
+                       report_mtime=mtime(report_path(j["task_id"])) if j["task_id"] else None)
+            return
+        if ok:
+            update_job(db, j["id"], status="finished", finished_at=now(), result=(text or "")[:4000], error=None)
+            if j["source"] == "beat":
+                self.beat_done(j, text or "")
+            else:
+                self.executor_done(j, r, cost, out)
+            return
+        retries = int(cfg.get("resumeRetries") if cfg.get("resumeRetries") is not None else 1)
+        if j["source"] != "beat" and j["failures"] < retries and not r["interrupted"]:
+            update_job(db, j["id"], status="queued", failures=j["failures"] + 1,
+                       next_mode="resume" if j["session_started"] else "fresh",
+                       next_message=RESUME_NOTE.format(why=why) if j["session_started"] else j["next_message"],
+                       not_before=now() + float(cfg.get("retryDelaySeconds") or 0), error=why)
+            emit(db, "resume:%d:%d:%d" % (j["id"], j["turn"], j["failures"] + 1), "stall",
+                 "[MC] Executor for task %s stopped (%s); resuming it automatically." % (j["task_id"], why),
+                 task_id=j["task_id"], job_id=j["id"], deliver=False)
+            mutate_task(j["task_id"], lambda t: task_log(t, "Run stopped (%s); resuming once automatically" % why))
+            return
+        update_job(db, j["id"], status="failed", finished_at=now(), error=why)
+        if j["source"] == "beat":
+            self.beat_failed(j, why)
+        else:
+            self.executor_failed(j, why)
+
+    def executor_done(self, j, r, cost, out):
+        tid = j["task_id"]
+        rep = mtime(report_path(tid))
+        base = j["report_mtime"]
+        if rep is None:
+            rnote = "no report yet"
+        elif base is None or rep > base + 0.0005:
+            rnote = "report written" if base is None else "report updated"
+        else:
+            rnote = "report unchanged"
+        cost_note = "$%.2f, %s out, %s" % (j["cost_usd"], short(j["output_tokens"]), model_label(j["model"]))
+        key = "finish:%d:%d" % (j["id"], j["turn"])
+        at = iso()
+
+        def upd(t):
+            e = t.get("executor") if isinstance(t.get("executor"), dict) else {}
+            e.update({"headless": True, "jobId": j["id"], "sessionId": j["session_id"],
+                      "finishedAt": at, "finishKey": key, "costUsd": round(j["cost_usd"], 4),
+                      "outputTokens": j["output_tokens"]})
+            t["executor"] = e
+            if t.get("status") in ("running", "queued", "asking"):
+                t["status"] = "checking"
+            task_log(t, "Executor finished (%s; %s)" % (rnote, cost_note))
+        saved = mutate_task(tid, upd)
+        if saved is not None and saved.get("status") == "cancelled":
+            return
+        emit(self.db, key, "executor",
+             "[MC] Executor for task %s finished (session %s; %s; %s). Review it: mia task show %s ; "
+             "report at %s/%s.report.md" % (tid, j["session_id"], rnote, cost_note, tid, shown_path(BRIEFS), tid),
+             task_id=tid, job_id=j["id"], mirror="Executor for %s finished" % tid)
+
+    def executor_failed(self, j, why):
+        tid = j["task_id"]
+        key = "failed:%d:%d" % (j["id"], j["turn"])
+        at = iso()
+
+        def upd(t):
+            e = t.get("executor") if isinstance(t.get("executor"), dict) else {}
+            e.update({"headless": True, "jobId": j["id"], "sessionId": j["session_id"],
+                      "finishedAt": at, "finishKey": key, "error": why})
+            t["executor"] = e
+            if t.get("status") in ("running", "queued", "asking"):
+                t["status"] = "checking"
+            task_log(t, "Executor failed: %s" % why)
+        saved = mutate_task(tid, upd)
+        if saved is not None and saved.get("status") == "cancelled":
+            return
+        retried = " after an automatic resume" if j["failures"] else ""
+        emit(self.db, key, "executor",
+             "[MC] Executor for task %s failed%s: %s (session %s). `mia tell %s \"…\"` resumes it; "
+             "`mia core log %s` shows the run." % (tid, retried, why, j["session_id"], tid, tid),
+             task_id=tid, job_id=j["id"], mirror="Executor for %s failed" % tid)
+
+    def beat_done(self, j, text):
+        db = self.db
+        meta_set(db, "beat_fail:%s" % j["beat_id"], 0)
+        body = (text or "").strip()
+        if not body or body.upper().startswith("HEARTBEAT_OK") and len(body) < 40:
+            return
+        label = self.beat_label(j["beat_id"])
+        emit(db, "beat:%d" % j["id"], "heartbeat",
+             "[MC] Heartbeat \"%s\" (%s run) found: %s" % (label, model_label(j["model"]),
+                                                          " ".join(body.split())[:900]),
+             job_id=j["id"])
+
+    def beat_failed(self, j, why):
+        db = self.db
+        n = int(meta_get(db, "beat_fail:%s" % j["beat_id"], 0) or 0) + 1
+        meta_set(db, "beat_fail:%s" % j["beat_id"], n)
+        if n == 2:
+            emit(db, "beatfail:%d" % j["id"], "heartbeat",
+                 "[MC] Heartbeat \"%s\" failed twice in a row as a headless run (%s). "
+                 "`mia core jobs` shows the runs." % (self.beat_label(j["beat_id"]), why), job_id=j["id"])
+
+    def beat_label(self, bid):
+        s = read_json(SCHED, {}) or {}
+        for h in s.get("heartbeats") or []:
+            if h.get("id") == bid:
+                return h.get("label") or bid
+        return bid
+
+    # -- scheduling -------------------------------------------------------------
+
+    def fire_beats(self, cfg, force=None):
+        hb = cfg.get("heartbeats") or {}
+        if not hb.get("enabled") and not force:
+            return []
+        beats = hb.get("beats") or {}
+        s = read_json(SCHED, {}) or {}
+        fired = []
+        t = now()
+        local = datetime.datetime.fromtimestamp(t)
+        for h in s.get("heartbeats") or []:
+            bid = h.get("id")
+            if bid not in beats or (force and bid != force):
+                continue
+            if not force and not h.get("enabled", True):
+                continue
+            last = meta_get(self.db, "beat_last:%s" % bid)
+            due = bool(force)
+            if not due and h.get("everyMinutes"):
+                if last is None:
+                    with Tx(self.db):
+                        meta_set(self.db, "beat_last:%s" % bid, t)
+                    continue
+                due = t - last >= float(h["everyMinutes"]) * 60
+            elif not due and h.get("at"):
+                m = re.match(r"^(\d{1,2}):(\d{2})$", h["at"])
+                if m:
+                    slot = local.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0,
+                                         microsecond=0).timestamp()
+                    due = slot <= t < slot + 3 * 3600 and (last is None or last < slot)
+            if not due:
+                continue
+            busy = self.db.execute("SELECT 1 FROM jobs WHERE beat_id=? AND status IN ('queued','running')",
+                                   (bid,)).fetchone()
+            with Tx(self.db):
+                meta_set(self.db, "beat_last:%s" % bid, t)
+            if busy:
+                continue    # one beat in flight per heartbeat
+            kind = beats[bid]
+            tier, model = route(kind)
+            prompt = BEAT_PROMPT.format(label=h.get("label") or bid, prompt=h.get("prompt") or "")
+            jid = self.enqueue(None, D, prompt, model=model, kind=kind, tier=tier, priority=0,
+                               source="beat", beat_id=bid, use_mcp=os.path.isfile(MCP))
+            fired.append(jid)
+        return fired
+
+    def start_jobs(self, cfg):
+        db = self.db
+        cap = cap_now(cfg)
+        running = db.execute("SELECT * FROM jobs WHERE status='running'").fetchall()
+        busy_dirs = set(os.path.realpath(r["dir"]) for r in running if r["source"] != "beat")
+        n = len(running)
+        budget = None
+        queued = db.execute("SELECT * FROM jobs WHERE status='queued' ORDER BY priority, urgent DESC, id").fetchall()
+        for j in queued:
+            reason = None
+            if j["not_before"] and j["not_before"] > now():
+                reason = "retrying at %s" % clock(j["not_before"])
+            elif n >= cap:
+                reason = "waiting for a slot (%d running, max %d)" % (n, cap)
+            elif j["source"] != "beat" and os.path.realpath(j["dir"]) in busy_dirs:
+                reason = "folder busy with another job"
+            elif is_opus(j["model"]) and not j["urgent"]:
+                if budget is None:
+                    budget = budget_state(cfg, db)
+                if budget["paused"]:
+                    reason = "budget: %s (Opus paused at %d%%)" % (budget["detail"], round(budget["pauseAt"] * 100))
+                    with Tx(db):
+                        emit(db, "budget:%s:%s" % (local_day(), budget["source"]), "budget",
+                             "[MC] Budget: new Opus work is paused — %s. Queued Opus jobs wait; cheap and mid "
+                             "work keeps running. `mia core jobs` lists them; dispatch with --urgent to override."
+                             % budget["detail"])
+            if reason:
+                if reason != j["wait_reason"]:
+                    with Tx(db):
+                        update_job(db, j["id"], wait_reason=reason)
+                continue
+            if not os.path.isdir(j["dir"]):
+                with Tx(db):
+                    update_job(db, j["id"], status="failed", error="no such folder: %s" % j["dir"],
+                               finished_at=now())
+                    if j["task_id"]:
+                        emit(db, "failed:%d:%d" % (j["id"], j["turn"]), "executor",
+                             "[MC] Dispatch for task %s failed: no such folder %s." % (j["task_id"], j["dir"]),
+                             task_id=j["task_id"], job_id=j["id"])
+                continue
+            self.launch(j, cfg)
+            n += 1
+            if j["source"] != "beat":
+                busy_dirs.add(os.path.realpath(j["dir"]))
+
+    def launch(self, j, cfg):
+        db = self.db
+        attempt = j["attempts"] + 1
+        rdir = os.path.join(RUNS, str(j["id"]))
+        os.makedirs(rdir, exist_ok=True)
+        stem = os.path.join(rdir, "run-%d" % attempt)
+        log_path, err_path, prompt_path = stem + ".jsonl", stem + ".err", stem + ".prompt"
+        pidfile = os.path.join(rdir, "pids")
+        with open(prompt_path, "w", encoding="utf-8") as f:
+            f.write(j["next_message"] or "carry on")
+        mode = j["next_mode"]
+        args = [claude_bin(cfg), "-p", "--output-format", "stream-json", "--verbose"]
+        if j["model"]:
+            args += ["--model", j["model"]]
+        args += ["--resume", j["session_id"]] if mode == "resume" else ["--session-id", j["session_id"]]
+        pm = cfg.get("permissionMode") or "skip"
+        args += ["--dangerously-skip-permissions"] if pm == "skip" else ["--permission-mode", pm]
+        if j["use_mcp"] and os.path.isfile(MCP):
+            args += ["--mcp-config", MCP, "--strict-mcp-config"]
+        cap_usd = (cfg.get("maxBudgetUsd") or {}).get(j["tier"] or "")
+        if cap_usd:
+            args += ["--max-budget-usd", str(cap_usd)]
+        env = clean_env({"MIA_TASK_ID": j["task_id"], "MIA_JOB_ID": j["id"], "MIA_RUN_PIDFILE": pidfile})
+        kw = {}
+        if WINDOWS:
+            kw["creationflags"] = 0x00000200 | 0x08000000  # NEW_PROCESS_GROUP | NO_WINDOW
+        else:
+            kw["start_new_session"] = True
+        try:
+            with open(prompt_path, "rb") as fin, open(log_path, "ab") as fout, open(err_path, "ab") as ferr:
+                p = subprocess.Popen(args, cwd=j["dir"], stdin=fin, stdout=fout, stderr=ferr, env=env, **kw)
+        except OSError as e:
+            with Tx(db):
+                update_job(db, j["id"], status="failed", error="could not start claude: %s" % e, finished_at=now())
+                emit(db, "failed:%d:%d" % (j["id"], j["turn"]), "executor",
+                     "[MC] Could not start the executor for task %s: %s" % (j["task_id"] or j["beat_id"], e),
+                     task_id=j["task_id"], job_id=j["id"])
+            return None
+        t = now()
+        with Tx(db):
+            cur = db.execute("INSERT INTO runs(job_id, attempt, turn, mode, model, pid, log_path, err_path, pidfile,"
+                             " started_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                             (j["id"], attempt, j["turn"], mode, j["model"], p.pid, log_path, err_path, pidfile, t))
+            update_job(db, j["id"], status="running", attempts=attempt, wait_reason=None,
+                       started_at=j["started_at"] or t, not_before=None)
+        self.procs[cur.lastrowid] = p
+        if j["task_id"]:
+            at = iso(t)
+            label = {"fresh": "Dispatched", "resume": "Resumed"}.get(mode, "Started")
+
+            def upd(tk):
+                e = tk.get("executor") if isinstance(tk.get("executor"), dict) else {}
+                if mode == "fresh" and attempt == 1:
+                    e = {"dispatchedAt": at}
+                e.update({"headless": True, "jobId": j["id"], "sessionId": j["session_id"], "model": j["model"],
+                          "finishedAt": None, "attempt": attempt, "turn": j["turn"], "pid": p.pid,
+                          "log": log_path})
+                tk["executor"] = e
+                if tk.get("status") in ("queued", "checking", "asking"):
+                    tk["status"] = "running"
+                task_log(tk, "%s headless executor (%s, run %d) in %s" % (label, model_label(j["model"]),
+                                                                          attempt, j["dir"]))
+            mutate_task(j["task_id"], upd)
+        return p
+
+    # -- snapshot for the app / panel -----------------------------------------
+
+    def write_snapshot(self, cfg):
+        db = self.db
+        rows = db.execute("SELECT * FROM jobs WHERE status IN ('queued','running') OR updated_at>? "
+                          "ORDER BY id DESC LIMIT 40", (now() - 86400,)).fetchall()
+        jobs = []
+        for j in rows:
+            r = db.execute("SELECT log_path FROM runs WHERE job_id=? ORDER BY id DESC LIMIT 1", (j["id"],)).fetchone()
+            tail = []
+            if r is not None and j["status"] == "running":
+                tail, _ = pretty_lines(r["log_path"], limit=4)
+            jobs.append({"id": j["id"], "taskId": j["task_id"], "beat": j["beat_id"], "kind": j["kind"],
+                         "model": j["model"], "status": j["status"], "waitReason": j["wait_reason"],
+                         "sessionId": j["session_id"], "attempts": j["attempts"], "turn": j["turn"],
+                         "costUsd": round(j["cost_usd"], 4), "outputTokens": j["output_tokens"],
+                         "error": j["error"], "startedAt": iso(j["started_at"]) if j["started_at"] else None,
+                         "finishedAt": iso(j["finished_at"]) if j["finished_at"] else None,
+                         "log": r["log_path"] if r is not None else None, "tail": tail})
+        b = budget_state(cfg, db) if (cfg.get("budget") or {}).get("enabled") else None
+        snap = {"pid": os.getpid(), "cap": cap_now(cfg), "headless": bool(cfg.get("headless")),
+                "running": sum(1 for j in jobs if j["status"] == "running"),
+                "queued": sum(1 for j in jobs if j["status"] == "queued"),
+                "opusTokensToday": opus_tokens_today(db), "budget": b, "jobs": jobs}
+        body = json.dumps(snap, sort_keys=True)
+        if body != self.last_snapshot or now() - self.snap_at > 30:
+            snap["at"] = iso()
+            write_json(SNAPSHOT, snap)
+            self.last_snapshot = body
+            self.snap_at = now()
+
+    # -- service loop -----------------------------------------------------------
+
+    def run_forever(self, interval=2.0):
+        stop = [False]
+
+        def on_signal(*_):
+            stop[0] = True
+        signal.signal(signal.SIGTERM, on_signal)
+        signal.signal(signal.SIGINT, on_signal)
+        try:
+            while not stop[0]:
+                try:
+                    self.tick()
+                except sqlite3.OperationalError as e:
+                    sys.stderr.write("mia-core: tick skipped (%s)\n" % e)
+                slept = 0.0
+                while slept < interval and not stop[0]:
+                    time.sleep(0.2)
+                    slept += 0.2
+        finally:
+            # Workers keep running; the next start adopts them.
+            self.awake.release()
+
+
+# ---- routing guess (for routeByDefault) --------------------------------------
+
+GUESS = [
+    ("research", r"\b(research|investigat\w*|compare|comparison|look into|find out|survey|market)\b"),
+    ("scout", r"\b(scout|scan for|keep an eye)\b"),
+    ("summary", r"\b(summari[sz]e|summary|digest|tl;?dr)\b"),
+    ("docs", r"\b(docs?|documentation|readme|write[- ]up)\b"),
+    ("fix", r"\b(fix|bug|typo|broken)\b"),
+]
+
+
+def guess_kind(text, default="build"):
+    """A kind for a dispatch that named none: builds stay on Opus, plain
+    research/summaries/fixes go to the cheaper tiers. Code words win."""
+    s = (text or "").lower()
+    if re.search(r"\b(build|implement|refactor|feature|release|design|architect\w*|migrat\w*)\b", s):
+        return default
+    for kind, rx in GUESS:
+        if re.search(rx, s):
+            return kind
+    return default
+
+
+# ---- CLI ---------------------------------------------------------------------
+
+def norm_task(s):
+    s = (s or "").strip()
+    if not re.match(r"^\d{1,6}$", s):
+        die("bad task id: %r" % s)
+    return "%04d" % int(s)
+
+
+def find_job(db, ref):
+    """A job id (#12 or 12 when no such task) or a task id (latest job)."""
+    ref = str(ref).strip()
+    if ref.startswith("#") or ref.startswith("j"):
+        j = get_job(db, int(ref.lstrip("#j")))
+    else:
+        j = db.execute("SELECT * FROM jobs WHERE task_id=? ORDER BY id DESC LIMIT 1",
+                       (norm_task(ref),)).fetchone()
+        if j is None and ref.isdigit():
+            j = get_job(db, int(ref))
+    if j is None:
+        die("no job for %s" % ref)
+    return j
+
+
+def job_line(j):
+    who = ("task %s" % j["task_id"]) if j["task_id"] else ("beat %s" % j["beat_id"])
+    extra = j["wait_reason"] if j["status"] == "queued" and j["wait_reason"] else (j["error"] or "")
+    return "#%-4d %-9s %-12s %-7s %-10s $%-6.2f %6s out  %s" % (
+        j["id"], j["status"], who, model_label(j["model"]), j["kind"] or "-", j["cost_usd"],
+        short(j["output_tokens"]), extra[:80])
+
+
+def cmd_enqueue(a):
+    if a.prompt_file:
+        body = read_text(os.path.expanduser(a.prompt_file))
+    else:
+        body = sys.stdin.read()
+    if not body.strip():
+        die("empty prompt")
+    if a.task and not a.raw:
+        body = EXECUTOR_PROMPT.format(id=a.task, brief=body.strip(), briefs=shown_path(BRIEFS))
+    d = os.path.abspath(os.path.expanduser(a.dir))
+    if not os.path.isdir(d):
+        die("no such folder: %s" % d)
+    core = Core()
+    model, tier = a.model, a.tier
+    if not model and a.kind:
+        tier, model = route(a.kind)
+    jid = core.enqueue(a.task, d, body, model=model, kind=a.kind, tier=tier, priority=a.priority,
+                       urgent=a.urgent)
+    j = get_job(core.db, jid)
+    if a.json:
+        print(json.dumps({"jobId": jid, "sessionId": j["session_id"], "model": j["model"]}))
+    else:
+        print("job %d queued (session %s)" % (jid, j["session_id"]))
+
+
+def cmd_tell(a):
+    text = " ".join(a.text).strip()
+    if text == "-":
+        text = sys.stdin.read().strip()
+    if not text:
+        die("empty message")
+    how = Core().tell(norm_task(a.task), text, interrupt=a.interrupt)
+    print("told %s (%s)" % (norm_task(a.task), how))
+
+
+def cmd_cancel(a):
+    db = connect()
+    j = find_job(db, a.ref)
+    ok = Core(db).cancel(j["id"], "cancelled by Mia")
+    print("job %d %s" % (j["id"], "cancelled" if ok else "was not active"))
+
+
+def cmd_jobs(a):
+    db = connect()
+    q = "SELECT * FROM jobs" + ("" if a.all else " WHERE status IN ('queued','running') OR updated_at>?") + \
+        " ORDER BY id DESC LIMIT ?"
+    rows = db.execute(q, ((a.n,) if a.all else (now() - 86400, a.n))).fetchall()
+    if a.json:
+        print(json.dumps([dict(r) for r in rows], indent=2, default=str))
+        return
+    if not rows:
+        print("(no jobs)")
+    for j in reversed(rows):
+        print(job_line(j))
+
+
+def cmd_log(a):
+    db = connect()
+    j = find_job(db, a.ref)
+    runs = db.execute("SELECT * FROM runs WHERE job_id=? ORDER BY id", (j["id"],)).fetchall()
+    if not runs:
+        print("(job %d has not started: %s)" % (j["id"], j["wait_reason"] or j["status"]))
+        return
+    if a.raw:
+        sys.stdout.write(read_text(runs[-1]["log_path"]))
+        return
+    print(job_line(j))
+    shown = runs if a.all else runs[-1:]
+    off = 0
+    for r in shown:
+        print("── run %d (%s, %s) pid %s%s" % (r["attempt"], r["mode"], iso(r["started_at"]), r["pid"],
+                                             (" · " + r["outcome"]) if r["outcome"] else ""))
+        lines, off = pretty_lines(r["log_path"], limit=None if a.all else a.n)
+        for l in lines:
+            print(l)
+    if a.follow:
+        r = shown[-1]
+        try:
+            while True:
+                time.sleep(1)
+                lines, off = pretty_lines(r["log_path"], offset=off)
+                for l in lines:
+                    print(l)
+                sys.stdout.flush()
+                rr = db.execute("SELECT ended_at FROM runs WHERE id=?", (r["id"],)).fetchone()
+                if rr["ended_at"] and not lines:
+                    newer = db.execute("SELECT * FROM runs WHERE job_id=? AND id>? ORDER BY id LIMIT 1",
+                                       (j["id"], r["id"])).fetchone()
+                    if newer is None:
+                        break
+                    r, off = newer, 0
+                    print("── run %d (%s)" % (r["attempt"], r["mode"]))
+        except KeyboardInterrupt:
+            pass
+
+
+def cmd_status(a):
+    cfg = load_config()
+    db = connect()
+    pid = read_text(CORE_PID).strip()
+    up = pid.isdigit() and pid_alive(int(pid))
+    print("mia-core: %s · headless dispatch %s · cap %d · heartbeat runs %s · routing by default %s"
+          % ("running (pid %s)" % pid if up else "not running", "on" if cfg["headless"] else "off",
+             cap_now(cfg), "on" if cfg["heartbeats"].get("enabled") else "off",
+             "on" if cfg["routeByDefault"] else "off"))
+    b = budget_state(cfg, db)
+    print("budget: %s · %s%s" % ("on" if cfg["budget"].get("enabled") else "off",
+                                 b["detail"] or "no data yet", " · Opus PAUSED" if b["paused"] else ""))
+    rows = db.execute("SELECT * FROM jobs WHERE status IN ('queued','running') ORDER BY id").fetchall()
+    print("jobs: %d running, %d queued" % (sum(1 for r in rows if r["status"] == "running"),
+                                          sum(1 for r in rows if r["status"] == "queued")))
+    for j in rows:
+        print("  " + job_line(j))
+
+
+def cmd_budget(a):
+    cfg = load_config()
+    b = budget_state(cfg, connect())
+    if a.json:
+        print(json.dumps(b))
+    else:
+        print("%s%s" % (b["detail"] or "no data yet", " — Opus paused" if b["paused"] else ""))
+
+
+def cmd_config(a):
+    if a.op == "get" or a.op is None:
+        cfg = load_config()
+        v = get_path(cfg, a.key) if a.key else cfg
+        print(json.dumps(v, indent=2))
+    elif a.op == "set":
+        if not a.key or a.value is None:
+            die("usage: mia-core config set <key> <json-value|default>")
+        v = set_config(a.key, a.value)
+        print("%s = %s" % (a.key, json.dumps(v)))
+
+
+def cmd_tick(a):
+    Core().tick()
+
+
+def cmd_beat(a):
+    core = Core()
+    ids = core.fire_beats(load_config(), force=a.id)
+    if not ids:
+        die("no such heartbeat in schedule.json / heartbeats.beats: %s" % a.id)
+    print("beat %s queued as job %d" % (a.id, ids[0]))
+
+
+def cmd_run(a):
+    lock = FileLock(CORE_LOCK, blocking=False)
+    if not lock.acquire():
+        sys.stderr.write("mia-core: already running (pid %s)\n" % read_text(CORE_PID).strip())
+        sys.exit(3)
+    write_atomic(CORE_PID, "%d\n" % os.getpid())
+    try:
+        core = Core()
+        if a.once:
+            core.tick()
+        else:
+            core.run_forever(a.interval)
+    finally:
+        try:
+            if read_text(CORE_PID).strip() == str(os.getpid()):
+                os.unlink(CORE_PID)
+        except OSError:
+            pass
+        lock.release()
+
+
+def cmd_guess(a):
+    print(guess_kind(" ".join(a.text), load_config().get("defaultKind") or "build"))
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(prog="mia-core", description="Mia's job engine (task 0292).")
+    sp = ap.add_subparsers(dest="cmd")
+    p = sp.add_parser("run", help="run the service (single instance)")
+    p.add_argument("--once", action="store_true")
+    p.add_argument("--interval", type=float, default=2.0)
+    p.set_defaults(fn=cmd_run)
+    p = sp.add_parser("tick", help="one supervisor pass (tests)")
+    p.set_defaults(fn=cmd_tick)
+    p = sp.add_parser("enqueue", help="queue a headless job")
+    p.add_argument("--task")
+    p.add_argument("--dir", required=True)
+    p.add_argument("--model")
+    p.add_argument("--kind")
+    p.add_argument("--tier")
+    p.add_argument("--priority", type=int, default=3)
+    p.add_argument("--urgent", action="store_true")
+    p.add_argument("--prompt-file")
+    p.add_argument("--raw", action="store_true", help="prompt as given, no executor wrapper")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_enqueue)
+    p = sp.add_parser("tell", help="send a task's executor a message (resumes its session)")
+    p.add_argument("task")
+    p.add_argument("text", nargs="+")
+    p.add_argument("--interrupt", action="store_true", help="stop the current turn and resume now")
+    p.set_defaults(fn=cmd_tell)
+    p = sp.add_parser("cancel")
+    p.add_argument("ref")
+    p.set_defaults(fn=cmd_cancel)
+    p = sp.add_parser("jobs")
+    p.add_argument("--all", action="store_true")
+    p.add_argument("-n", type=int, default=30)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_jobs)
+    p = sp.add_parser("log", help="a job's live log (task id or #job)")
+    p.add_argument("ref")
+    p.add_argument("-n", type=int, default=40)
+    p.add_argument("-f", "--follow", action="store_true")
+    p.add_argument("--all", action="store_true")
+    p.add_argument("--raw", action="store_true")
+    p.set_defaults(fn=cmd_log)
+    p = sp.add_parser("status")
+    p.set_defaults(fn=cmd_status)
+    p = sp.add_parser("budget")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_budget)
+    p = sp.add_parser("config")
+    p.add_argument("op", nargs="?", choices=["get", "set"])
+    p.add_argument("key", nargs="?")
+    p.add_argument("value", nargs="?")
+    p.set_defaults(fn=cmd_config)
+    p = sp.add_parser("beat", help="fire one heartbeat run now")
+    p.add_argument("id")
+    p.set_defaults(fn=cmd_beat)
+    p = sp.add_parser("guess-kind")
+    p.add_argument("text", nargs="+")
+    p.set_defaults(fn=cmd_guess)
+    a = ap.parse_args(argv)
+    if not getattr(a, "fn", None):
+        ap.print_help()
+        return
+    a.fn(a)
 
 
 if __name__ == "__main__":

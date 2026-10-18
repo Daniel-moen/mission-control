@@ -26,6 +26,8 @@
     "test:jarvis": "node test/jarvis-test.mjs",
     "test:jarvis-cli": "node test/jarvis-cli-test.mjs",
     "test:routing-cli": "node test/routing-cli-test.mjs",
+    "test:mia-core": "python3 test/mia-core-test.py",
+    "test:mia-core-e2e": "python3 test/mia-core-e2e.py",
     "test:hq-model": "node test/hq-model-test.mjs",
     "test:hq-panel": "node test/hq-panel-e2e.mjs",
     "test:docpages": "node test/docpages-test.mjs",
