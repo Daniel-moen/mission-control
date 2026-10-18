@@ -209,7 +209,7 @@ async function main() {
   const before = (await chats()).length;
   await phone.locator('[data-jarvis] [data-pause]').click();
   await until(async () => (await chats()).length > before, 4000, 'pause chat').catch(() => {});
-  ok((await chats()).some((t) => t.startsWith('HQ: Jarvis pause.')), 'Pause → Mia gets "HQ: Jarvis pause." through the chat path');
+  ok((await chats()).some((t) => t.startsWith('HQ: pause.')), 'Pause → Mia gets "HQ: pause." through the chat path');
   ok((await relayJarvis()).pending.some((c) => c.action === 'pause' && c.told === true), 'Pause → queued on the relay for the Mac (told=true)');
   await until(async () => (await phone.locator('[data-jarvis="paused"]').count()) === 1, 3000, 'paused shown').catch(() => {});
   ok((await phone.locator('[data-jarvis="paused"]').count()) === 1, 'the strip shows Jarvis paused at once');
@@ -236,7 +236,7 @@ async function main() {
   const before2 = (await chats()).length;
   await panel.locator('[data-levels="dryager-panel"] button', { hasText: 'Fix' }).click();
   await until(async () => (await chats()).length > before2, 4000, 'level chat').catch(() => {});
-  ok((await chats()).some((t) => t === 'HQ: set Dry-ager panel (dryager-panel) autonomy to Fix with undo (level 3, was Suggest). Saved to the Jarvis registry.'), 'level → Mia told with old and new level');
+  ok((await chats()).some((t) => t === 'HQ: set Dry-ager panel (dryager-panel) autonomy to Fix with undo (level 3, was Suggest). Saved to the HQ registry.'), 'level → Mia told with old and new level');
   ok((await relayJarvis()).pending.some((c) => c.action === 'level' && c.project === 'dryager-panel' && c.level === 3), 'level → relay queue');
   ok((await panel.locator('[data-undo="dryager-panel"]').count()) === 1, 'Undo offered');
   await panel.locator('[data-levels]').scrollIntoViewIfNeeded();
@@ -303,8 +303,8 @@ async function main() {
   await ipadL.screenshot({ path: path.join(SHOTS, 'ipad-landscape-board.png') });
   // Resume from the iPad; the Mac applies it.
   await ipadL.locator('[data-jarvis] [data-pause]').click();
-  await until(async () => (await chats()).some((t) => t.startsWith('HQ: Jarvis resume.')), 4000, 'resume').catch(() => {});
-  ok((await chats()).some((t) => t.startsWith('HQ: Jarvis resume.')), 'Resume → Mia');
+  await until(async () => (await chats()).some((t) => t.startsWith('HQ: resume.')), 4000, 'resume').catch(() => {});
+  ok((await chats()).some((t) => t.startsWith('HQ: resume.')), 'Resume → Mia');
   await mia('sync');
   ok(reg().jarvis.paused === false && JSON.parse(fs.readFileSync(path.join(MIA_DIR, 'schedule.json'), 'utf8')).heartbeats[0].enabled === true, 'resume applied; hb_scout back on');
 

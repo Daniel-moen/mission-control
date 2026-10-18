@@ -110,8 +110,8 @@ console.log('questions, docs, feed');
 console.log('what Mia is told');
 {
   ok(M.miaLine({ action: 'level', project: 'dryager-panel', level: 3 }, registry) ===
-    'HQ: set Dry-ager panel (dryager-panel) autonomy to Fix with undo (level 3, was Suggest). Saved to the Jarvis registry.', 'level line');
-  ok(M.miaLine({ action: 'pause' }, registry).startsWith('HQ: Jarvis pause.'), 'pause line');
+    'HQ: set Dry-ager panel (dryager-panel) autonomy to Fix with undo (level 3, was Suggest). Saved to the HQ registry.', 'level line');
+  ok(M.miaLine({ action: 'pause' }, registry).startsWith('HQ: pause.'), 'pause line');
   ok(M.miaLine({ action: 'pitch', value: 'quieter' }, registry).includes('every other day'), 'pitch line names the new rate');
   ok(M.miaLine({ action: 'scout', project: 'crystal-garden' }, registry).startsWith('HQ: scout Crystal Garden (crystal-garden) now.'), 'scout line');
 }

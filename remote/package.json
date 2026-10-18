@@ -28,6 +28,8 @@
     "test:routing-cli": "node test/routing-cli-test.mjs",
     "test:mia-core": "python3 test/mia-core-test.py",
     "test:mia-core-e2e": "python3 test/mia-core-e2e.py",
+    "test:usage-cli": "node test/usage-cli-test.mjs",
+    "test:panel-0290": "node test/panel-0290-e2e.mjs",
     "test:hq-model": "node test/hq-model-test.mjs",
     "test:hq-panel": "node test/hq-panel-e2e.mjs",
     "test:docpages": "node test/docpages-test.mjs",

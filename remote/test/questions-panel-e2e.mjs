@@ -11,7 +11,8 @@
 //   • the X on a home card dismisses it, on this panel and on a second one,
 //     and Mia gets "[MC] Daniel dismissed q_…" (events.jsonl)
 //   • a sideways swipe dismisses a card; a short drag springs back
-//   • Show reveals the old cards; "Dismiss all old" closes every one with one
+//   • (0290) Home shows only the last hour; Mia's chat holds the old ones and
+//     "Dismiss all old" closes every one with one
 //     [MC] line; the thread then labels them Dismissed
 //   • the Settings age (24 h) re-sorts what counts as old
 //   • phone width: card, X and bar fit; zero console errors throughout
@@ -143,8 +144,11 @@ async function main() {
     && !s0.pendingQuestions.some((q) => /^q_old/.test(q.questionId)), 'questions over 48 h ride as oldQuestions, not pendingQuestions');
   ok(await visible(page, 'q_new1') && await visible(page, 'q_new2'), 'fresh questions get home cards');
   ok(!(await card(page, 'q_old1').count()) && !(await card(page, 'q_old3').count()), 'old questions get no home card');
-  ok(await page.locator('[data-old-questions="3"]').first().isVisible() && (await page.locator('[data-old-questions]').first().innerText()).includes('3 old questions hidden'),
-    'the home stack says "3 old questions hidden"');
+  // Since task 0290 Home shows only the last hour's questions; older open ones
+  // (the 30 h one here) sit behind one small link, the hidden old ones in Mia's chat.
+  ok(!(await card(page, 'q_day').count()) && (await page.locator('[data-older-questions="1"]').count()) === 1
+    && (await page.locator('[data-older-questions]').innerText()).includes('1 older question'), 'home: the 30 h question is one link away, not a card');
+  ok(!(await page.locator('[data-old-questions]').count()), 'home: no old-questions bar any more');
   const badge = await miaBadge(page);
   ok(badge - baseBadge === 3, `the Mia badge counts the 3 new fresh questions only (+${badge - baseBadge})`);
   const said = await page.evaluate(() => window.__said.join(' | '));
@@ -187,16 +191,14 @@ async function main() {
   ok(events().some((e) => e.startsWith('[MC] Daniel dismissed q_new2')), 'Mia is told about the swiped one');
   ok((await page.evaluate(() => location.hash)) !== '#mia', 'the swipe stayed on home');
 
-  console.log('Show old, then Dismiss all old');
+  console.log('Mia\'s chat: the old questions, then Dismiss all old');
+  await page.locator('[data-older-questions]').click();
+  await page.waitForSelector('[data-mia-view]', { timeout: 5000 });
+  await sleep(900);
   const bar = page.locator('[data-old-questions]').first();
-  await bar.getByRole('button', { name: 'Show' }).click();
-  await until(() => visible(page, 'q_old1'), 3000, 'old shown').catch(() => {});
-  ok(await visible(page, 'q_old1'), 'Show reveals old cards');
-  ok((await card(page, 'q_old1').innerText()).includes('asked 10d ago'), 'an old card says how long ago it was asked');
-  await page.screenshot({ path: path.join(SHOTS, 'home-old-shown.png') });
-  await bar.getByRole('button', { name: 'Hide' }).click();
-  await until(async () => !(await card(page, 'q_old1').count()), 3000, 'old hidden again').catch(() => {});
-  ok(!(await card(page, 'q_old1').count()), 'Hide puts them away again');
+  ok((await bar.innerText()).includes('3 old questions hidden'), 'the chat says "3 old questions hidden"');
+  ok(/Old one: which agent/.test(await page.evaluate(() => document.body.innerText)), 'the old questions stay readable in the thread');
+  await page.screenshot({ path: path.join(SHOTS, 'mia-old.png') });
   await bar.getByRole('button', { name: 'Dismiss all old' }).click();
   await until(async () => !(await page.locator('[data-old-questions]').count()), 4000, 'bar leaves').catch(() => {});
   ok(!(await page.locator('[data-old-questions]').count()), 'the bar leaves once they are dismissed');
@@ -206,7 +208,7 @@ async function main() {
   const s3 = await until(async () => { const s = await snap(); return s.oldQuestions.length ? null : s; }, 4000, 'snap 3').catch(snap);
   ok(!s3.oldQuestions.length && ['q_old1', 'q_old2', 'q_old3'].every((id) => s3.closedQuestions[id] === 'dismissed'), 'all three closed on the host, none deleted');
   ok(s3.messages.filter((m) => /^q_old/.test(m.questionId || '')).length === 3, 'the questions stay in the thread history');
-  ok(await visible(page, 'q_day') && await visible(page, 'q_seed1'), 'the day-old and task questions are untouched');
+  ok(s3.pendingQuestions.some((q) => q.questionId === 'q_day') && s3.pendingQuestions.some((q) => q.questionId === 'q_seed1'), 'the day-old and task questions are untouched');
 
   console.log('Thread labels');
   await page.goto(`${BASE}/?token=${TOKEN}#mia`);
@@ -231,16 +233,15 @@ async function main() {
   await page.goto(`${BASE}/?token=${TOKEN}#home`);
   await page.waitForSelector('[aria-label="Live"]', { timeout: 15000 });
   await sleep(1500);
-  ok(!(await card(page, 'q_day').count()) && (await page.locator('[data-old-questions="1"]').count()) === 1, 'home hides it and says "1 old question hidden"');
+  ok(!(await card(page, 'q_day').count()) && !(await page.locator('[data-older-questions]').count()), 'home: once old it leaves the "older" link too');
 
   console.log('Phone 390×844');
   const phone = await newPage(browser, { width: 390, height: 844 });
   await until(() => visible(phone, 'q_seed1'), 6000, 'phone card').catch(() => {});
   const c = await card(phone, 'q_seed1').boundingBox();
   const x = await card(phone, 'q_seed1').locator('[aria-label="Dismiss question"]').boundingBox();
-  const b = await phone.locator('[data-old-questions]').first().boundingBox();
   ok(c && x && x.x + x.width <= c.x + c.width + 1 && x.width >= 32, 'the X sits inside the card, a thumb-sized target');
-  ok(b && b.x >= 0 && b.x + b.width <= 390, 'the old-questions bar fits the phone width');
+  ok(c && c.x >= 0 && c.x + c.width <= 390, 'the card fits the phone width');
   ok(await phone.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'no horizontal scroll');
   await phone.screenshot({ path: path.join(SHOTS, 'home-phone.png') });
 
