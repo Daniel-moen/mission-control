@@ -3,7 +3,7 @@
 //
 //   node test/spoken-test.mjs
 
-import { speakable, firstSentences, SPOKEN_MAX } from '../app/src/lib/spoken.js';
+import { speakable, firstSentences, SPOKEN_MAX, ttsParts } from '../app/src/lib/spoken.js';
 
 let passed = 0;
 let failed = 0;
@@ -35,6 +35,17 @@ const u = firstSentences(run);
 ok(u.cut && u.text.endsWith('…') && u.text.length <= SPOKEN_MAX + 1 && !/,…$/.test(u.text), 'one endless sentence is cut on a word boundary with …');
 const eg = 'Pick a model, e.g. Fable 5.1 or Opus 5.5, in the top corner of the Mia view. ' + 'x '.repeat(120);
 ok(firstSentences(eg).text.startsWith('Pick a model, e.g. Fable 5.1 or Opus 5.5, in the top corner'), '"e.g." and version numbers don\'t end a sentence');
+
+console.log('ttsParts (talk mode, task 0290)');
+{
+  const long = 'Your build finished and every check passed on the first run. ' + 'I filed the three reports in the Library and flagged the one that needs you. '.repeat(8);
+  const p = ttsParts(long);
+  ok(p[0] === 'Your build finished and every check passed on the first run.', 'the first sentence is its own piece');
+  ok(p.length >= 3 && p.every((x) => x.length <= 380), `the rest in /tts-sized pieces (${p.map((x) => x.length).join(', ')})`);
+  ok(p.join(' ').replace(/\s+/g, ' ') === speakable(long), 'nothing dropped or repeated');
+  ok(JSON.stringify(ttsParts('Done. Short.')) === JSON.stringify(['Done. Short.']), 'a short reply is one piece');
+  ok(ttsParts('').length === 0, 'nothing to say → no pieces');
+}
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

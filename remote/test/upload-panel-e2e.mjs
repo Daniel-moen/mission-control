@@ -85,13 +85,23 @@ async function newPage(browser, { viewport, standalone = true }) {
   // Linked (the pill is only visible from sm: up, so attached is enough).
   await page.waitForSelector('[aria-label="Live"]', { timeout: 15000, state: 'attached' });
   await page.evaluate(() => { location.hash = '#mia'; });
-  await page.getByLabel('Send Mia a file').first().waitFor({ timeout: 5000 });
+  await clip(page).waitFor({ timeout: 5000 });
   await sleep(800);
   return page;
 }
 
+// The chat's paperclip (task 0290) opens the Attach sheet; "Photo or file"
+// there is the file picker.
+const clip = (page) => page.locator('[data-attach-button]').first();
+async function chooseFiles(page) {
+  await clip(page).click();
+  await page.locator('[data-attach-files]').waitFor({ timeout: 4000 });
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.locator('[data-attach-files]').click()]);
+  return chooser;
+}
+
 async function pick(page, files) {
-  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByLabel('Send Mia a file').first().click()]);
+  const chooser = await chooseFiles(page);
   ok(chooser.isMultiple(), 'the picker allows several files');
   await chooser.setFiles(files);
 }
@@ -145,7 +155,7 @@ async function main() {
     await shot(page, 'ipad-thread');
 
     console.log('refusals');
-    const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByLabel('Send Mia a file').first().click()]);
+    const chooser = await chooseFiles(page);
     await chooser.setFiles([exePath]);
     ok(await page.getByText(/\.exe files aren't supported/).isVisible(), 'an unsupported type is refused on the device with the reason');
     ok(!(await page.getByLabel('Files to send').isVisible().catch(() => false)), '…and never reaches the tray');
@@ -170,7 +180,7 @@ async function main() {
   console.log('phone 390×844 — layout, ⌘K entry');
   {
     const page = await newPage(browser, { viewport: { width: 390, height: 844 } });
-    const box = await page.getByLabel('Send Mia a file').first().boundingBox();
+    const box = await clip(page).boundingBox();
     ok(box && box.x >= 0 && box.x + box.width <= 390 && box.width >= 44, 'the upload button is on screen and a full 44pt+ target');
     const send = await page.getByLabel('Send', { exact: true }).boundingBox();
     ok(send && send.x + send.width <= 390, 'send still fits beside it');

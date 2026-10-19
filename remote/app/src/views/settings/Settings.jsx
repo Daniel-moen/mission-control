@@ -111,7 +111,7 @@ function VoiceSection() {
           tts === undefined
             ? 'Checking the relay…'
             : tts?.available
-              ? `${voice}, made on the Mac and free — for talk mode and announcements. Up to ${tts.limits.maxChars} characters a piece, ${tts.limits.dailyChars.toLocaleString()} a day — past that, or with the Mac offline, the device voice.`
+              ? `${voice}, made on the Mac and free — for talk mode and spoken updates. Up to ${tts.limits.maxChars} characters a piece, ${tts.limits.dailyChars.toLocaleString()} a day — past that, or with the Mac offline, the device voice.`
               : 'The Mac can’t make speech right now — the device voice is used until it can.'
         }
         last

@@ -6,8 +6,8 @@
 // Boots the real relay + the fake host (acting as MiaManager) and drives the
 // built panel in headless Chromium. Own ports (8869/8868).
 //
-// Covers: the picker sits in the Mia header's top-right corner (iPad landscape,
-// iPad portrait, phone — no horizontal scroll, nothing overlapped), shows the
+// Covers: the picker sits in Settings › Mia, not the Mia chat header (task
+// 0290; iPad landscape, iPad portrait, phone — no horizontal scroll), shows the
 // HOST's model, offers the four models; a pick → miaSetModel → host → snapshot
 // → picker; "Mia is still running on …" + "Restart Mia now" → miaRestart → the
 // offer clears once she's back on the new model; an older Mac app (no
@@ -108,25 +108,31 @@ async function newPage(browser, base, { viewport, hash = 'mia' }) {
   return page;
 }
 
-// The picker's box vs the Mia header row and the close button.
-async function cornerCheck(page) {
+// The picker lives in Settings › Mia (task 0290): inside that section, on
+// screen, no sideways scroll.
+async function pickerCheck(page) {
   return page.evaluate(() => {
     const pick = document.querySelector('[data-mia-model]');
     if (!pick) return { found: false };
     const p = pick.getBoundingClientRect();
-    const header = pick.closest('header').getBoundingClientRect();
-    const close = [...document.querySelectorAll('button[aria-label="Close"]')].map((b) => b.getBoundingClientRect()).find((r) => r.width);
-    const title = [...document.querySelectorAll('h2')].find((h) => h.textContent.trim() === 'Mia')?.getBoundingClientRect();
     return {
       found: true,
-      right: header.right - p.right,
-      top: p.top - header.top,
-      sameRowAsTitle: title ? Math.abs((p.top + p.bottom) / 2 - (title.top + title.bottom) / 2) < 12 : false,
-      overlapsClose: close ? p.right > close.left && p.left < close.right && p.bottom > close.top && p.top < close.bottom : false,
+      inSettings: !!pick.closest('[data-settings-mia]'),
+      inView: p.left >= 0 && p.right <= window.innerWidth && p.width > 0,
       hscroll: document.documentElement.scrollWidth > window.innerWidth + 1,
-      inView: p.left >= 0 && p.right <= window.innerWidth,
     };
   });
+}
+
+// …and the Mia chat itself has no picker any more.
+async function chatHasNoPicker(page) {
+  await page.evaluate(() => { location.hash = 'mia'; });
+  await page.locator('[data-mia-view]').waitFor({ timeout: 5000 });
+  await sleep(500);
+  const n = await page.locator('[data-mia-view] [data-mia-model]').count();
+  await page.evaluate(() => { location.hash = 'settings'; });
+  await page.locator('[data-mia-model]').waitFor({ timeout: 5000 });
+  return n === 0;
 }
 
 async function main() {
@@ -136,15 +142,16 @@ async function main() {
   const S = await stack(8869);
   console.log('model picker — iPad landscape 1180×820');
   {
-    const page = await newPage(browser, S.base, { viewport: { width: 1180, height: 820 } });
+    const page = await newPage(browser, S.base, { viewport: { width: 1180, height: 820 }, hash: 'settings' });
     const pick = page.locator('[data-mia-model]');
     await pick.waitFor({ timeout: 6000 });
-    const c = await cornerCheck(page);
-    ok(c.found && c.sameRowAsTitle && c.right < 90 && !c.overlapsClose && c.inView, `the picker sits in the header's top-right corner (${c.right}px from the edge)`);
+    const c = await pickerCheck(page);
+    ok(c.found && c.inSettings && c.inView, 'the picker sits in Settings › Mia');
+    ok(await chatHasNoPicker(page), 'the Mia chat header has no model picker');
     ok((await pick.getAttribute('data-mia-model')) === 'claude-opus-5-5' && (await pick.innerText()).includes('Opus 5.5'), 'it shows the model the host reports (Opus 5.5), not a panel default');
     const opts = await page.locator('select[aria-label="Mia\'s model"] option').evaluateAll((os) => os.map((o) => `${o.value}=${o.textContent}`));
     ok(JSON.stringify(opts) === JSON.stringify(['claude-fable-5-1=Fable 5.1', 'claude-opus-5-5=Opus 5.5', 'claude-sonnet-5=Sonnet 5', 'claude-haiku-4-5-20251001=Haiku 4.5']), `it offers the four models (${opts.join(', ')})`);
-    ok(!(await page.locator('[data-mia-restart]').count()), 'no restart offer while she runs on the saved model');
+    ok(!(await page.locator('[data-settings-mia] [data-mia-restart]').count()), 'no restart offer while she runs on the saved model');
 
     await page.selectOption('select[aria-label="Mia\'s model"]', 'claude-fable-5-1');
     await until(async () => (await S.miaApi()).model === 'claude-fable-5-1', 5000, 'host model');
@@ -152,16 +159,16 @@ async function main() {
     await until(async () => (await pick.getAttribute('data-mia-model')) === 'claude-fable-5-1', 5000, 'picker follows');
     ok((await pick.innerText()).includes('Fable 5.1'), 'the picker shows Fable 5.1 once the host\'s snapshot says so');
     ok(await page.getByText(/Model saved/).isVisible().catch(() => false), 'a toast confirms the save');
-    const offer = page.locator('[data-mia-restart="offer"]');
+    const offer = page.locator('[data-settings-mia] [data-mia-restart="offer"]');
     await offer.waitFor({ timeout: 4000 });
     ok((await offer.innerText()).includes('still running on Opus 5.5') && (await offer.innerText()).includes('Fable 5.1 applies from her next start'), 'the offer says she is still on Opus 5.5 until she restarts');
     const nRestarts = (await S.miaApi()).restarts;
-    await page.getByRole('button', { name: 'Restart Mia now' }).click();
+    await page.locator('[data-settings-mia]').getByRole('button', { name: 'Restart Mia now' }).click();
     await until(async () => (await S.miaApi()).runningModel === 'claude-fable-5-1', 5000, 'restarted');
     ok(S.cmds().filter((x) => x === 'miaRestart').length === 1 && !S.cmds().includes('miaStop'), 'Restart Mia now sends ONE miaRestart (no stop/start dance)');
     const after = await S.miaApi();
     ok(after.restarts === nRestarts + 1 && after.online && after.enabled, 'the host restarted her: online, on Fable 5.1');
-    await until(async () => !(await page.locator('[data-mia-restart]').count()), 5000, 'offer clears');
+    await until(async () => !(await page.locator('[data-settings-mia] [data-mia-restart]').count()), 5000, 'offer clears');
     ok(true, 'the offer clears once she is back on the new model');
     ok(!page.errors.length, `no page errors (${page.errors.join(' | ')})`);
     await page.context().close();
@@ -169,11 +176,11 @@ async function main() {
 
   for (const [label, viewport] of [['iPad portrait 820×1180', { width: 820, height: 1180 }], ['phone 390×844', { width: 390, height: 844 }]]) {
     console.log(`model picker — ${label}`);
-    const page = await newPage(browser, S.base, { viewport });
+    const page = await newPage(browser, S.base, { viewport, hash: 'settings' });
     await page.locator('[data-mia-model]').waitFor({ timeout: 6000 });
-    const c = await cornerCheck(page);
-    ok(c.found && c.sameRowAsTitle && c.right < 90 && c.inView, `${label}: top-right corner, on the title row (${c.right}px from the edge)`);
-    ok(!c.overlapsClose && !c.hscroll, `${label}: overlaps nothing, no horizontal scroll`);
+    const c = await pickerCheck(page);
+    ok(c.found && c.inSettings && c.inView, `${label}: in Settings › Mia, on screen`);
+    ok(!c.hscroll && (await chatHasNoPicker(page)), `${label}: no horizontal scroll; none in the chat header`);
     ok((await page.locator('[data-mia-model]').innerText()).includes('Fable 5.1'), `${label}: shows the host's model`);
     ok(!page.errors.length, `${label}: no page errors`);
     await page.context().close();
@@ -245,18 +252,18 @@ async function main() {
   console.log('older Mac app — stop + start fallback');
   {
     const L = await stack(8867, { FAKE_HOST_CAPS: 'upload', FAKE_HOST_LEGACY_MIA: '1' });
-    const page = await newPage(browser, L.base, { viewport: { width: 1180, height: 820 } });
+    const page = await newPage(browser, L.base, { viewport: { width: 1180, height: 820 }, hash: 'settings' });
     await page.locator('[data-mia-model]').waitFor({ timeout: 6000 });
-    ok(!(await page.locator('[data-mia-restart]').count()), 'no offer before a switch (nothing to compare)');
+    ok(!(await page.locator('[data-settings-mia] [data-mia-restart]').count()), 'no offer before a switch (nothing to compare)');
     await page.selectOption('select[aria-label="Mia\'s model"]', 'claude-sonnet-5');
-    const offer = page.locator('[data-mia-restart="offer"]');
+    const offer = page.locator('[data-settings-mia] [data-mia-restart="offer"]');
     await offer.waitFor({ timeout: 5000 });
     ok((await offer.innerText()).includes('Sonnet 5 applies from Mia\'s next start'), 'after a switch on this panel: the offer still shows');
-    await page.getByRole('button', { name: 'Restart Mia now' }).click();
+    await page.locator('[data-settings-mia]').getByRole('button', { name: 'Restart Mia now' }).click();
     await until(() => L.cmds().includes('miaStart'), 6000, 'start');
     const seq = L.cmds().filter((x) => x === 'miaStop' || x === 'miaStart' || x === 'miaRestart');
     ok(JSON.stringify(seq) === '["miaStop","miaStart"]', `it restarts her with stop, then start (${seq.join(' → ')})`);
-    await until(async () => !(await page.locator('[data-mia-restart]').count()), 6000, 'offer clears');
+    await until(async () => !(await page.locator('[data-settings-mia] [data-mia-restart]').count()), 6000, 'offer clears');
     ok((await L.miaApi()).online, 'she is back online, and the offer clears');
     ok(!page.errors.length, `no page errors (${page.errors.join(' | ')})`);
     await page.context().close();

@@ -216,7 +216,7 @@ async function main() {
     await calm(page);
     ok((await page.locator('[data-composer-refs] [data-ref="doc:raw-incident-hooks.md"]').count()) === 1, 'Ask Mia → the chat with the doc as a chip');
     const before = (await chats()).length;
-    await page.locator('[data-mia-view] textarea, [data-mia-view] input[placeholder]').last().fill(`What next? (${tag})`);
+    await page.locator('[data-mia-view] [placeholder="Add a note (optional)"]').first().fill(`What next? (${tag})`);
     await page.keyboard.press('Enter');
     const sent = await until(async () => { const c = await chats(); return c.length > before ? c[c.length - 1] : null; }, 5000, 'sent').catch(() => '');
     ok(sent.startsWith(`What next? (${tag})`) && sent.includes('📎 Report "Raw Incident: what works" (doc raw-incident-hooks.md · ~/.mission-control/library/raw-incident-hooks.md · read: mc-doc get raw-incident-hooks.md)'),
@@ -286,7 +286,8 @@ const TALK_INIT = () => {
 
 async function talkNoOpenAI(browser) {
   console.log('Talk mode: never OpenAI, Mia’s own voice');
-  const ctx = await browser.newContext({ viewport: { width: 1180, height: 820 }, hasTouch: true });
+  // No service worker: its fetches would skip page.route and reach the fake Mac.
+  const ctx = await browser.newContext({ viewport: { width: 1180, height: 820 }, hasTouch: true, serviceWorkers: 'block' });
   await ctx.addInitScript(TALK_INIT);
   // A device that chose Realtime before 0290.
   await ctx.addInitScript(() => { try { localStorage.setItem('mc.talk.engine', JSON.stringify('realtime')); } catch {} });
@@ -306,7 +307,7 @@ async function talkNoOpenAI(browser) {
     return r.fulfill({ status: 200, contentType: 'audio/mp4', body: Buffer.from(`fake-m4a:${text}`) });
   });
   await page.goto(`${BASE}/?token=${TOKEN}#mia`);
-  await page.waitForSelector('[aria-label="Live"]', { timeout: 15000, state: 'attached' });
+  await page.waitForSelector('[data-mia-view]', { timeout: 15000 });
   await sleep(1200);
   await page.mouse.click(5, 300); // a tap: unlocks audio like Daniel's first touch
   await page.getByRole('button', { name: 'Talk', exact: true }).first().click();
@@ -318,9 +319,10 @@ async function talkNoOpenAI(browser) {
     'I also tidied the three reports you asked about, filed them in the Library, and flagged the one that still needs a decision from you. ' +
     'Nothing else is waiting; the fleet is quiet and the usage meter is well under the limit for this session and the week. ' +
     'If you want, I can start on the Phoenix intro next, or hold until you have looked at the flagged report.';
+  const base = await page.evaluate(() => window.__played.length); // the silent unlock clips
   fs.appendFileSync(path.join(MIA_DIR, 'messages.jsonl'), JSON.stringify({ id: 't_1', at: new Date().toISOString(), from: 'mia', kind: 'chat', text: long }) + '\n');
-  await until(async () => (await page.evaluate(() => window.__played.length)) >= 2 && (await phase()) !== 'speaking', 15000, 'spoken').catch(() => {});
-  const played = await page.evaluate(() => window.__played.length);
+  await until(async () => tts.length >= 2 && (await page.evaluate(() => window.__played.length)) - base >= tts.length && (await phase()) !== 'speaking', 20000, 'spoken').catch(() => {});
+  const played = (await page.evaluate(() => window.__played.length)) - base;
   const said = await page.evaluate(() => window.__said.slice());
   ok(tts.length >= 2 && tts[0].text === 'Your build finished and every check passed on the first run.', `Mia’s reply goes to /tts, the first sentence on its own first (${tts.length} pieces: ${JSON.stringify(tts[0]?.text)})`);
   ok(tts.every((t) => t.text.length <= 400) && tts.map((t) => t.text).join(' ').includes('flagged report'), 'the rest follows in /tts-sized pieces, nothing dropped');

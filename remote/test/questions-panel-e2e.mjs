@@ -212,7 +212,7 @@ async function main() {
 
   console.log('Thread labels');
   await page.goto(`${BASE}/?token=${TOKEN}#mia`);
-  await page.waitForSelector('[aria-label="Live"]', { timeout: 15000 });
+  await page.waitForSelector('[data-mia-view]', { timeout: 15000 }); // chat-only: no top bar (task 0290)
   await sleep(1500);
   const thread = await page.evaluate(() => document.body.innerText);
   ok((thread.match(/Dismissed/g) || []).length >= 5, 'the thread marks dismissed questions "Dismissed"');

@@ -486,8 +486,10 @@ async function main() {
     ok((await hash(page)) === 'mia' && (await page.locator('[data-talk-slot] [data-talk]').count()) === 1, `${label}: tapping the pill expands back to Mia`);
     ok(await page.locator('[data-talk-pill]').count() === 0, `${label}: …and the pill steps aside`);
 
-    // Leave again and stop from the pill.
-    await page.getByRole('button', { name: 'Library', exact: true }).click();
+    // Leave again and stop from the pill. (The Mia chat has no dock since
+    // task 0290 — leave by link, as a Library ref chip or Mia's open-doc does.)
+    await page.evaluate(() => { location.hash = 'library'; });
+    await page.locator('[data-pill-stop]').waitFor({ timeout: 4000 });
     await page.locator('[data-pill-stop]').click();
     await sleep(500);
     const after = await page.evaluate(() => ({ talk: !!document.querySelector('[data-talk]'), live: window.__tracks.filter((t) => t.readyState === 'live').length }));
@@ -626,7 +628,8 @@ async function main() {
     await page.evaluate(() => window.__setHidden(false));
     ok(asked.length === nAsked, 'Off, quiet hours and background: no /tts request at all');
 
-    // A live talk call: the message goes into the call, not through /tts.
+    // A live talk call: Mia's reply is read in the call — in her own voice via
+    // /tts since task 0290, the device voice staying quiet.
     await page.locator('[data-announce-mic]').click().catch(async () => {
       mia('say', '--speak', 'Open the mic probe.');
       await page.locator('[data-announce-mic]').click({ timeout: 6000 });
@@ -634,8 +637,10 @@ async function main() {
     await until(async () => (await page.getAttribute('[data-talk]', 'data-talk').catch(() => null)) === 'listening', 8000, 'talk on');
     const nCall = asked.length;
     mia('say', '--speak', 'In-call probe, done.');
-    await until(async () => (await said()).some((t) => t.includes('In-call probe')), 8000, 'said in call');
-    ok(asked.length === nCall, 'with a talk call live, the message is read in the call — no /tts');
+    await until(() => asked.slice(nCall).some((a) => a.text.includes('In-call probe')), 8000, 'in-call /tts');
+    ok(true, 'with a talk call live, the reply goes through /tts (Mia’s voice, not OpenAI)');
+    await until(async () => (await played()).filter((p) => p.ended).length >= 2, 6000, 'in-call played').catch(() => {});
+    ok(!(await said()).some((t) => t.includes('In-call probe')), '…played on the page’s <audio>, the device voice quiet');
     await page.locator('[data-pill-stop]').click().catch(() => {});
     ok(!page.errors.length, `no page errors (${page.errors.join(' | ')})`);
     await page.context().close();
@@ -674,11 +679,15 @@ async function main() {
     ok(inSafe.x >= 0 && inSafe.x + inSafe.width <= viewport.width && inSafe.y > 100, 'it sits inside the screen, below the top band');
     await go('mia');
     ok((await bubble.count()) === 0, 'hidden on the Mia view itself');
-    for (const h of ['fleet', 'library', `doc/${RESEARCH}`, 'agent/acme-worker-1']) {
+    for (const h of ['fleet', 'library', 'agent/acme-worker-1']) {
       await go(h);
       ok(await bubble.isVisible(), `shown on #${h.split('/')[0]}`);
       ok((await covers(CHROME)).length === 0, `…and covers no header/dock control there (${await covers(CHROME)})`);
     }
+    // A report gives the page to the document (task 0290): no bubble — its
+    // "Ask Mia" button clips the doc into her chat instead.
+    await go(`doc/${RESEARCH}`);
+    ok((await bubble.count()) === 0 && (await page.locator('[data-doc-to-mia]').isVisible()), 'hidden on a report, which has "Ask Mia"');
     let r = await resultFor(mia('panel', 'show-doc', 'acme pricing'));
     await sleep(700);
     ok(r.ok && (await bubble.isVisible()), 'shown over the page Mia is showing (viewer)');

@@ -290,7 +290,8 @@ export default function HQ({ onClose, onOpenDoc, onOpenTask, companyId = null, o
           ]}
         />
       )}
-      {(current || section !== 'channels') && <span className="hidden sm:inline-flex"><SyncChip view={view} /></span>}
+      {/* Phone overview: the HQ/Channels switch needs the room; a company page has it. */}
+      {(current || section !== 'channels') && <span className={current || wideHead ? 'inline-flex' : 'hidden'}><SyncChip view={view} /></span>}
       {onClose && <IconButton icon="close" label="Close" size="sm" variant="glass" onClick={onClose} />}
     </header>
   );

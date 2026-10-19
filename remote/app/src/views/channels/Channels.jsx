@@ -37,7 +37,7 @@ function SyncChip({ view }) {
   return (
     <button onClick={() => refreshChannels()} data-sync
       title={error || (pushed ? `Channels HQ pushed ${new Date(pushed).toLocaleString()}` : '')}
-      className={`pill glass-soft glass-soft-hover inline-flex items-center gap-1.5 px-2.5 py-1 text-[11.5px] ${error || stale ? 'text-warn' : 'text-ink2'}`}>
+      className={`pill glass-soft glass-soft-hover inline-flex max-w-full items-center gap-1.5 px-2.5 py-1 text-[11.5px] ${error || stale ? 'text-warn' : 'text-ink2'}`}>
       {loading ? <Spinner size={10} /> : <span className={`h-1.5 w-1.5 flex-none rounded-full ${error || stale ? 'bg-warn' : 'bg-accent'}`} />}
       <span className="truncate">{label}</span>
     </button>

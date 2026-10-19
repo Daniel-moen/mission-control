@@ -217,7 +217,8 @@ try {
   await p2.waitForSelector('[data-channel-page]');
   await sleep(1400);
   await shot(p2, '12-channel-page-phone');
-  await p2.locator('[data-video]').first().click();
+  // The thumbnail: mid-row on a phone is a checkpoint dot (its own tooltip button).
+  await p2.locator('[data-video]').first().click({ position: { x: 40, y: 40 } });
   await p2.waitForSelector('[data-video-sheet]');
   await sleep(1500);
   await shot(p2, '13-video-sheet-phone');
@@ -241,7 +242,8 @@ try {
 } finally {
   await browser?.close().catch(() => {});
   for (const p of procs) p.kill();
-  if (!process.env.SHOTS) fs.rmSync(TMP, { recursive: true, force: true });
+  // The killed processes may still be writing for a moment.
+  if (!process.env.SHOTS) { await sleep(400); try { fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 3 }); } catch {} }
 }
 console.log(`\n${passed} passed, ${failed} failed${process.env.SHOTS ? ` · shots in ${SHOTS}` : ''}`);
 process.exit(failed ? 1 : 0);
