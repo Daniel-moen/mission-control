@@ -631,9 +631,10 @@ export default function Channels({ onClose, channelKey, onChannel, embedded = fa
   return (
     <div className="flex h-full min-h-0 flex-col" data-view="channels">
       {embedded ? (
-        <div className="flex flex-none items-center gap-2 px-4 pb-3 sm:px-5">
+        <div className="flex flex-none flex-wrap items-center gap-2 px-4 pb-3 sm:px-5">
           {!ch && <Segmented value={tab} onChange={setTab} options={TABS.map((t) => (t.value === 'channels' ? { ...t, label: 'Overview' } : t))} />}
-          <div className="min-w-0 flex-1 truncate"><SyncChip view={view} /></div>
+          {/* wraps under the tabs on a phone rather than shrinking to a dot */}
+          <div className="min-w-[170px] flex-1 truncate"><SyncChip view={view} /></div>
         </div>
       ) : (
         <>
