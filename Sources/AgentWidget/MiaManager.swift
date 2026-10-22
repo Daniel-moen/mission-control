@@ -250,6 +250,8 @@ final class MiaManager: ObservableObject {
         scanMessages()
         scanPanel(now: now)
         scanDispatch(now: now)
+        scanRefresh(now: now)
+        checkContext(now: now)
         trackExecutors(now: now)
         if now.timeIntervalSince(lastScheduleTick) >= 30 {
             lastScheduleTick = now
@@ -338,6 +340,63 @@ final class MiaManager: ObservableObject {
         nextLaunchAt = now.addingTimeInterval(delay)
     }
 
+    // MARK: Self-refresh (task 0385)
+
+    /// `mia refresh --stdin` writes refresh.request {handoff}; restart her on a
+    /// fresh session (no --resume) and tell the new one to read only memory.md
+    /// plus that handoff.
+    private func scanRefresh(now: Date) {
+        let path = dir + "/refresh.request"
+        guard fm.fileExists(atPath: path) else { return }
+        let req = (try? Data(contentsOf: URL(fileURLWithPath: path)))
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+        try? fm.removeItem(atPath: path)
+        guard settings.miaEnabled else { return }
+        updateState { s in
+            if let h = req["handoff"] as? String { s["refreshHandoff"] = h }
+            s["lastRefreshAt"] = Self.iso(now)
+        }
+        _ = restart()
+    }
+
+    /// Safety net: once her live context passes ~250k tokens, ask (once per
+    /// session) that she refresh. Never kills her.
+    private var nextContextCheck = Date.distantPast
+    private static let contextLimit = 250_000
+
+    private func checkContext(now: Date) {
+        guard now >= nextContextCheck, liveMia() != nil else { return }
+        nextContextCheck = now.addingTimeInterval(60)
+        let st = readState()
+        guard let sid = st["sessionId"] as? String, !sid.isEmpty,
+              (st["ctxNudgedSid"] as? String) != sid,
+              let tokens = Self.contextTokens(
+                  path: MiaCoreLink.transcriptPath(home: NSHomeDirectory(), cwd: dir, sessionId: sid)),
+              tokens > Self.contextLimit else { return }
+        updateState { $0["ctxNudgedSid"] = sid }
+        enqueue(kind: "system",
+                line: "[MC] Your context is about \(tokens / 1000)k tokens, which makes every turn expensive. When you reach a good stopping point, write a handoff and run `mia refresh --stdin` (save what is open, who waits on whom, what to do first; `mia note` durable facts first).")
+    }
+
+    /// Context size at her latest assistant turn: input + cache read + cache
+    /// write tokens from the last `usage` block in the transcript's tail.
+    static func contextTokens(path: String) -> Int? {
+        guard let h = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? h.close() }
+        let size = (try? h.seekToEnd()) ?? 0
+        try? h.seek(toOffset: size > 262_144 ? size - 262_144 : 0)
+        guard let data = try? h.readToEnd(), let text = String(data: data, encoding: .utf8) else { return nil }
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true).reversed() {
+            guard line.contains("\"cache_read_input_tokens\""),
+                  let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  let msg = obj["message"] as? [String: Any],
+                  let u = msg["usage"] as? [String: Any] else { continue }
+            func n(_ k: String) -> Int { (u[k] as? NSNumber)?.intValue ?? 0 }
+            return n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens")
+        }
+        return nil
+    }
+
     private func launchMia(now: Date) {
         guard let manager else { return }
         ensureLayout()
@@ -361,8 +420,12 @@ final class MiaManager: ObservableObject {
             s["sessionId"] = NSNull()
         }
         if relaunch && resume == nil {
+            let handoff = before["refreshHandoff"] as? String
+            if handoff != nil { updateState { $0["refreshHandoff"] = nil } }
             enqueue(kind: "system",
-                    line: "[MC] You were restarted. Run `mia inbox` and `mia status` to catch up.",
+                    line: handoff.map {
+                        "[MC] You refreshed yourself on purpose: this is a fresh, small session. Read ONLY memory.md and your handoff \($0), then run `mia status` and `mia inbox`. For anything else use `mia recall \"query\"` (add --project/--kind) instead of reading files, and `mia refresh --stdin` again when the subject changes a lot or your context gets big."
+                    } ?? "[MC] You were restarted. Run `mia inbox` and `mia status` to catch up.",
                     front: true)
         }
         // Her own mailbox only: --strict-mcp-config, or with the iMessage
@@ -1678,6 +1741,12 @@ BE PROACTIVE
 - `mia remind --at <time> "…"` for follow-ups (`mia remind list`, `mia remind cancel <id>`). `mia heartbeat list / set / enable / disable` to change your recurring checks when Daniel asks.
 - Keep a memory at ~/.mission-control/mia/memory.md: Daniel's preferences, people, projects and their folders, standing instructions. Read it on startup; add a line whenever you learn something durable. Keep it short.
 
+MEMORY AND STAYING SMALL
+- On startup read ONLY memory.md and the latest handoff (`ls -t ~/.mission-control/mia/handoff-*.md | head -1`). Do not read the other memory/*.md files or old reports up front.
+- Before acting on a project, person or topic, run `mia recall "<words>"` (add `--project X` or `--kind memory|task|report|library|handoff`, `--limit 8`). It searches memory, handoffs, tasks, reports and the Library and returns short snippets with the source path; open a path only if you need more.
+- Save durable facts with `mia note --project <name> "fact"` (appends to memory/<name>.md and indexes it), not by growing memory.md.
+- When the subject changes a lot, or you are told your context is big, write a handoff and run `mia refresh --stdin` (markdown on stdin: what is open, who waits on whom, what to do first). It saves it, indexes it, and restarts you fresh and small; your next session reads that handoff.
+
 ALWAYS `mia ask` FIRST FOR
 - Sending anything from or as Daniel's personal address or accounts.
 - Money: purchases, payments, bookings, subscriptions, transfers.
@@ -1691,7 +1760,7 @@ RULES
 - Never touch code or git. Write files only in ~/.mission-control/mia/ and, through `mc-doc`, the library; everywhere else read only.
 - One line is usually enough. Daniel reads you on his phone.
 
-Start now: run `mia status`, read memory.md if it exists, greet Daniel with one short `mia say` if this is your first start (state.json restarts == 0), then handle anything queued.
+Start now: run `mia status`, read memory.md and the latest handoff only, greet Daniel with one short `mia say` if this is your first start (state.json restarts == 0), then handle anything queued.
 """#
 
     static func executorPrompt(id: String, brief: String) -> String {

@@ -2245,8 +2245,11 @@ def cmd_heartbeat(args):
     print("%s %s" % (sub if sub != "set" else "saved", hid))
 
 
+INBOX_CHARS = 400   # per event in `mia inbox`; `--full` for everything (these were already delivered once)
+
+
 def cmd_inbox(args):
-    pos, o = parse(args, {"-n": True})
+    pos, o = parse(args, {"-n": True, "--full": False})
     try:
         n = int(o.get("-n", 50))
     except ValueError:
@@ -2256,7 +2259,9 @@ def cmd_inbox(args):
         print("(no events)")
     for e in evs:
         mark = "" if e.get("delivered") else "  [not yet delivered]"
-        print("%s  %-9s %s%s" % (e.get("at", ""), e.get("kind", ""), e.get("text", ""), mark))
+        print("%s  %-9s %s%s" % (e.get("at", ""), e.get("kind", ""),
+                                  e.get("text", "") if o.get("--full") else clip(e.get("text", ""), INBOX_CHARS),
+                                  mark))
 
 
 def human_size(n):
@@ -2407,10 +2412,17 @@ def close_questions(ids, state, by):
     return done
 
 
-def q_line(q, now=None):
+def clip(text, limit):
+    """One line, at most `limit` chars (0 = untrimmed). Token-saving: Mia's
+    status/inbox output sits in her context for the rest of the session."""
+    text = " ".join(str(text or "").split())
+    return text if not limit or len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
+def q_line(q, now=None, limit=0):
     tag = " (task %s)" % q["taskId"] if q.get("taskId") else ""
-    opts = "  [%s]" % " | ".join(q.get("options") or []) if q.get("options") else ""
-    return "  %s%s %s%s  · %s ago" % (q.get("questionId"), tag, q.get("text", ""), opts,
+    opts = "  [%s]" % clip(" | ".join(q.get("options") or []), limit) if q.get("options") else ""
+    return "  %s%s %s%s  · %s ago" % (q.get("questionId"), tag, clip(q.get("text", ""), limit), opts,
                                       fmt_age(q_age_hours(q, now)))
 
 
@@ -2487,6 +2499,9 @@ def cmd_question(args):
         die("unknown question command: %s (try: mia help)" % sub)
 
 
+STATUS_Q_CHARS = 160   # `mia status` shows each open question this long; `mia question list` shows all
+
+
 def cmd_status(args):
     pos, o = parse(args, {"--all": False})
     st = read_json(STATE, {}) or {}
@@ -2507,17 +2522,17 @@ def cmd_status(args):
         for t in open_:
             folder = os.path.basename(t.get("dir") or "") or "-"
             print("  %s  %-9s p%s  %s  [%s]" % (t.get("id"), t.get("status"), t.get("priority", 3),
-                                                 t.get("title", ""), folder))
+                                                 clip(t.get("title", ""), 110), folder))
         closed = [t for t in tasks if t.get("status") in ("done", "failed", "cancelled")]
         closed.sort(key=lambda t: t.get("updatedAt", ""), reverse=True)
         for t in closed[:3]:
-            print("  %s  %-9s      %s" % (t.get("id"), t.get("status"), t.get("title", "")))
+            print("  %s  %-9s      %s" % (t.get("id"), t.get("status"), clip(t.get("title", ""), 110)))
     qst = load_qstate()
     fresh, old = split_old(all_open_questions(qst), qst["maxAgeHours"])
     shown = fresh + old if o.get("--all") else fresh
     print("Open questions: %s" % ("none" if not shown else len(shown)))
     for q in shown:
-        print(q_line(q) + ("  [old]" if q in old else ""))
+        print(q_line(q, limit=STATUS_Q_CHARS) + ("  [old]" if q in old else ""))
     if old and not o.get("--all"):
         print("  (+%d older than %s hidden — `mia status --all`, or clear them: `mia question expire`)"
               % (len(old), fmt_hours(qst["maxAgeHours"])))
@@ -2527,7 +2542,7 @@ def cmd_status(args):
         if rs:
             print("Reminders:")
             for r in sorted(rs, key=lambda r: r.get("at", "")):
-                print("  %s  %s  %s" % (r.get("id"), r.get("at"), r.get("text", "")))
+                print("  %s  %s  %s" % (r.get("id"), r.get("at"), clip(r.get("text", ""), 140)))
     pend = [e for e in read_jsonl(EVENTS) if not e.get("delivered")]
     if pend:
         print("Undelivered events: %d (see `mia inbox`)" % len(pend))
@@ -2673,7 +2688,7 @@ HELP = """mia — Mia's line to Daniel and the Mission Control task list.
   mia panel show-doc <library-id|title> [--at "<text>"]
                                                     show a Library doc in that viewer
   mia panel close                                   close the viewer
-  mia inbox [-n 50]                                 recent system events
+  mia inbox [-n 50] [--full]                        recent system events (cut to 400 chars each unless --full)
   mia uploads [-n 20] [--json]                      files Daniel sent from the panel (newest last)
   mia question list [--all] [--json]               open questions (--all: old ones too)
   mia question dismiss <question-id>…               close questions that no longer matter
@@ -2689,6 +2704,11 @@ HELP = """mia — Mia's line to Daniel and the Mission Control task list.
                                                     the job engine and its settings ($MIA_DIR/core.json)
   mia usage [--refresh] [--json]                    Claude plan usage: 5-hour session + weekly %
   mia usage sync [--force] [--quiet] [--json]       fetch, push to the panel, announce 80%/95% once
+  mia recall "query" [--project X] [--kind memory|task|report|library|handoff] [--limit 8]
+                                                    search memory, handoffs, tasks, reports, Library (short snippets + path)
+  mia recall --reindex                              rebuild notes.db from scratch (normally incremental)
+  mia note --project X "fact"                       append a durable fact to memory/<X>.md and index it
+  mia refresh --stdin [--dry-run]                   save handoff (stdin), then restart Mia FRESH (no --resume)
   mia status [--all]                                tasks, open questions, reminders
                                                     (--all: old questions too)
   mia help
@@ -2717,6 +2737,291 @@ def cmd_usage(args):
     die("mia-usage is not installed next to mia (update Mission Control)")
 
 
+# ---- searchable notes (task 0385) -----------------------------------------
+# notes.db: SQLite FTS5 over memory, handoffs, tasks, reports and the Library.
+# Rebuilt per source file when its mtime/size changes, so recall stays cheap.
+
+NOTES_DB = os.path.join(D, "notes.db")
+MEMORY_MD = os.path.join(D, "memory.md")
+MEMORY_DIR = os.path.join(D, "memory")
+LIBRARY = os.path.expanduser(os.environ.get("MC_LIBRARY") or "~/.mission-control/library")
+NOTE_KINDS = ["memory", "task", "report", "library", "handoff"]
+
+
+def notes_db():
+    import sqlite3
+    db = sqlite3.connect(NOTES_DB, timeout=30)
+    db.execute("CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, mtime REAL, size INTEGER)")
+    db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5("
+               "text, title, kind UNINDEXED, project UNINDEXED, date UNINDEXED, path UNINDEXED, "
+               "tokenize='unicode61 remove_diacritics 2')")
+    return db
+
+
+def note_split(text, first_title, max_chars=1800):
+    """Chunks by markdown heading; long sections split on blank lines."""
+    parts, title, buf = [], first_title, []
+    def flush():
+        body = "\n".join(buf).strip()
+        while len(body) > max_chars:
+            cut = body.rfind("\n", 0, max_chars)
+            cut = cut if cut > max_chars // 2 else max_chars
+            parts.append((title, body[:cut].strip()))
+            body = body[cut:].strip()
+        if body:
+            parts.append((title, body))
+    for line in text.splitlines():
+        if re.match(r"^#{1,4}\s+\S", line):
+            flush()
+            buf = []
+            title = line.lstrip("#").strip()
+        buf.append(line)
+    flush()
+    return parts
+
+
+def note_frontmatter(text):
+    meta = {}
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end > 0:
+            for line in text[3:end].splitlines():
+                k, _, v = line.partition(":")
+                if _:
+                    meta[k.strip()] = v.strip()
+            text = text[end + 4:]
+    return meta, text
+
+
+def note_project(d):
+    b = os.path.basename((d or "").rstrip("/"))
+    return re.sub(r"-\d{4}$", "", b) or "general"
+
+
+def note_read(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def note_sources():
+    """Yield (path, kind, project, date, builder) for everything indexed."""
+    out = []
+    def mt(p):
+        try:
+            return datetime.date.fromtimestamp(os.path.getmtime(p)).isoformat()
+        except OSError:
+            return ""
+    if os.path.exists(MEMORY_MD):
+        out.append((MEMORY_MD, "memory", "core", mt(MEMORY_MD), "text"))
+    try:
+        for n in sorted(os.listdir(MEMORY_DIR)):
+            if n.endswith(".md"):
+                p = os.path.join(MEMORY_DIR, n)
+                out.append((p, "memory", n[:-3], mt(p), "text"))
+    except OSError:
+        pass
+    try:
+        for n in sorted(os.listdir(D)):
+            if re.match(r"^handoff-.*\.md$", n):
+                p = os.path.join(D, n)
+                out.append((p, "handoff", "handoff", mt(p), "text"))
+    except OSError:
+        pass
+    for t in all_tasks():
+        p = task_path(t["id"])
+        out.append((p, "task", note_project(t.get("dir")), (t.get("createdAt") or "")[:10], "task"))
+    try:
+        for n in sorted(os.listdir(BRIEFS)):
+            m = re.match(r"^(\d+)\.report\.md$", n)
+            if m:
+                p = os.path.join(BRIEFS, n)
+                out.append((p, "report", "task-" + m.group(1), mt(p), "report"))
+    except OSError:
+        pass
+    try:
+        for n in sorted(os.listdir(LIBRARY)):
+            p = os.path.join(LIBRARY, n)
+            if n.endswith(".md") and os.path.isfile(p):
+                out.append((p, "library", "", mt(p), "library"))
+    except OSError:
+        pass
+    return out
+
+
+def note_rows(path, kind, project, date, how):
+    """(title, text, project, date) rows for one source file."""
+    if how == "task":
+        t = read_json(path) or {}
+        bits = ["Task %s: %s" % (t.get("id"), t.get("title", "")), t.get("detail") or ""]
+        bits += ["%s %s" % ((e.get("at") or "")[:10], e.get("text", "")) for e in (t.get("log") or [])
+                 if isinstance(e, dict) and not str(e.get("text", "")).startswith(("Created", "Queued"))]
+        title = "task %s %s" % (t.get("id"), t.get("title", ""))[:90]
+        return [(title, "\n".join(b for b in bits if b)[:3000], project, date)]
+    text = note_read(path)
+    if how == "report":
+        text = "\n".join(text.splitlines()[:40])
+        first = next((l for l in text.splitlines() if l.strip()), os.path.basename(path))
+        return [(first.lstrip("# ").strip()[:90], text, project, date)]
+    if how == "library":
+        meta, body = note_frontmatter(text)
+        title = (re.search(r"^#\s+(.+)$", body, re.M) or [None, os.path.basename(path)[:-3]])[1].strip()
+        head = "Library doc: %s. Subject: %s. Tags: %s. Status: %s.\n" % (
+            title, meta.get("subject", ""), meta.get("tags", ""), meta.get("status", ""))
+        lines = [l for l in body.splitlines() if l.strip()][:30]
+        proj = (meta.get("tags", "").split(",")[0].strip()) or meta.get("kind", "")
+        return [(title, (head + "\n".join(lines))[:2200], proj, (meta.get("created") or date)[:10])]
+    first = os.path.basename(path)
+    return [(t, b, project, date) for t, b in note_split(text, first)]
+
+
+def note_reindex(force=False):
+    """Index new/changed sources, drop vanished ones. Returns (updated, removed, total)."""
+    db = notes_db()
+    if force:
+        db.execute("DELETE FROM files")
+        db.execute("DELETE FROM chunks")
+    known = {p: (m, s) for p, m, s in db.execute("SELECT path, mtime, size FROM files")}
+    seen, updated = set(), 0
+    for path, kind, project, date, how in note_sources():
+        seen.add(path)
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        if path in known and known[path][0] == st.st_mtime and known[path][1] == st.st_size:
+            continue
+        db.execute("DELETE FROM chunks WHERE path=?", (path,))
+        for title, text, proj, dt in note_rows(path, kind, project, date, how):
+            db.execute("INSERT INTO chunks(text,title,kind,project,date,path) VALUES(?,?,?,?,?,?)",
+                       (text, title, kind, proj, dt, path))
+        db.execute("INSERT OR REPLACE INTO files VALUES(?,?,?)", (path, st.st_mtime, st.st_size))
+        updated += 1
+    gone = [p for p in known if p not in seen]
+    for p in gone:
+        db.execute("DELETE FROM chunks WHERE path=?", (p,))
+        db.execute("DELETE FROM files WHERE path=?", (p,))
+    db.commit()
+    total = db.execute("SELECT count(*) FROM chunks").fetchone()[0]
+    db.close()
+    return updated, len(gone), total
+
+
+def note_snippet(text, words, width=300):
+    flat = re.sub(r"\s+", " ", text).strip()
+    low = flat.lower()
+    pos = min([i for i in (low.find(w.lower()) for w in words) if i >= 0] or [0])
+    start = max(0, pos - 60)
+    s = flat[start:start + width - 2]
+    return ("…" if start else "") + s + ("…" if start + width - 2 < len(flat) else "")
+
+
+def cmd_recall(args):
+    pos, o = parse(args, {"--project": True, "--kind": True, "--limit": True, "--reindex": False})
+    if "--kind" in o and o["--kind"] not in NOTE_KINDS:
+        die("--kind must be one of: %s" % ", ".join(NOTE_KINDS))
+    if "--reindex" in o:
+        u, r, n = note_reindex(force=True)
+        print("reindexed: %d sources, %d chunks" % (u, n))
+        if not pos:
+            return
+    if not pos:
+        die('usage: mia recall "query" [--project X] [--kind memory|task|report|library|handoff] [--limit 8]')
+    note_reindex()
+    words = [w for w in re.findall(r"[\w']+", " ".join(pos), re.U) if len(w) > 1]
+    if not words:
+        die("nothing to search for")
+    limit = int(o.get("--limit", 8))
+    db = notes_db()
+    filt, params = "", []
+    if "--kind" in o:
+        filt += " AND kind=?"
+        params.append(o["--kind"])
+    if "--project" in o:
+        filt += " AND lower(project) LIKE ?"
+        params.append("%" + o["--project"].lower() + "%")
+    rows = []
+    for joiner in (" AND ", " OR "):
+        q = joiner.join('"%s"' % w.replace('"', "") for w in words)
+        rows = db.execute("SELECT text, title, kind, project, date, path FROM chunks WHERE chunks MATCH ?%s "
+                          "ORDER BY bm25(chunks, 1.0, 4.0) LIMIT ?" % filt, [q] + params + [limit]).fetchall()
+        if rows or len(words) == 1:
+            break
+    db.close()
+    if not rows:
+        print("no matches")
+        return
+    for text, title, kind, project, date, path in rows:
+        print("[%s%s%s] %s" % (kind, "/" + project if project else "", " " + date if date else "", title[:70]))
+        print("  " + note_snippet(text, words))
+        print("  → " + path.replace(os.path.expanduser("~"), "~"))
+
+
+def cmd_note(args):
+    pos, o = parse(args, {"--project": True})
+    if not pos or "--project" not in o:
+        die('usage: mia note --project X "fact"')
+    fact = " ".join(pos).strip()
+    os.makedirs(MEMORY_DIR, exist_ok=True)
+    proj = re.sub(r"[^a-z0-9_-]+", "-", o["--project"].lower()).strip("-")
+    if not proj:
+        die("bad project name")
+    stems = sorted(n[:-3] for n in os.listdir(MEMORY_DIR) if n.endswith(".md"))
+    hit = proj if proj in stems else next((s for s in stems if s.startswith(proj) or proj in s), None)
+    path = os.path.join(MEMORY_DIR, (hit or proj) + ".md")
+    new = not os.path.exists(path)
+    with open(path, "a", encoding="utf-8") as f:
+        if new:
+            f.write("# %s\n\n" % (hit or proj))
+        f.write("- %s %s\n" % (datetime.date.today().isoformat(), fact))
+    if new and os.path.exists(MEMORY_MD):
+        txt = note_read(MEMORY_MD)
+        line = "- memory/%s.md — (new, added by mia note)\n" % proj
+        idx = txt.rfind("\n- memory/")
+        if idx >= 0:
+            end = txt.find("\n", idx + 1)
+            txt = txt[:end + 1] + line + txt[end + 1:]
+            write_text(MEMORY_MD, txt)
+    note_reindex()
+    print("noted in %s" % path.replace(os.path.expanduser("~"), "~"))
+
+
+def write_text(path, text):
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def latest_handoff():
+    try:
+        hs = [os.path.join(D, n) for n in os.listdir(D) if re.match(r"^handoff-.*\.md$", n)]
+    except OSError:
+        return None
+    return max(hs, key=os.path.getmtime) if hs else None
+
+
+def cmd_refresh(args):
+    pos, o = parse(args, {"--stdin": False, "--dry-run": False})
+    if "--stdin" not in o:
+        die("usage: mia refresh --stdin [--dry-run]   (handoff markdown on stdin)")
+    text = sys.stdin.read().strip()
+    if len(text) < 40:
+        die("handoff is empty or too short — say what is open, who waits on whom, and what to do first")
+    name = "handoff-%s.md" % datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    path = os.path.join(D, name)
+    if "--dry-run" in o:
+        print("dry run: would save %s (%d chars), index it, and restart Mia as a fresh session" % (
+            path.replace(os.path.expanduser("~"), "~"), len(text)))
+        return
+    write_text(path, text + "\n")
+    note_reindex()
+    write_json(os.path.join(D, "refresh.request"), {"at": now_iso(), "handoff": path})
+    print("handoff saved: %s\nMia restarts fresh within a few seconds; the next session reads only memory.md + this handoff." % path)
+
+
 def main(argv):
     if not argv or argv[0] in ("help", "-h", "--help"):
         print(HELP)
@@ -2728,7 +3033,8 @@ def main(argv):
              "heartbeat": cmd_heartbeat, "inbox": cmd_inbox, "status": cmd_status,
              "panel": cmd_panel, "uploads": cmd_uploads,
              "question": cmd_question, "questions": cmd_question, "jarvis": cmd_jarvis,
-             "core": cmd_core, "jobs": cmd_jobs, "usage": cmd_usage}
+             "core": cmd_core, "jobs": cmd_jobs, "usage": cmd_usage,
+             "recall": cmd_recall, "note": cmd_note, "refresh": cmd_refresh}
     if cmd not in table:
         die("unknown command: %s (try: mia help)" % cmd)
     table[cmd](rest)
