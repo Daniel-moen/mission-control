@@ -20,13 +20,13 @@
     (function () {
       try {
         var p = new URLSearchParams(location.search), q = p.get('ui');
-        if (/^(v1|v2|v3[abc])$/.test(q)) {
+        if (/^(v1|v2|v[34][abc])$/.test(q)) {
           localStorage.setItem('mc.ui', q);
           document.cookie = 'mc_ui=' + q + '; path=/; max-age=31536000; samesite=lax';
         }
         var ui = q || localStorage.getItem('mc.ui');
         if (ui === 'v2') return location.replace('/v2.html' + location.search + location.hash);
-        if (/^v3[abc]$/.test(ui)) return location.replace('/' + ui + location.search + location.hash); // task 0445 directions
+        if (/^v[34][abc]$/.test(ui)) return location.replace('/' + ui + location.search + location.hash); // task 0445/0446 directions
         if (q) { p.delete('ui'); history.replaceState(null, '', location.pathname + (p.toString() ? '?' + p : '') + location.hash); }
       } catch (e) {}
     })();

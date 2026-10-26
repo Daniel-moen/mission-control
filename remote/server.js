@@ -357,8 +357,8 @@ const server = http.createServer((req, res) => {
     }
   }
 
-  // The three v3 design directions (task 0445) also live at their own paths.
-  const v3 = /^\/(v3[abc])\/?$/.exec(pathname);
+  // The v3 and v4 design directions (tasks 0445, 0446) also live at their own paths.
+  const v3 = /^\/(v[34][abc])\/?$/.exec(pathname);
   if (v3 && fs.existsSync(path.join(DIST, `${v3[1]}.html`))) return serveFile(res, path.join(DIST, `${v3[1]}.html`), { req });
 
   // SPA fallback — every other route renders the app shell: the device's
@@ -371,7 +371,8 @@ const server = http.createServer((req, res) => {
 // chose v2 — in Settings, or by opening ?ui=v2 — carries the mc_ui cookie and
 // gets v2.html at the same URLs, so deep links (/#mia) and pushes work in both.
 // v3a/v3b/v3c are the three design directions of task 0445 (Home + Mia only).
-const UIS = new Set(['v1', 'v2', 'v3a', 'v3b', 'v3c']);
+// v4a/v4b/v4c are the three structural directions of task 0446.
+const UIS = new Set(['v1', 'v2', 'v3a', 'v3b', 'v3c', 'v4a', 'v4b', 'v4c']);
 function uiFor(req, url, res) {
   const q = url.searchParams.get('ui');
   const built = (ui) => (ui !== 'v1' && fs.existsSync(path.join(DIST, `${ui}.html`)) ? ui : 'v1');
@@ -379,7 +380,7 @@ function uiFor(req, url, res) {
     res.setHeader('set-cookie', `mc_ui=${q}; Path=/; Max-Age=31536000; SameSite=Lax`);
     return built(q);
   }
-  const want = /(?:^|;\s*)mc_ui=(v2|v3[abc])(?:;|$)/.exec(req.headers.cookie || '');
+  const want = /(?:^|;\s*)mc_ui=(v2|v[34][abc])(?:;|$)/.exec(req.headers.cookie || '');
   return want ? built(want[1]) : 'v1';
 }
 
