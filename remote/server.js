@@ -357,22 +357,30 @@ const server = http.createServer((req, res) => {
     }
   }
 
+  // The three v3 design directions (task 0445) also live at their own paths.
+  const v3 = /^\/(v3[abc])\/?$/.exec(pathname);
+  if (v3 && fs.existsSync(path.join(DIST, `${v3[1]}.html`))) return serveFile(res, path.join(DIST, `${v3[1]}.html`), { req });
+
   // SPA fallback — every other route renders the app shell: the device's
-  // pick of the two front ends (task 0444, see uiFor).
-  serveFile(res, path.join(DIST, uiFor(req, url, res) === 'v2' ? 'v2.html' : 'index.html'), { req });
+  // pick of the front ends (task 0444, see uiFor).
+  const ui = uiFor(req, url, res);
+  serveFile(res, path.join(DIST, ui === 'v1' ? 'index.html' : `${ui}.html`), { req });
 });
 
 // A/B of the panel (task 0444): v1 (index.html) is the default; a device that
 // chose v2 — in Settings, or by opening ?ui=v2 — carries the mc_ui cookie and
 // gets v2.html at the same URLs, so deep links (/#mia) and pushes work in both.
+// v3a/v3b/v3c are the three design directions of task 0445 (Home + Mia only).
+const UIS = new Set(['v1', 'v2', 'v3a', 'v3b', 'v3c']);
 function uiFor(req, url, res) {
   const q = url.searchParams.get('ui');
-  if (q === 'v1' || q === 'v2') {
+  const built = (ui) => (ui !== 'v1' && fs.existsSync(path.join(DIST, `${ui}.html`)) ? ui : 'v1');
+  if (UIS.has(q)) {
     res.setHeader('set-cookie', `mc_ui=${q}; Path=/; Max-Age=31536000; SameSite=Lax`);
-    return q === 'v2' && fs.existsSync(path.join(DIST, 'v2.html')) ? 'v2' : 'v1';
+    return built(q);
   }
-  const want = /(?:^|;\s*)mc_ui=v2(?:;|$)/.test(req.headers.cookie || '');
-  return want && fs.existsSync(path.join(DIST, 'v2.html')) ? 'v2' : 'v1';
+  const want = /(?:^|;\s*)mc_ui=(v2|v3[abc])(?:;|$)/.exec(req.headers.cookie || '');
+  return want ? built(want[1]) : 'v1';
 }
 
 // ---------------------------------------------------------------------------

@@ -32,5 +32,10 @@ if (only !== 'v1') {
   const links = early.map((f) => `<link rel="preload" as="script" href="/v2/_next/${f}"/>`).join('');
   const html = fs.readFileSync(path.join(out, 'index.html'), 'utf8').replace('</head>', `${links}</head>`);
   fs.writeFileSync(path.join(dist, 'v2.html'), html);
+  // Task 0445: the three v3 design directions, one page each (/v3a … /v3c).
+  for (const ui of ['v3a', 'v3b', 'v3c']) {
+    const f = path.join(out, `${ui}.html`);
+    if (fs.existsSync(f)) fs.copyFileSync(f, path.join(dist, `${ui}.html`));
+  }
   console.log(`v2 → dist/v2.html + dist/v2/_next (build ${BUILD})`);
 }

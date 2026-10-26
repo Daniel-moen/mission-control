@@ -1,0 +1,123 @@
+[
+ {
+  "id": "cg-retention",
+  "name": "crystal-garden · daily harvest",
+  "folder": "crystal-garden",
+  "dir": "/Users/danielmoen/CrystalGarden",
+  "prompt": "Add the daily harvest + streak loop (task 0431)",
+  "activity": "Editing src/server/Harvest.luau",
+  "file": "src/server/Harvest.luau",
+  "cost": 3.12,
+  "turns": 41,
+  "tokens": 1820000,
+  "outputTokens": 96000,
+  "tokensPerSec": 52
+ },
+ {
+  "id": "fth-kitchen",
+  "name": "flip-this-house · kitchen reno",
+  "folder": "FlipThisHouse",
+  "dir": "/Users/danielmoen/FlipThisHouse",
+  "prompt": "Kitchen renovation room: cabinets, worktops, appliances",
+  "activity": "Running Studio play test",
+  "file": "src/shared/Rooms/Kitchen.luau",
+  "cost": 5.4,
+  "turns": 63,
+  "tokens": 2410000,
+  "outputTokens": 131000,
+  "tokensPerSec": 44
+ },
+ {
+  "id": "raw-incident-ask",
+  "name": "raw-incident · phoenix short",
+  "folder": "raw-incident",
+  "dir": "/Users/danielmoen/channels-hq/raw-incident",
+  "prompt": "Cut the Phoenix stop into a 45s Short",
+  "status": "idle",
+  "statusLabel": "Needs input",
+  "activity": "Waiting for your answer",
+  "lastActive": "2m ago",
+  "screen": "● The cut is ready at 44s. One choice left before I render.\n\n╭──────────────────────────────────────────────────────────────╮\n│ Which moment should open the Short?                          │\n│                                                              │\n│ ❯ 1. [ ] The window reach                                    │\n│        Officer reaches the driver window (0:07)              │\n│   2. [ ] The siren cut                                       │\n│        Lights come on, hard cut to the stop (0:00)           │\n│   3. [ ] The standoff                                        │\n│        Both doors open, nobody moves (0:21)                  │\n│  ──────────────────────────────────────────────              │\n│   4. Chat about this                                         │\n╰──────────────────────────────────────────────────────────────╯\n  Enter to select · ↑/↓ to navigate · Esc to cancel",
+  "cost": 1.06,
+  "turns": 18,
+  "tokens": 512000,
+  "tokensPerSec": 0
+ },
+ {
+  "id": "ec-manager",
+  "name": "empire-clash · balance pass",
+  "folder": "EmpireClash",
+  "dir": "/Users/danielmoen/EmpireClash",
+  "prompt": "Balance pass on siege units",
+  "isManager": true,
+  "activity": "Reviewing worker A/B results",
+  "fleetId": "FLEET-EC",
+  "fleetTitle": "Empire Clash balance",
+  "file": "BALANCE.md",
+  "cost": 2.2,
+  "tokensPerSec": 21
+ },
+ {
+  "id": "ec-worker-1",
+  "name": "empire-clash · trebuchet",
+  "folder": "EmpireClash",
+  "dir": "/Users/danielmoen/EmpireClash",
+  "prompt": "Trebuchet range/damage A/B",
+  "activity": "Running balance sim (400 matches)",
+  "fleetId": "FLEET-EC",
+  "fleetTitle": "Empire Clash balance",
+  "file": "src/shared/Units/Trebuchet.luau",
+  "cost": 1.9,
+  "tokensPerSec": 38
+ },
+ {
+  "id": "ec-worker-2",
+  "name": "empire-clash · cavalry",
+  "folder": "EmpireClash",
+  "dir": "/Users/danielmoen/EmpireClash",
+  "prompt": "Cavalry charge cooldown",
+  "activity": "Editing src/shared/Units/Cavalry.luau",
+  "fleetId": "FLEET-EC",
+  "fleetTitle": "Empire Clash balance",
+  "file": "src/shared/Units/Cavalry.luau",
+  "cost": 1.4,
+  "tokensPerSec": 33
+ },
+ {
+  "id": "kalshi-judge",
+  "name": "kalshi-lab · weather judge",
+  "folder": "kalshi-lab",
+  "dir": "/Users/danielmoen/kalshi-lab",
+  "prompt": "Backtest the NYC high-temp judge on October",
+  "activity": "Running pytest tests/test_judge.py",
+  "file": "judge.py",
+  "cost": 0.88,
+  "tokensPerSec": 29
+ },
+ {
+  "id": "oblivion-done",
+  "name": "oblivion · fresnaye dossier",
+  "folder": "oblivion",
+  "dir": "/Users/danielmoen/oblivion",
+  "prompt": "Mandate dossier: Fresnaye homes over R10m",
+  "status": "done",
+  "statusLabel": "Done",
+  "activity": "Finished",
+  "lastActive": "14m ago",
+  "cost": 2.75,
+  "turns": 37,
+  "tokensPerSec": 0,
+  "todos": [
+   {
+    "content": "Pull transfers since 2005",
+    "activeForm": "Pulling transfers",
+    "status": "completed"
+   },
+   {
+    "content": "Score likely sellers",
+    "activeForm": "Scoring",
+    "status": "completed"
+   }
+  ]
+ }
+]

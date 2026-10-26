@@ -1,0 +1,21 @@
+{
+  "messages": [
+    { "id": "s1", "at": 190, "from": "daniel", "kind": "chat", "text": "Morning. What happened overnight?" },
+    { "id": "s2", "at": 189, "from": "mia", "kind": "chat", "text": "Quiet night. Crystal Garden's retention build passed review, the Fresnaye dossier finished (nine homes over R10m look ready to sell), and the Kalshi judge called 6 of 7 NYC highs correctly." },
+    { "id": "s3", "at": 120, "from": "daniel", "kind": "chat", "text": "Nice. Get the Phoenix stop cut into a Short and start the Empire Clash balance pass." },
+    { "id": "s4", "at": 119, "from": "mia", "kind": "chat", "text": "On it — two tasks: 0441 Phoenix Short, 0442 balance pass (manager + two workers, trebuchet and cavalry)." },
+    { "id": "s4e", "at": 118, "from": "system", "kind": "event", "text": "Task 0442 started · 3 agents in EmpireClash" },
+    { "id": "s5", "at": 31, "from": "mia", "kind": "chat", "text": "Tempe long-form is live. 1,240 views in the first hour, retention 58% at 30s — best opening of the week." },
+    { "id": "s6", "at": 22, "from": "mia", "kind": "notify", "text": "Crystal Garden build passed review — ready to publish when you are." },
+    { "id": "s7", "at": 9, "from": "daniel", "kind": "chat", "text": "(voice) How's the trebuchet looking?" },
+    { "id": "s8", "at": 8, "from": "mia", "kind": "chat", "text": "Too strong. At 140 range it wins 71% of sieges; the worker is testing 120 and a slower reload now. Results in about ten minutes." },
+    { "id": "s9", "at": 4, "from": "mia", "kind": "question", "text": "Publish the Phoenix Short now, or hold it for the 18:00 slot?", "options": ["Now", "18:00"], "questionId": "q_phx", "taskId": "0441" }
+  ],
+  "tasks": [
+    { "id": "0441", "title": "Phoenix stop → 45s Short", "status": "asking", "dir": "/Users/danielmoen/channels-hq/raw-incident", "createdAt": 120, "updatedAt": 4, "questions": [ { "id": "q_phx", "text": "Publish the Phoenix Short now, or hold it for the 18:00 slot?", "options": ["Now", "18:00"], "askedAt": 4 } ] },
+    { "id": "0442", "title": "Empire Clash balance pass", "status": "running", "dir": "/Users/danielmoen/EmpireClash", "createdAt": 119, "updatedAt": 2 },
+    { "id": "0431", "title": "Crystal Garden daily harvest", "status": "running", "dir": "/Users/danielmoen/CrystalGarden", "createdAt": 300, "updatedAt": 1 },
+    { "id": "0443", "title": "Kalshi judge October backtest", "status": "queued", "dir": "/Users/danielmoen/kalshi-lab", "createdAt": 40, "updatedAt": 40 },
+    { "id": "0438", "title": "Fresnaye mandate dossier", "status": "done", "dir": "/Users/danielmoen/oblivion", "createdAt": 600, "updatedAt": 190 }
+  ]
+}

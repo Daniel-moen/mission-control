@@ -215,6 +215,16 @@ const fleets = [
   { id: FLEET_ID, title: 'Shop checkout revamp', dir: '/Users/demo/shop', hasManager: true },
 ];
 
+// FAKE_HOST_AGENTS=<file.json>: a different cast (an array of makeAgent
+// overrides; screen 'ASK' = the AskUserQuestion menu). The panel screenshot
+// rigs use it to show realistic projects.
+if (process.env.FAKE_HOST_AGENTS) {
+  const cast = JSON.parse(fs.readFileSync(process.env.FAKE_HOST_AGENTS, 'utf8'));
+  agents = cast.map((o) => makeAgent({ ...o, screen: o.screen === 'ASK' ? ASK_SCREEN : o.screen ?? workerScreen(o.folder, o.file || 'README.md') }));
+  fleets.length = 0;
+  for (const o of cast) if (o.fleetId && !fleets.some((f) => f.id === o.fleetId)) fleets.push({ id: o.fleetId, title: o.fleetTitle || o.folder, dir: o.dir, hasManager: cast.some((x) => x.fleetId === o.fleetId && x.isManager) });
+}
+
 // ---------------------------------------------------------------------------
 // Document library — mirrors ~/.mission-control/library on the real host
 // (DocLibrary.swift). The snapshot carries only each doc's METADATA; a body is
@@ -511,6 +521,19 @@ const mia = {
     reminders: [],
   },
 };
+// FAKE_HOST_MIA=<file.json> { messages, tasks } replaces the seeded thread
+// and board (screenshot rigs; `at`/`createdAt` may be minutes-ago numbers).
+if (process.env.FAKE_HOST_MIA) {
+  const seed = JSON.parse(fs.readFileSync(process.env.FAKE_HOST_MIA, 'utf8'));
+  const ago = (v) => (typeof v === 'number' ? iso(v * 60000) : v);
+  if (seed.messages) mia.messages = seed.messages.map((m) => ({ ...m, at: ago(m.at) }));
+  if (seed.tasks)
+    mia.tasks = seed.tasks.map((t) => ({
+      executor: null, log: [], result: null, questions: [], detail: '', priority: 2, ...t,
+      createdAt: ago(t.createdAt ?? 60), updatedAt: ago(t.updatedAt ?? 5),
+      questions: (t.questions || []).map((q) => ({ answer: null, answeredAt: null, ...q, askedAt: ago(q.askedAt ?? 10) })),
+    }));
+}
 let miaMsgSeq = 2;
 // `mia ask` lines from the real CLI (no task on this host): open until
 // answered, like MiaManager's open questions.
