@@ -127,7 +127,7 @@ export function QuestionCard({ q, old = false }) {
   const asked = Date.parse(q.askedAt || q.at || '');
   return (
     <Swipe id={q.questionId}>
-      <div className="v-card p-4" data-question={q.questionId}>
+      <div className={`v-card p-4 ${old ? '' : 'lens-amber-rim'}`} data-amber={old ? undefined : '1'} data-depth="0.85" data-question={q.questionId}>
         <div className="flex items-start gap-3">
           <span className={`mt-[3px] grid h-7 w-7 flex-none place-items-center rounded-full ${old ? 'bg-fill text-ink3' : 'bg-warn/15 text-warn'}`}>
             <Icon name="mia" size={14} strokeWidth={2.2} />
@@ -166,7 +166,7 @@ export function AgentAskCard({ item }) {
   const prompt = item.prompt;
   const [armed, fire] = useArm();
   return (
-    <div className="v-card p-4" data-ask={a.id}>
+    <div className="v-card lens-amber-rim p-4" data-amber="1" data-depth="0.85" data-ask={a.id}>
       <button onClick={() => push('agent', { id: a.id })} className="flex w-full items-start gap-3 text-left">
         <span className={`mt-[3px] grid h-7 w-7 flex-none place-items-center rounded-full ${exited ? 'bg-crit/15 text-crit' : 'bg-warn/15 text-warn'}`}>
           <Icon name={exited ? 'alert' : 'terminal'} size={14} strokeWidth={2.2} />

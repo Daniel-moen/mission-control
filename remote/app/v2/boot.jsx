@@ -4,6 +4,7 @@ import { initPush } from '../src/lib/push.js';
 import { initViewportGap } from '../src/lib/viewport.js';
 import { initUpdates } from '../src/lib/update.js';
 import { initPrefs } from './lib/prefs.js';
+import { initBackdrop } from './lens/backdrop.js';
 import { hydrateFromCache, startCaching } from './lib/offline.js';
 import App from './App.jsx';
 import { preload } from './shell/pages.js';
@@ -14,6 +15,7 @@ import { preload } from './shell/pages.js';
 // moment it's imported). Same store, same wire, same relay as v1.
 
 initPrefs();
+initBackdrop();
 // The last picture of the fleet, before the socket even dials, so a cold
 // start offline shows something true-a-moment-ago instead of nothing.
 hydrateFromCache();

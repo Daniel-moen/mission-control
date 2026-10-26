@@ -219,7 +219,7 @@ export default function Agent({ params }) {
   );
 
   const footer = a.controllable ? (
-    <div className="v-hair-t flex-none bg-page px-3 pt-2.5 sm:px-5" style={{ paddingBottom: 'var(--tabbar-space)' }}>
+    <div className="lens-navbar flex-none !border-b-0 !border-t px-3 pt-2.5 sm:px-5" style={{ paddingBottom: 'var(--tabbar-space)' }}>
       <div className="v-scroll-x -mx-1 mb-2.5 flex items-center gap-2 px-1">
         {[
           ['esc', 'Esc'],

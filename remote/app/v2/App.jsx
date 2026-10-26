@@ -21,6 +21,7 @@ import { warmPages } from './shell/pages.js';
 import { sheetOpen } from './ui/Sheet.jsx';
 import Boundary from './ui/Boundary.jsx';
 
+
 // v2's root (task 0444). Tabs, each a page stack; one sheet; one overlay; the
 // talk session; the toast. All navigation state lives in lib/nav.js — this
 // file wires it to the address bar, the keyboard, Mia's panel commands and
@@ -29,6 +30,25 @@ import Boundary from './ui/Boundary.jsx';
 const Diag = lazy(() => import('../src/shell/Diag.jsx'));
 const Lightbox = lazy(() => import('../src/shell/Lightbox.jsx'));
 const Viewer = lazy(() => import('./shell/Viewer.jsx'));
+// The scene loads right after first paint — content first, the photo a beat later.
+const LensScene = lazy(() => import('./lens/Scene.jsx'));
+function Scene() {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    // once the content is up and the main thread is idle — the scene is
+    // decoration, it never competes with the first usable screen
+    const idle = window.requestIdleCallback || ((f) => setTimeout(f, 250));
+    const cancel = window.cancelIdleCallback || clearTimeout;
+    let t = 0;
+    const id = idle(() => (t = setTimeout(() => setOn(true), 300)), { timeout: 900 });
+    return () => (cancel(id), clearTimeout(t));
+  }, []);
+  return on ? (
+    <Suspense fallback={null}>
+      <LensScene />
+    </Suspense>
+  ) : null;
+}
 
 function TabPane({ tab, active }) {
   const o = useMotionValue(1);
@@ -226,11 +246,18 @@ export default function App() {
         <Diag />
       </Suspense>
     );
-  if (needsToken) return <Gate />;
+  if (needsToken)
+    return (
+      <>
+        <Scene />
+        <Gate />
+      </>
+    );
 
   return (
     <MotionConfig reducedMotion={reduce ? 'always' : 'never'}>
-      <div className="relative overflow-hidden bg-page" style={{ height: 'calc(100dvh + var(--vgap))' }}>
+      <Scene />
+      <div className="relative overflow-hidden" style={{ height: 'calc(100dvh + var(--vgap))' }}>
         <main className="absolute inset-0">
           {TABS.filter((t) => visited[t]).map((t) => (
             <Activity key={t} mode={t === tab ? 'visible' : 'hidden'}>

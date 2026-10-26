@@ -186,7 +186,8 @@ async function newPage(browser, tag, { theme = 'dark', ui = 'v2', hash = '', red
     if (m.type() === 'error' && !/status of (202|404)/.test(m.text())) page.errors.push(`console: ${m.text()}`);
   });
   await page.route('**/tts', (r) => (r.request().method() === 'GET' ? r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, available: true, voice: 'Kokoro (Heart)', today: { requests: 3, chars: 412 }, limits: { maxChars: 600, dailyChars: 20000 } }) }) : r.fulfill({ status: 204, body: '' })));
-  await page.goto(`${BASE}/?token=${TOKEN}&ui=${ui}${hash}`);
+  // a fixed photo, so the Lens screenshots are comparable run to run
+  await page.goto(`${BASE}/?token=${TOKEN}&ui=${ui}&bg=${process.env.BG || '01'}${hash}`);
   if (ui === 'v2') await page.waitForSelector('[data-tabbar], [data-page]', { timeout: 15000 });
   await until(() => page.evaluate(() => !document.querySelector('[data-conn]')), 15000, 'linked').catch(() => {});
   await sleep(700);
@@ -628,13 +629,105 @@ async function perf(browser) {
   await ctx.close();
 }
 
-async function recordTransitions(browser) {
-  console.log('Recording the key transitions');
+// ---- Lens (task 0445) ------------------------------------------------------------
+const lum = ([r, g, b]) => {
+  const f = (c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+};
+const ratio = (a, b) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+async function lensChecks(browser) {
+  console.log('Lens');
+  // the scene, the glass, the time
+  let page = await newPage(browser, 'ipad-land');
+  await until(() => page.evaluate(() => document.documentElement.dataset.lensmode === 'gl' && document.querySelectorAll('.lens-live').length >= 3), 8000, 'lens').catch(() => {});
+  const st = await page.evaluate(() => ({ mode: document.documentElement.dataset.lensmode, live: document.querySelectorAll('.lens-live').length, canvas: !!document.querySelector('.lens-canvas') }));
+  ok(st.mode === 'gl' && st.canvas, `Lens: the WebGL scene runs (${st.mode})`);
+  ok(st.live >= 3, `Lens: Home's panes are live glass (${st.live})`);
+  await page.locator('[data-tab="agents"]').click();
+  await sleep(900);
+  const agentsLive = await page.evaluate(() => [...document.querySelectorAll('.lens-live')].filter((e) => e.closest('[data-page="agents"]')).length);
+  ok(agentsLive >= 2, `Lens: other pages' cards are glass too (${agentsLive} on Agents)`);
+  const menu = await page.evaluate(() => [...document.querySelectorAll('.v-bar, [role="dialog"] .v-card')].some((e) => e.classList.contains('lens-live')));
+  ok(!menu, 'Lens: floating chrome is never shader glass (nothing scrolls under it)');
+  flush(page, 'lens/ipad');
+  await page.context().close();
+
+  // legibility on every photo: what the GPU actually drew behind the text
+  const files = JSON.parse(fs.readFileSync(path.join(DIR, '..', 'app', 'public', 'bg', 'manifest.json'), 'utf8')).map((e) => e.file.replace('.jpg', ''));
+  for (const theme of ['dark', 'light']) {
+    const worst = { pane: theme === 'dark' ? 0 : 1, page: theme === 'dark' ? 0 : 1 };
+    for (const bg of files) {
+      process.env.BG = bg;
+      page = await newPage(browser, 'ipad-land', { theme });
+      await sleep(1200);
+      // inside the greeting pane, in its padding (no text there)
+      const pts = await page.evaluate(() => {
+        const r = document.querySelector('[data-greeting]').getBoundingClientRect();
+        return [[r.left + 10, r.top + 10], [r.right - 14, r.top + r.height / 2], [r.left + r.width / 2, r.bottom - 10]];
+      });
+      const pane = (await page.evaluate((p) => window.__v3gl?.sample(p), pts)) || [];
+      // a content page: the open scene behind the title
+      await page.locator('[data-tab="agents"]').click();
+      await sleep(1600);
+      const open = (await page.evaluate(() => window.__v3gl?.sample([[300, 60], [900, 120], [600, 400], [100, 700]]))) || [];
+      for (const c of pane) worst.pane = theme === 'dark' ? Math.max(worst.pane, lum(c)) : Math.min(worst.pane, lum(c));
+      for (const c of open) worst.page = theme === 'dark' ? Math.max(worst.page, lum(c)) : Math.min(worst.page, lum(c));
+      flush(page, `lens/${theme}/${bg}`);
+      await page.context().close();
+    }
+    delete process.env.BG;
+    // the theme's three text tones, as the page defines them
+    page = await newPage(browser, 'phone', { theme });
+    const inks = await page.evaluate(() => ['--color-ink', '--color-ink2', '--color-ink3'].map((v) => {
+      const hex = getComputedStyle(document.documentElement).getPropertyValue(v).trim().replace('#', '');
+      return [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+    }));
+    await page.context().close();
+    console.log(`  ${theme}: worst luminance behind text — glass ${worst.pane.toFixed(3)}, open scene ${worst.page.toFixed(3)} (over ${files.length} photos)`);
+    for (const [k, need, name] of [[0, 4.5, 'primary'], [1, 4.5, 'secondary'], [2, 3, 'tertiary (meta labels)']]) {
+      const l = lum(inks[k]);
+      const rp = ratio(l, worst.pane);
+      const rg = ratio(l, worst.page);
+      ok(rp >= need && rg >= need, `Lens ${theme}: ${name} text ≥ ${need}:1 on every photo — glass ${rp.toFixed(1)}:1, page ${rg.toFixed(1)}:1`);
+    }
+  }
+
+  // lite glass: reduced motion → no shader, no backdrop blur, still designed
+  page = await newPage(browser, 'phone', { reduced: true });
+  await sleep(1200);
+  const lite = await page.evaluate(() => ({ glass: document.documentElement.dataset.glass, mode: document.documentElement.dataset.lensmode, canvas: !!document.querySelector('.lens-canvas'), photo: !!document.querySelector('.lens-lite-photo'), blur: getComputedStyle(document.querySelector('.v-bar')).backdropFilter }));
+  ok(lite.glass === 'lite' && lite.mode === 'css' && !lite.canvas, `Lens: reduced motion → lite glass, no shader (${JSON.stringify(lite)})`);
+  ok(lite.blur === 'none' || lite.blur === '', 'Lens lite: no backdrop blur anywhere (the cheapest glass)');
+  flush(page, 'lens/lite');
+  await page.context().close();
+
+  // Settings: glass quality and the backdrop
+  page = await newPage(browser, 'phone', { hash: '#settings' });
+  await sleep(900);
+  await page.locator('[data-glass-pref] button', { hasText: 'Lite' }).click();
+  await sleep(500);
+  ok((await page.evaluate(() => document.documentElement.dataset.glass)) === 'lite', 'Settings › Glass › Lite switches to lite glass');
+  await page.locator('[data-glass-pref] button', { hasText: 'Auto' }).click();
+  await page.locator('[data-backdrop="05.jpg"]').click();
+  await sleep(400);
+  const pick = await page.evaluate(() => JSON.parse(localStorage.getItem('mc.backdrop') || '{}'));
+  ok(pick.file === '05.jpg', 'Settings › Backdrop pins a photo (shared with v1: mc.backdrop)');
+  await page.locator('[data-backdrop="auto"]').click();
+  await sleep(300);
+  ok(!JSON.parse(await page.evaluate(() => localStorage.getItem('mc.backdrop') || '{}')).file, 'Settings › Backdrop › Auto follows the time of day again');
+  flush(page, 'lens/settings');
+  await page.context().close();
+}
+
+async function recordTransitions(browser, tag = 'phone') {
+  console.log(`Recording the key transitions (${tag})`);
   const vid = path.join(SHOTS, 'video');
-  const frames = path.join(SHOTS, 'frames');
+  const frames = path.join(SHOTS, tag === 'phone' ? 'frames' : `frames-${tag}`);
   fs.mkdirSync(vid, { recursive: true });
   fs.mkdirSync(frames, { recursive: true });
-  const page = await newPage(browser, 'phone', { video: vid });
+  const page = await newPage(browser, tag, { video: vid });
+  const W = VIEWPORTS[tag].viewport.width;
+  const H = VIEWPORTS[tag].viewport.height;
   let i = 0;
   const burst = async (label, n = 8, gap = 45) => {
     for (let k = 0; k < n; k++) {
@@ -654,10 +747,10 @@ async function recordTransitions(browser) {
   await page.locator('[data-doc="raw-incident-hooks.md"]').first().click();
   await burst('doc-grows-from-row');
   await sleep(500);
-  await page.mouse.move(6, 420);
+  await page.mouse.move(6, H / 2);
   await page.mouse.down();
-  for (let x = 6; x <= 330; x += 18) {
-    await page.mouse.move(x, 422);
+  for (let x = 6; x <= W * 0.85; x += 18) {
+    await page.mouse.move(x, H / 2 + 2);
     if (x % 54 === 6) await page.screenshot({ path: path.join(frames, `${String(++i).padStart(3, '0')}-swipe-back.png`) });
     await sleep(16);
   }
@@ -673,7 +766,7 @@ async function recordTransitions(browser) {
   const path0 = await page.video()?.path();
   await page.context().close();
   if (path0) {
-    const dest = path.join(SHOTS, 'transitions-phone.webm');
+    const dest = path.join(SHOTS, `transitions-${tag}.webm`);
     fs.renameSync(path0, dest);
     console.log(`  🎞  ${dest}`);
   }
@@ -699,7 +792,8 @@ async function main() {
   }
 
   await servingChecks();
-  const browser = await chromium.launch({ args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] });
+  // the real GPU (Metal), so Lens's shader runs as it would on a device
+  const browser = await chromium.launch({ args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', '--use-angle=metal', '--enable-gpu-rasterization', '--ignore-gpu-blocklist'] });
   const only = process.env.ONLY ? process.env.ONLY.split(',') : Object.keys(VIEWPORTS);
   if (!process.env.SKIP_SHOTS) {
     for (const tag of only) {
@@ -709,7 +803,11 @@ async function main() {
   }
   if (!process.env.SKIP_BEHAVIOUR) await behaviour(browser);
   await perf(browser);
-  if (!process.env.SKIP_VIDEO) await recordTransitions(browser);
+  if (!process.env.SKIP_LENS) await lensChecks(browser);
+  if (!process.env.SKIP_VIDEO) {
+    await recordTransitions(browser, 'phone');
+    await recordTransitions(browser, 'ipad-land');
+  }
   await browser.close();
 
   const errs = [...new Set(allErrors)];

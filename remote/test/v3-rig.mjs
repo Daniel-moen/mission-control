@@ -261,6 +261,121 @@ async function main() {
   }
   const engineName = process.env.ENGINE || 'chromium';
   const browser = await pw[engineName].launch(engineName === 'chromium' ? { args: ['--enable-gpu-rasterization', '--ignore-gpu-blocklist', '--use-angle=metal'] } : {});
+  // PROBE='/?ui=v2#fleet' — open one page (DEV: ipad|phone, THEME), screenshot
+  // it to PROBE_OUT, print PROBE_JS's result. For iterating on the design.
+  if (process.env.PROBE) {
+    const dev = process.env.DEV || 'ipad';
+    const d = DEVICES[dev];
+    for (const theme of (process.env.THEME || 'dark').split(',')) {
+      const ctx = await browser.newContext({ viewport: d.viewport, deviceScaleFactor: 1, isMobile: d.isMobile, hasTouch: true, colorScheme: theme });
+      ctx.setDefaultTimeout(15000);
+      const page = await ctx.newPage();
+      page.on('pageerror', (e) => console.log('pageerror', e.message));
+      page.on('console', (m) => m.type() === 'error' && console.log('console', m.text()));
+      for (const [i, u] of process.env.PROBE.split(' ').entries()) {
+        const url = `${BASE}${u.replace('?', `?token=${TOKEN}&bg=01&`)}`;
+        if (i === 0) await page.goto(url);
+        else await page.evaluate((h) => (location.hash = h), u.split('#')[1] || '');
+        await sleep(+(process.env.PROBE_WAIT || 2500));
+        const out = path.join(process.env.PROBE_OUT || '/tmp', `probe-${dev}-${theme}-${i}.png`);
+        await page.screenshot({ path: out });
+        if (process.env.PROBE_JS) console.log(i, await page.evaluate(process.env.PROBE_JS).catch((e) => e.message));
+        console.log('shot', out);
+      }
+      await ctx.close();
+    }
+    await browser.close();
+    return;
+  }
+  // LENS_PERF=1 — task 0445's full Lens build (/?ui=v2): frame timing for the
+  // everyday motions, full vs lite glass, iPad + iPhone (+4× CPU), and the
+  // shader's GPU cost; → OUT/perf-lens-<engine>.json
+  if (process.env.LENS_PERF) {
+    const res = {};
+    const measure = async (page, fn) => {
+      await page.evaluate(() => {
+        window.__f = [];
+        let last = 0;
+        const t = (n) => {
+          if (last) window.__f.push(n - last);
+          last = n;
+          window.__fr = requestAnimationFrame(t);
+        };
+        window.__fr = requestAnimationFrame(t);
+      });
+      await fn();
+      return page.evaluate(() => {
+        cancelAnimationFrame(window.__fr);
+        const f = window.__f;
+        const s = [...f].sort((a, b) => a - b);
+        const base = s[Math.floor(s.length / 2)] || 16.7;
+        return { frames: f.length, fps: Math.round(1000 / (f.reduce((a, b) => a + b, 0) / (f.length || 1))), p95: +(s[Math.floor(s.length * 0.95)] || 0).toFixed(1), worst: +(s[s.length - 1] || 0).toFixed(1), dropped: f.filter((d) => d > base * 1.5).length };
+      });
+    };
+    for (const dev of (process.env.DEV || 'ipad,phone').split(',')) {
+      for (const glass of ['full', 'lite']) {
+        for (const cpu of dev === 'phone' && engineName === 'chromium' ? [1, 4] : [1]) {
+          const d = DEVICES[dev];
+          const ctx = await browser.newContext({ viewport: d.viewport, deviceScaleFactor: d.deviceScaleFactor, ...(engineName === 'firefox' ? {} : { isMobile: d.isMobile }), hasTouch: true, colorScheme: 'dark' });
+          await ctx.addInitScript((g) => localStorage.setItem('mc.v2.glass', g), glass);
+          ctx.setDefaultTimeout(15000);
+          const page = await ctx.newPage();
+          page.on('pageerror', (e) => errors.push(`lens-perf: ${e.message}`));
+          if (cpu > 1) await (await ctx.newCDPSession(page)).send('Emulation.setCPUThrottlingRate', { rate: cpu });
+          await page.goto(`${BASE}/?token=${TOKEN}&ui=v2&bg=01`);
+          await page.waitForSelector('[data-tabbar]');
+          await sleep(2500);
+          const k = `${dev}/${glass}${cpu > 1 ? `@${cpu}xCPU` : ''}`;
+          const r = (res[k] = {});
+          r.idleHome = await measure(page, () => sleep(2500));
+          const scroller = '[data-page="home"][data-top="true"] .v-scroll';
+          r.scrollHome = await measure(page, async () => {
+            for (const dy of [500, -500, 500, -500]) {
+              await page.locator(scroller).first().evaluate((el, dy) => el.scrollBy({ top: dy, behavior: 'smooth' }), dy).catch(() => {});
+              await sleep(500);
+            }
+          });
+          r.tabSwitch = await measure(page, async () => {
+            for (const t of ['agents', 'library', 'mia', 'home']) {
+              await page.locator(`[data-tab="${t}"]`).click();
+              await sleep(550);
+            }
+          });
+          r.zoomInsights = await measure(page, async () => {
+            await page.locator('[data-tile="tile-insights"]').click();
+            await sleep(900);
+            await page.locator('[data-page="insights"][data-top="true"] [data-back]').first().click();
+            await sleep(900);
+          });
+          await page.locator('[data-tab="library"]').click();
+          await sleep(700);
+          r.scrollLibrary = await measure(page, async () => {
+            for (const dy of [700, -700, 700]) {
+              await page.locator('[data-page="library"][data-top="true"] .v-scroll').first().evaluate((el, dy) => el.scrollBy({ top: dy, behavior: 'smooth' }), dy).catch(() => {});
+              await sleep(500);
+            }
+          });
+          r.pushPop = await measure(page, async () => {
+            await page.locator('[data-doc]').first().click();
+            await sleep(800);
+            await page.locator('[data-page="doc"][data-top="true"] [data-back]').first().click();
+            await sleep(800);
+          });
+          if (glass === 'full') {
+            await page.locator('[data-tab="home"]').click();
+            await sleep(900);
+            r.gpuHome = await page.evaluate(() => window.__v3gl?.bench?.(60) ?? null);
+          }
+          r.backdropBlurElements = await page.evaluate(() => [...document.querySelectorAll('*')].filter((e) => { const b = getComputedStyle(e).backdropFilter; return b && b !== 'none'; }).length);
+          console.log(k, JSON.stringify(r));
+          await ctx.close();
+        }
+      }
+    }
+    fs.writeFileSync(path.join(OUT, `perf-lens-${engineName}.json`), JSON.stringify({ at: new Date().toISOString(), engine: engineName, ...res }, null, 2));
+    await browser.close();
+    return;
+  }
   const only = process.env.ONLY ? process.env.ONLY.split(',') : DIRS;
   const devs = process.env.DEV ? process.env.DEV.split(',') : Object.keys(DEVICES);
   const perfOut = {};

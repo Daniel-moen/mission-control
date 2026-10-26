@@ -7,7 +7,8 @@ import { modelLabel } from '../../src/lib/models.js';
 import { useWake, enableWake, disableWake, resumeWake, wakeSupported } from '../../src/lib/wake.js';
 import { useLocalStorage } from '../../src/lib/hooks.js';
 import { ANNOUNCE_MODE_KEY, QUIET_KEY, QUIET_DEFAULT } from '../../src/lib/announce.js';
-import { usePrefs, setTheme, setMotionPref, switchUi } from '../lib/prefs.js';
+import { usePrefs, setTheme, setMotionPref, setGlass, switchUi } from '../lib/prefs.js';
+import { useBackdrop, setBackdrop } from '../lens/backdrop.js';
 import { Button, Group, Row, Segmented, Select, Spinner, Toggle, useArm } from '../ui/kit.jsx';
 import Page from '../shell/Page.jsx';
 
@@ -22,9 +23,48 @@ const QUESTION_AGES = [
   { value: 0, label: 'Never' },
 ];
 
+// The photograph every page floats on. Shared with v1 (mc.backdrop).
+function Backdrop() {
+  const pick = useBackdrop((s) => s.pick);
+  const list = useBackdrop((s) => s.list);
+  const [url, setUrl] = useState(pick.url || '');
+  const dim = typeof pick.dim === 'number' ? pick.dim : 0.2;
+  const auto = !pick.file && !pick.url;
+  const Thumb = ({ on, onClick, children, label, ...rest }) => (
+    <button onClick={onClick} aria-label={label} aria-pressed={on} className={`relative aspect-[4/3] overflow-hidden rounded-[14px] ${on ? 'ring-2 ring-ink ring-offset-2 ring-offset-transparent' : 'opacity-80 hover:opacity-100'}`} {...rest}>
+      {children}
+    </button>
+  );
+  return (
+    <Group title="Backdrop" footer="Auto follows the time of day — dawn, day, dusk, night. Your pick holds on every page, and in the classic interface too.">
+      <div className="grid grid-cols-3 gap-2.5 p-3 sm:grid-cols-6" data-backdrops>
+        <Thumb on={auto} onClick={() => setBackdrop({ file: null, url: null })} label="Auto (time of day)" data-backdrop="auto">
+          <span className="absolute inset-0 grid place-items-center bg-gradient-to-br from-[#e9a35f] via-[#5b4a7a] to-[#0d1424] text-[0.78rem] font-bold text-white">Auto</span>
+        </Thumb>
+        {list.map((e) => (
+          <Thumb key={e.file} on={pick.file === e.file && !pick.url} onClick={() => setBackdrop({ file: e.file, url: null })} label={`${e.tone} — ${e.credit}`} data-backdrop={e.file}>
+            <img src={`/bg/${e.file}`} alt="" loading="lazy" className="absolute inset-0 h-full w-full object-cover" />
+            <span className="absolute bottom-1 left-1.5 text-[0.62rem] font-semibold capitalize text-white/85 [text-shadow:0_1px_3px_rgba(0,0,0,.8)]">{e.tone}</span>
+          </Thumb>
+        ))}
+      </div>
+      <Row icon="link" label="Image URL" hint="Any picture on the web.">
+        <form className="flex items-center gap-2" onSubmit={(e) => (e.preventDefault(), setBackdrop({ url: url.trim() || null }))}>
+          <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…" className="v-field h-9 w-[180px] px-3 text-[0.86rem] sm:w-[260px]" aria-label="Backdrop image URL" />
+          <Button size="sm" tone="ghost" type="submit">Use</Button>
+        </form>
+      </Row>
+      <Row icon="watch" label="Dim" hint="Darker photo, calmer glass." last>
+        <input type="range" min="0" max="0.6" step="0.05" value={dim} onChange={(e) => setBackdrop({ dim: +e.target.value })} aria-label="Dim the photo" className="w-[150px] accent-[var(--color-ink)]" data-backdrop-dim />
+      </Row>
+    </Group>
+  );
+}
+
 function Appearance() {
   const theme = usePrefs((s) => s.theme);
   const motion = usePrefs((s) => s.motion);
+  const glass = usePrefs((s) => s.glass);
   return (
     <Group title="Appearance" footer="The classic interface is the panel as it was; this device remembers the choice. Every device chooses for itself.">
       <Row icon="eye" label="Theme">
@@ -33,7 +73,10 @@ function Appearance() {
       <Row icon="sparkles" label="Motion" hint={motion === 'reduce' ? 'Fades only — nothing slides or zooms.' : 'Follows the system’s Reduce Motion.'}>
         <Segmented size="sm" value={motion} onChange={setMotionPref} options={[{ value: 'system', label: 'Full' }, { value: 'reduce', label: 'Reduced' }]} />
       </Row>
-      <Row icon="undo" label="Interface" hint="New (v2) — switch back any time." last>
+      <Row icon="sparkles" label="Glass" hint={glass === 'lite' ? 'Lite: frosted, no live refraction — easiest on the battery.' : glass === 'full' ? 'Full: live refracting glass, always.' : 'Auto: full glass; lite on Reduce Motion or low power.'}>
+        <Segmented size="sm" value={glass} onChange={setGlass} options={[{ value: 'auto', label: 'Auto' }, { value: 'full', label: 'Full' }, { value: 'lite', label: 'Lite' }]} data-glass-pref />
+      </Row>
+      <Row icon="undo" label="Interface" hint="New (Lens) — switch back any time." last>
         <Segmented size="sm" value="v2" onChange={(v) => v === 'v1' && switchUi('v1')} options={[{ value: 'v2', label: 'New' }, { value: 'v1', label: 'Classic' }]} data-ui-switch />
       </Row>
     </Group>
@@ -220,6 +263,7 @@ export default function Settings() {
     <Page title="Settings" maxW={720}>
       <div className="flex flex-col gap-7 pb-8" data-settings>
         <Appearance />
+        <Backdrop />
         <MiaGroup />
         <VoiceGroup />
         <AnnounceGroup />

@@ -140,7 +140,9 @@ function Layer({ layer, index, top, under, live, depth, cover, aboveZoom, w, h, 
   // (Under a zoomed page it recedes in depth instead of sliding sideways.)
   const underX = useTransform(cover, (c) => (under && !reduce && !aboveZoom ? -0.24 * w * c : 0));
   const underScale = useTransform(cover, (c) => (under && !reduce && aboveZoom ? 1 - 0.05 * c : 1));
-  const dim = useTransform(cover, (c) => (under ? 0.32 * c : 0));
+  // Lens: pages are clear glass over the scene, so the covered page must
+  // leave, not dim — it fades out as it drifts back.
+  const underO = useTransform(cover, (c) => (under ? 1 - Math.min(1, c * 1.15) : 1));
 
   // ---- zoom geometry --------------------------------------------------------
   const clip = useTransform([p, x], ([v, dx]) => {
@@ -193,14 +195,13 @@ function Layer({ layer, index, top, under, live, depth, cover, aboveZoom, w, h, 
 
   return (
     <motion.div
-      className="absolute inset-0 overflow-hidden bg-page"
+      className="absolute inset-0 overflow-hidden"
       style={{
         x: top || state !== 'still' ? x : underX,
         scale: zoom ? zScale : underScale,
-        opacity: o,
+        opacity: under && state === 'still' ? underO : o,
         clipPath: zoom ? clip : undefined,
         zIndex: index,
-        boxShadow: !root && !zoom && top ? '-24px 0 48px -24px rgba(0,0,0,0.45)' : undefined,
         pointerEvents: top && state !== 'leave' ? 'auto' : 'none',
         transformOrigin: '50% 50%',
       }}
@@ -225,8 +226,6 @@ function Layer({ layer, index, top, under, live, depth, cover, aboveZoom, w, h, 
           </Boundary>
         </PageCtx.Provider>
       </motion.div>
-      {/* the dim over a page that's being covered */}
-      <motion.div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-black" style={{ opacity: dim }} />
     </motion.div>
   );
 }

@@ -84,6 +84,7 @@ async function firstLoad(browser, ui, throttle = false) {
   const uniq = [...new Set(files)];
   const js = uniq.filter((f) => f.endsWith('.js')).reduce((a, f) => a + gz(f), 0);
   const css = uniq.filter((f) => f.endsWith('.css')).reduce((a, f) => a + gz(f), 0);
+  if (process.env.BUDGET_FILES) for (const f of uniq) console.log('   ', ui, Math.round(gz(f) / 102.4) / 10, 'KB', f);
   return { js, css, n: uniq.length, ms, files: uniq };
 }
 

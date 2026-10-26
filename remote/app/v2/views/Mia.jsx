@@ -79,7 +79,7 @@ function More({ mia }) {
             exit={{ opacity: 0, scale: 0.96, y: -4 }}
             transition={spring.snappy}
             style={{ transformOrigin: 'top right' }}
-            className="v-card absolute right-0 top-12 z-40 flex w-[230px] flex-col p-1.5"
+            className="v-card v-menu absolute right-0 top-12 z-40 flex w-[230px] flex-col p-1.5" data-no-lens
             data-mia-menu
           >
             {!mia?.enabled ? (

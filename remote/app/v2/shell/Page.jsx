@@ -55,7 +55,7 @@ export default forwardRef(function Page(
     <div className="pointer-events-none absolute inset-x-0 top-0 z-30" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
       <motion.div
         aria-hidden="true"
-        className="v-hair-b absolute inset-0 bg-page/85 backdrop-blur-xl"
+        className="lens-navbar absolute inset-0"
         style={{ opacity: solid ? 1 : barBg }}
       />
       <div className="pointer-events-auto relative flex h-[52px] items-center gap-2 px-3 sm:px-4">

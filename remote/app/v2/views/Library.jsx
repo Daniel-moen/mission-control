@@ -147,7 +147,7 @@ function NewMenu() {
             exit={{ opacity: 0, scale: 0.96 }}
             transition={spring.snappy}
             style={{ transformOrigin: 'top right' }}
-            className="v-card absolute right-0 top-12 z-40 flex w-[260px] flex-col p-1.5"
+            className="v-card v-menu absolute right-0 top-12 z-40 flex w-[260px] flex-col p-1.5" data-no-lens
           >
             {item('note', 'New document', 'A note or plan you write', 'newdoc')}
             {item('research', 'Research', 'An agent writes a report', 'research')}

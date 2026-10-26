@@ -84,7 +84,7 @@ function Metric({ label, children, sub, tone = '' }) {
   return (
     <div className="v-card px-4 py-3.5">
       <div className="text-[0.76rem] font-semibold text-ink3">{label}</div>
-      <div className={`v-num mt-1 text-[1.6rem] font-bold leading-tight tracking-[-0.03em] ${tone || 'text-ink'}`}>{children}</div>
+      <div className={`v-num lens-giant mt-1.5 text-[2.6rem] sm:text-[3.1rem] ${tone || 'text-ink'}`}>{children}</div>
       {sub && <div className="mt-0.5 truncate text-[0.74rem] text-ink3">{sub}</div>}
     </div>
   );

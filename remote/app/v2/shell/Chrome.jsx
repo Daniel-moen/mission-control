@@ -77,7 +77,7 @@ export function Gate() {
   const reason = useMC((s) => s.gateReason);
   const go = () => value.trim() && !verifying && saveToken(value);
   return (
-    <div className="fixed inset-0 grid place-items-center bg-page px-6" style={{ bottom: 'calc(0px - var(--vgap))' }}>
+    <div className="fixed inset-0 z-[2] grid place-items-center px-6" style={{ bottom: 'calc(0px - var(--vgap))' }}>
       <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={spring.sheet} className="w-full max-w-sm">
         <span className="grid h-14 w-14 place-items-center rounded-[18px] bg-ink text-page">
           <Icon name="sparkles" size={26} />
