@@ -4,3 +4,5 @@ dist
 *.log
 _*.mjs
 push-subscriptions.json
+next-v2/.next
+next-v2/out

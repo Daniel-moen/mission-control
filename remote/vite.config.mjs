@@ -18,6 +18,10 @@ const versionFile = {
 // Source lives in ./app (React); the build lands in ./dist, which server.js
 // serves. The old Svelte panel in ./panel stays as the reference implementation
 // and is no longer built.
+//
+// This builds v1, the default panel. The rebuilt one (v2, task 0444) is a
+// Next.js static export (next-v2/, code in app/v2) that build.mjs puts beside
+// it in dist/; both share app/src/lib. server.js picks one per device.
 export default defineConfig({
   root: 'app',
   plugins: [react(), tailwindcss(), versionFile],
@@ -47,5 +51,7 @@ export default defineConfig({
   build: {
     outDir: '../dist',
     emptyOutDir: true,
+    // test/v2-budget.mjs walks this to weigh each front end's first load.
+    manifest: true,
   },
 });

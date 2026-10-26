@@ -1,0 +1,332 @@
+/* ============================================================
+   Mission Control v2 — "QUIET"  (task 0444)
+   Content first. Solid, warm surfaces instead of glass over a photo;
+   depth from layering and motion, not blur. One accent (live green),
+   amber = needs you, red = failed, violet = manager — colour only
+   where it means something. Dark and light are equals.
+
+   v1's stylesheet comes in first: its markdown reader (.md), terminal
+   and the handful of v1 components v2 still hosts (HQ, Channels, the
+   console, TV/car, the talk engine) keep working, re-tinted by the
+   v2 tokens below — every v1 colour is a CSS variable.
+   ============================================================ */
+@import '../src/app.css';
+/* Class names to generate: v2, plus the v1 views it hosts and the lib they share. */
+@source '../';
+
+@theme {
+  /* v2 names (the v1 names are mapped onto these per theme below) */
+  --color-page: var(--v-page);
+  --color-card: var(--v-card);
+  --color-card2: var(--v-card2);
+  --color-fill: var(--v-fill);
+  --color-fill2: var(--v-fill2);
+  --color-hair: var(--v-hair);
+  --color-hair2: var(--v-hair2);
+  --color-scrim: var(--v-scrim);
+
+  --radius-card: 20px;
+  --radius-tile: 24px;
+  --radius-field: 14px;
+
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+/* ---- themes ---------------------------------------------------------------
+   Dark: warm near-black, cards one step up. Light: paper, white cards. */
+:root,
+[data-theme='dark'] {
+  color-scheme: dark;
+  --v-page: #0b0b0d;
+  --v-card: #151518;
+  --v-card2: #1d1d21;
+  --v-fill: rgba(255, 255, 255, 0.06);
+  --v-fill2: rgba(255, 255, 255, 0.1);
+  --v-hair: rgba(255, 255, 255, 0.075);
+  --v-hair2: rgba(255, 255, 255, 0.14);
+  --v-scrim: rgba(0, 0, 0, 0.5);
+  --v-bar: rgba(24, 24, 28, 0.78);
+  --v-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 10px 30px -12px rgba(0, 0, 0, 0.7);
+  --v-shadow-lift: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 24px 60px -18px rgba(0, 0, 0, 0.85);
+
+  --color-bg: #0b0b0d;
+  --color-surface: #151518;
+  --color-raised: #1d1d21;
+  --color-inset: #08080a;
+  --color-line: rgba(255, 255, 255, 0.075);
+  --color-line2: rgba(255, 255, 255, 0.14);
+  --color-ink: #f4f4f5;
+  --color-ink2: #a3a3ad;
+  --color-ink3: #6c6c77;
+  --color-accent: #3ecf8e;
+  --color-accent-bright: #5fe3a8;
+  --color-accent-ink: #052616;
+  --color-ok: #3ecf8e;
+  --color-warn: #f0b429;
+  --color-crit: #f26d64;
+  --color-mgr: #a78bfa;
+  --color-glass: #151518;
+  --color-glass-strong: #151518;
+  --color-glass-soft: rgba(255, 255, 255, 0.06);
+  --color-glass-line: rgba(255, 255, 255, 0.075);
+  --color-glass-line2: rgba(255, 255, 255, 0.14);
+  --color-term: #0a0a0c;
+  --color-overlay: rgba(0, 0, 0, 0.5);
+}
+
+[data-theme='light'] {
+  color-scheme: light;
+  --v-page: #f4f3ef;
+  --v-card: #ffffff;
+  --v-card2: #f7f6f2;
+  --v-fill: rgba(20, 20, 30, 0.045);
+  --v-fill2: rgba(20, 20, 30, 0.08);
+  --v-hair: rgba(20, 20, 30, 0.08);
+  --v-hair2: rgba(20, 20, 30, 0.15);
+  --v-scrim: rgba(20, 20, 26, 0.28);
+  --v-bar: rgba(255, 255, 255, 0.8);
+  --v-shadow: 0 1px 2px rgba(20, 20, 30, 0.04), 0 8px 24px -14px rgba(20, 20, 30, 0.18);
+  --v-shadow-lift: 0 2px 4px rgba(20, 20, 30, 0.05), 0 26px 60px -22px rgba(20, 20, 30, 0.35);
+
+  --color-bg: #f4f3ef;
+  --color-surface: #ffffff;
+  --color-raised: #f7f6f2;
+  --color-inset: #ecebe6;
+  --color-line: rgba(20, 20, 30, 0.08);
+  --color-line2: rgba(20, 20, 30, 0.15);
+  --color-ink: #17171b;
+  --color-ink2: #565663;
+  --color-ink3: #8c8c97;
+  --color-accent: #13a067;
+  --color-accent-bright: #0e8a58;
+  --color-accent-ink: #ffffff;
+  --color-ok: #13a067;
+  --color-warn: #b7791f;
+  --color-crit: #d14343;
+  --color-mgr: #7354d6;
+  --color-s1: #1f9d66;
+  --color-s2: #7354d6;
+  --color-s3: #b07a1c;
+  --color-s4: #c75a72;
+  --color-glass: #ffffff;
+  --color-glass-strong: #ffffff;
+  --color-glass-soft: rgba(20, 20, 30, 0.045);
+  --color-glass-line: rgba(20, 20, 30, 0.08);
+  --color-glass-line2: rgba(20, 20, 30, 0.15);
+  /* the terminal stays dark in both themes — it's a terminal */
+  --color-term: #121215;
+  --color-overlay: rgba(20, 20, 26, 0.28);
+}
+
+/* ---- base ----------------------------------------------------------------- */
+/* Dynamic Type: on iOS the root size follows the reader's text-size setting,
+   and every v2 size is in rem. 17px is iOS's default body size. */
+html {
+  font-size: 16px;
+}
+@supports (font: -apple-system-body) {
+  html.v2 {
+    font: -apple-system-body;
+    font-family: var(--font-sans);
+  }
+}
+
+html.v2,
+html.v2 body {
+  background: var(--v-page);
+  background-image: none;
+  height: 100%;
+  overscroll-behavior: none;
+}
+html.v2 body {
+  font-family: var(--font-sans);
+  color: var(--color-ink);
+  font-feature-settings: 'cv11', 'ss01';
+  -webkit-text-size-adjust: 100%;
+}
+html.v2 #app {
+  height: 100%;
+}
+
+/* v1's frosted classes become plain cards in v2 (hosted v1 views). */
+html.v2 .glass,
+html.v2 .glass-strong {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: var(--v-shadow);
+}
+html.v2 [data-theme='light'] .glass-soft-hover:hover,
+html.v2[data-theme='light'] .glass-soft-hover:hover {
+  background: var(--v-fill2);
+}
+
+/* ---- v2 surfaces ---------------------------------------------------------- */
+.v-card {
+  background: var(--v-card);
+  border: 1px solid var(--v-hair);
+  border-radius: var(--radius-card);
+  box-shadow: var(--v-shadow);
+}
+.v-tile {
+  background: var(--v-card);
+  border: 1px solid var(--v-hair);
+  border-radius: var(--radius-tile);
+  box-shadow: var(--v-shadow);
+}
+.v-fill {
+  background: var(--v-fill);
+}
+.v-bar {
+  background: var(--v-bar);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
+  border: 1px solid var(--v-hair);
+  box-shadow: var(--v-shadow-lift);
+}
+.v-field {
+  background: var(--v-fill);
+  border: 1px solid transparent;
+  border-radius: var(--radius-field);
+  color: var(--color-ink);
+  outline: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+.v-field::placeholder {
+  color: var(--color-ink3);
+}
+.v-field:focus {
+  border-color: var(--v-hair2);
+  background: var(--v-card);
+}
+.v-hair-b {
+  border-bottom: 1px solid var(--v-hair);
+}
+.v-hair-t {
+  border-top: 1px solid var(--v-hair);
+}
+
+/* Large title (iOS-style), the page's one big type moment. */
+.v-title {
+  font-size: 2rem;
+  line-height: 1.08;
+  font-weight: 700;
+  letter-spacing: -0.028em;
+}
+.v-eyebrow {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-ink3);
+}
+.v-num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum', 'cv11';
+}
+
+/* Scrollers: momentum, no bar, no rubber-band leaking into the page. */
+.v-scroll {
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.v-scroll::-webkit-scrollbar {
+  display: none;
+}
+.v-scroll-x {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.v-scroll-x::-webkit-scrollbar {
+  display: none;
+}
+
+/* Long lists render only what's near the viewport — a 200-message thread
+   costs what 15 do. The intrinsic size keeps the scrollbar honest. */
+.v-cv {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 88px;
+}
+
+/* Safe areas */
+.v-pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+.v-pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Focus ring for keyboards (iPad Magic Keyboard), never for taps. */
+html.v2 :focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--color-accent) 70%, transparent);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+html.v2 button:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* The tab bar's active pill and the live dot breathe slowly — calm. */
+@keyframes v-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+.v-breathe {
+  animation: v-breathe 2.4s ease-in-out infinite;
+}
+@keyframes v-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+.v-skeleton {
+  background: linear-gradient(90deg, var(--v-fill) 25%, var(--v-fill2) 50%, var(--v-fill) 75%);
+  background-size: 200% 100%;
+  animation: v-shimmer 1.6s linear infinite;
+  border-radius: 10px;
+}
+
+/* Markdown reader in v2: a touch larger and calmer, sized in rem so it
+   follows Dynamic Type. Light theme reads as ink on paper. */
+html.v2 .md {
+  font-size: 1rem;
+  line-height: 1.68;
+}
+html.v2 .md h1 {
+  font-size: 1.6rem;
+}
+html.v2 .md h2 {
+  font-size: 1.25rem;
+}
+html.v2 .md h3 {
+  font-size: 1.06rem;
+}
+html.v2 .md .mia-flash {
+  background: color-mix(in oklab, var(--color-ink) 9%, transparent);
+}
+html.v2 .md .mia-mark {
+  background: color-mix(in oklab, var(--color-accent) 18%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--color-accent) 18%, transparent);
+}
+
+/* Hosted v1 views that only make sense dark (console, TV, car). */
+.v1-dark {
+  color-scheme: dark;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .v-breathe,
+  .v-skeleton {
+    animation: none;
+  }
+}

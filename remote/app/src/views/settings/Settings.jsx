@@ -242,6 +242,24 @@ export default function Settings({ onClose }) {
           ))}
         </Section>
 
+        <Section title="Interface">
+          <Row label="New interface (v2)" hint="A rebuilt panel for iPad and iPhone, side by side with this one. This device remembers the choice; switch back from its Settings any time." last>
+            <Button
+              variant="primary"
+              data-ui-switch="v2"
+              onClick={() => {
+                // Same as opening ?ui=v2: remembered here and by the relay (mc_ui cookie).
+                try {
+                  localStorage.setItem('mc.ui', 'v2');
+                } catch {}
+                document.cookie = 'mc_ui=v2; path=/; max-age=31536000; samesite=lax';
+                location.replace(`/?ui=v2${location.hash}`);
+              }}
+            >
+              Try it
+            </Button>
+          </Row>
+        </Section>
         <MiaSection Section={Section} Row={Row} />
         <VoiceSection />
         <AnnounceSection Section={Section} Row={Row} />

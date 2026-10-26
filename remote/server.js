@@ -60,6 +60,7 @@
 const http = require('http');
 const crypto = require('crypto');
 const fs = require('fs');
+const zlib = require('zlib');
 const path = require('path');
 const { WebSocketServer } = require('ws');
 const { createApi } = require('./api');
@@ -153,7 +154,14 @@ function panelBuild() {
   return id;
 }
 
-function serveFile(res, filePath, { immutable = false } = {}) {
+// Text assets go out gzipped when the browser asks (every browser does) — the
+// panel's JS is several hundred KB raw, a third of that compressed, which is
+// most of a phone's first load (task 0444). Hashed files never change, so
+// their compressed bytes are kept; the HTML is small and compressed per hit.
+const COMPRESSIBLE = new Set(['.html', '.js', '.css', '.json', '.svg', '.map']);
+const gzCache = new Map(); // filePath → Buffer (immutable files only)
+const GZ_CACHE_MAX = 64;
+function serveFile(res, filePath, { immutable = false, req = null } = {}) {
   fs.readFile(filePath, (err, buf) => {
     if (err) {
       res.writeHead(404);
@@ -161,10 +169,36 @@ function serveFile(res, filePath, { immutable = false } = {}) {
       return;
     }
     const ext = path.extname(filePath).toLowerCase();
-    res.writeHead(200, {
+    const headers = {
       'content-type': MIME[ext] || 'application/octet-stream',
       'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-store',
-    });
+    };
+    const gzip = req && COMPRESSIBLE.has(ext) && buf.length > 1024 && /\bgzip\b/.test(req.headers['accept-encoding'] || '');
+    if (gzip) {
+      const send = (out) => {
+        headers['content-encoding'] = 'gzip';
+        headers.vary = 'Accept-Encoding';
+        res.writeHead(200, headers);
+        res.end(out);
+      };
+      const hit = immutable ? gzCache.get(filePath) : null;
+      if (hit) return send(hit);
+      // Off the event loop: the wake-word model is megabytes, and the relay's
+      // sockets must not stall while it compresses.
+      zlib.gzip(buf, { level: 9 }, (zerr, out) => {
+        if (zerr) {
+          res.writeHead(200, headers);
+          return res.end(buf);
+        }
+        if (immutable) {
+          if (gzCache.size >= GZ_CACHE_MAX) gzCache.delete(gzCache.keys().next().value);
+          gzCache.set(filePath, out);
+        }
+        send(out);
+      });
+      return;
+    }
+    res.writeHead(200, headers);
     res.end(buf);
   });
 }
@@ -306,11 +340,12 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Hashed, fingerprinted assets — safe to cache forever.
-  if (pathname.startsWith('/assets/')) {
+  // Hashed, fingerprinted assets — safe to cache forever (v1's /assets/, and
+  // v2's Next.js chunks under /v2/_next/static/ — task 0444).
+  if (pathname.startsWith('/assets/') || pathname.startsWith('/v2/_next/static/')) {
     const rel = path.normalize(pathname).replace(/^(\.\.[/\\])+/, '');
     const file = path.join(DIST, rel);
-    if (file.startsWith(DIST)) return serveFile(res, file, { immutable: true });
+    if (file.startsWith(DIST)) return serveFile(res, file, { immutable: true, req });
   }
 
   // A concrete file at the web root (e.g. /favicon.svg, /manifest).
@@ -318,13 +353,27 @@ const server = http.createServer((req, res) => {
     const rel = path.normalize(pathname).replace(/^(\.\.[/\\])+/, '');
     const file = path.join(DIST, rel);
     if (file.startsWith(DIST) && fs.existsSync(file) && fs.statSync(file).isFile()) {
-      return serveFile(res, file);
+      return serveFile(res, file, { req });
     }
   }
 
-  // SPA fallback — every other route renders the app shell.
-  serveFile(res, path.join(DIST, 'index.html'));
+  // SPA fallback — every other route renders the app shell: the device's
+  // pick of the two front ends (task 0444, see uiFor).
+  serveFile(res, path.join(DIST, uiFor(req, url, res) === 'v2' ? 'v2.html' : 'index.html'), { req });
 });
+
+// A/B of the panel (task 0444): v1 (index.html) is the default; a device that
+// chose v2 — in Settings, or by opening ?ui=v2 — carries the mc_ui cookie and
+// gets v2.html at the same URLs, so deep links (/#mia) and pushes work in both.
+function uiFor(req, url, res) {
+  const q = url.searchParams.get('ui');
+  if (q === 'v1' || q === 'v2') {
+    res.setHeader('set-cookie', `mc_ui=${q}; Path=/; Max-Age=31536000; SameSite=Lax`);
+    return q === 'v2' && fs.existsSync(path.join(DIST, 'v2.html')) ? 'v2' : 'v1';
+  }
+  const want = /(?:^|;\s*)mc_ui=v2(?:;|$)/.test(req.headers.cookie || '');
+  return want && fs.existsSync(path.join(DIST, 'v2.html')) ? 'v2' : 'v1';
+}
 
 // ---------------------------------------------------------------------------
 // WebSocket relay.
