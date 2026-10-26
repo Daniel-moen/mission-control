@@ -520,6 +520,15 @@ async function main() {
     slow.onHostGone();
     await p;
     ok(resGone.status === 503, 'the Mac disconnecting mid-request answers 503 at once');
+    // Talk mode opening warms the Mac's voice (task 0447): 202 at once, nothing counted.
+    const resWarm = fakeRes();
+    const nSent = sentFrames.length;
+    await slow.handle(fakeReq({ warm: true }), resWarm, new URL('http://x/tts'));
+    const warmFrame = sentFrames[nSent];
+    ok(resWarm.status === 202 && warmFrame?.type === 'tts' && warmFrame.warm === true && !warmFrame.text && warmFrame.id && slow.info().today.requests === 0, 'POST /tts {warm} → 202, the Mac gets {tts, warm:true}, not counted');
+    const resWarmOff = fakeRes();
+    await offline.handle(fakeReq({ warm: true }), resWarmOff, new URL('http://x/tts'));
+    ok(resWarmOff.status === 503, 'warm with the Mac offline: 503');
     const one = trimText(`${'word '.repeat(120)}end.`, 400);
     ok(one.length <= 400 && one.endsWith('…'), 'one over-long sentence is cut at a word with "…"');
 

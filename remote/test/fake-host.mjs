@@ -22,6 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
+import { spawn } from 'node:child_process';
 
 const PORT = process.env.PORT || 8899;
 const TOKEN = process.env.MC_TOKEN || 'test';
@@ -888,7 +889,14 @@ function connect() {
         // Announcement audio (tts.js / RemoteBridge.speak): the real Mac runs
         // ~/voice-lab/server/mia-tts. FAKE_HOST_TTS=real does the same here
         // (local e2e with the real voice); otherwise canned bytes, and text
-        // starting "FAIL" is a failure.
+        // starting "FAIL" is a failure. {warm:true} (talk mode opened, 0447)
+        // only loads the voice on the real Mac: no answer.
+        if (msg.warm) {
+          ttsWarms += 1;
+          log('tts warm');
+          if (process.env.FAKE_HOST_TTS === 'worker') workerAsk({ warm: true });
+          return;
+        }
         speakTts(msg).then(send, (err) => send({ type: 'ttsDone', id: msg.id, ok: false, detail: err.message }));
         return;
 
@@ -1259,8 +1267,45 @@ connect();
 log(`fake host starting (relay port ${PORT}, token ${TOKEN === 'test' ? "'test'" : 'set'})`);
 
 // ---- announcement voice (task 0287) ----------------------------------------------
+let ttsWarms = 0;
+// FAKE_HOST_TTS=worker: like the real Mac app since 0447 (TtsWorker.swift) —
+// one warm ~/voice-lab/server/mia-tts-worker, one JSON line per sentence, in order.
+let ttsWorker = null;
+function workerAsk(req) {
+  if (!ttsWorker) {
+    const p = spawn(process.env.MIA_TTS_WORKER || path.join(os.homedir(), 'voice-lab/server/mia-tts-worker'), [], { stdio: ['pipe', 'pipe', 'ignore'] });
+    const waiting = [];
+    let buf = '';
+    p.stdout.on('data', (d) => {
+      buf += d;
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = JSON.parse(buf.slice(0, nl));
+        buf = buf.slice(nl + 1);
+        if (!line.ready) waiting.shift()?.(line);
+      }
+    });
+    ttsWorker = { p, waiting, n: 0 };
+  }
+  return new Promise((resolve) => {
+    const id = `w${++ttsWorker.n}`;
+    ttsWorker.waiting.push(resolve);
+    ttsWorker.p.stdin.write(JSON.stringify({ ...req, id }) + '\n');
+  });
+}
+
 async function speakTts(msg) {
   const text = String(msg.text || '');
+  if (process.env.FAKE_HOST_TTS === 'worker') {
+    const out = path.join(os.tmpdir(), `fakehost-tts-${msg.id}.m4a`);
+    const t0 = Date.now();
+    const r = await workerAsk({ text, out, format: 'm4a' });
+    if (!r.ok) throw new Error(r.error || 'worker failed');
+    const audio = fs.readFileSync(out).toString('base64');
+    fs.rmSync(out, { force: true });
+    log(`tts worker ${Date.now() - t0} ms: ${text.slice(0, 60)}`);
+    return { type: 'ttsDone', id: msg.id, ok: true, mime: 'audio/mp4', engine: r.engine, ms: Date.now() - t0, audio };
+  }
   if (process.env.FAKE_HOST_TTS === 'real') {
     const { execFile } = await import('node:child_process');
     const out = path.join(os.tmpdir(), `fakehost-tts-${msg.id}.m4a`);

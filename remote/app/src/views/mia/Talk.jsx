@@ -11,7 +11,7 @@ import Button from '../../ui/Button.jsx';
 import Select from '../../ui/Select.jsx';
 import Segmented from '../../ui/Segmented.jsx';
 import { LABEL, HINT, isMiaMsg, micError, spokenFor, Orb, Line } from './TalkParts.jsx';
-import { speakMia, stopMia } from '../../lib/announce.js';
+import { speakMia, stopMia, warmVoice } from '../../lib/announce.js';
 import { consumeWake } from '../../lib/wake.js';
 import { talkPhase, registerEngine, getTalk } from '../../lib/talkSession.js';
 
@@ -23,9 +23,9 @@ import { talkPhase, registerEngine, getTalk } from '../../lib/talkSession.js';
 // open: Daniel talks, a pause ends his turn, the relay transcribes it (stt.js,
 // whisper.cpp on the relay) and it goes to Mia as an ordinary message tagged
 // "(voice)". Whatever Mia says back while talk mode is on is read aloud in her
-// own voice — the relay's /tts, made on the Mac (Kokoro, af_heart), first
-// sentence first (announce.js speakMia); the device voice only when that
-// fails — then the panel listens again. Talking over her (or tapping the orb)
+// own voice — the relay's /tts, made on the Mac (Kokoro, af_heart, kept
+// warm), sentence by sentence (announce.js speakMia, task 0447); the device
+// voice only when that fails — then the panel listens again. Talking over her (or tapping the orb)
 // stops her mid-sentence.
 //
 // Phases: starting → listening ⇄ hearing → transcribing → thinking → speaking
@@ -151,12 +151,14 @@ function BasicTalk({ mia, onExit }) {
   async function begin() {
     setError('');
     setPhase('starting');
+    warmVoice();
     const handlers = {
       pauseMs: opts.current.pause,
       onLevel: (l) => levels.forEach((fn) => fn(l)),
       onSpeechStart: () => {
         if (!alive.current) return;
         if (phaseRef.current === 'speaking') bargeIn();
+        warmVoice(); // a reply is coming: have the Mac's voice loaded for it
         setPhase('hearing');
       },
       onUtterance,

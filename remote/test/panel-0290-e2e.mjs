@@ -17,8 +17,9 @@
 //   • chat clip → Reports → pick → chip → send
 //   • no sideways scroll, zero console errors
 //   • talk mode never uses OpenAI: Basic even with an old 'realtime' choice
-//     saved, Mia's reply spoken through /tts (the Mac's Kokoro voice) first
-//     sentence first, the device voice only when /tts fails; Settings › Voice
+//     saved, Mia's reply spoken through /tts (the Mac's Kokoro voice)
+//     sentence by sentence (0447: all asked for at once, voice warmed when
+//     talk opens), the device voice only when /tts fails; Settings › Voice
 //     has no Realtime engine
 
 import { spawn } from 'node:child_process';
@@ -297,10 +298,16 @@ async function talkNoOpenAI(browser) {
   const openai = [];
   page.on('request', (r) => { if (/\/realtime|openai\.com/.test(r.url())) openai.push(`${r.method()} ${r.url()}`); });
   const tts = [];
+  const warms = [];
   let ttsFails = false;
   await page.route('**/tts', async (r) => {
     if (r.request().method() !== 'POST') return r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, available: true, engine: 'mac', voice: 'Kokoro (Heart)', limits: { maxChars: 400, dailyChars: 50000 }, today: { requests: 0, chars: 0 } }) });
-    const text = JSON.parse(r.request().postData() || '{}').text || '';
+    const body = JSON.parse(r.request().postData() || '{}');
+    if (body.warm) {
+      warms.push(Date.now());
+      return r.fulfill({ status: 202, contentType: 'application/json', body: '{"ok":true,"warm":true}' });
+    }
+    const text = body.text || '';
     tts.push({ text, at: Date.now() });
     if (ttsFails) return r.fulfill({ status: 503, contentType: 'application/json', body: '{"ok":false}' });
     await sleep(tts.length === 1 ? 150 : 400);
@@ -314,6 +321,7 @@ async function talkNoOpenAI(browser) {
   const phase = () => page.getAttribute('[data-talk]', 'data-talk').catch(() => null);
   ok(await until(async () => ['listening', 'thinking'].includes(await phase()), 8000, 'talk').then(() => true, () => false), `talk opens in Basic with a saved 'realtime' choice (phase ${await phase()})`);
   ok(!(await page.locator('[data-talk] button', { hasText: /^Realtime$/ }).count()), 'no Realtime switch in the talk controls');
+  ok(warms.length === 1, `opening talk mode warms the Mac's voice once (POST /tts {warm}: ${warms.length})`);
 
   const long = 'Your build finished and every check passed on the first run. ' +
     'I also tidied the three reports you asked about, filed them in the Library, and flagged the one that still needs a decision from you. ' +
@@ -324,8 +332,9 @@ async function talkNoOpenAI(browser) {
   await until(async () => tts.length >= 2 && (await page.evaluate(() => window.__played.length)) - base >= tts.length && (await phase()) !== 'speaking', 20000, 'spoken').catch(() => {});
   const played = (await page.evaluate(() => window.__played.length)) - base;
   const said = await page.evaluate(() => window.__said.slice());
-  ok(tts.length >= 2 && tts[0].text === 'Your build finished and every check passed on the first run.', `Mia’s reply goes to /tts, the first sentence on its own first (${tts.length} pieces: ${JSON.stringify(tts[0]?.text)})`);
-  ok(tts.every((t) => t.text.length <= 400) && tts.map((t) => t.text).join(' ').includes('flagged report'), 'the rest follows in /tts-sized pieces, nothing dropped');
+  ok(tts.length === 4 && tts[0].text === 'Your build finished and every check passed on the first run.', `Mia’s reply goes to /tts sentence by sentence, the first one first (${tts.length} pieces: ${JSON.stringify(tts[0]?.text)})`);
+  ok(tts.length >= 3 && tts[2].at - tts[0].at < 150, `sentences 2+ are asked for while sentence 1 is made, not after (${tts.map((t) => t.at - tts[0].at).join(', ')} ms)`);
+  ok(tts.map((t) => t.text).join(' ').includes('flagged report') && tts[3]?.text.startsWith('If you want'), 'in order, nothing dropped');
   ok(played === tts.length, `every piece is played in Mia’s own voice (${played}/${tts.length})`);
   ok(!said.some((t) => /build finished|Phoenix/.test(t)), `the device voice stays quiet while /tts works (${JSON.stringify(said)})`);
 

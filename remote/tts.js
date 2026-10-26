@@ -28,6 +28,12 @@
 //   GET  /tts   → { ok, available, engine, voice, limits, today, days }
 //   POST /tts   body { text } → audio (audio/mp4 from the Mac), headers
 //               X-TTS-Chars, X-TTS-Cache, X-TTS-Engine
+//   POST /tts   body { warm: true } → 202 at once; the Mac loads the voice so
+//               the first sentence of talk mode isn't slow (task 0447). Sends
+//               the host {type:"tts", id, warm:true}; no ttsDone comes back.
+//
+// Talk mode (task 0447) asks for a reply one sentence at a time, sentence 1
+// first; the Mac answers them in order from a warm Kokoro worker (~0.4 s).
 
 'use strict';
 
@@ -237,6 +243,11 @@ function createTts({ tokenOk, sendToHost = () => false, hostOnline = () => false
     }
     if (req.method === 'POST') {
       const body = await readJson(req);
+      if (body.warm === true) {
+        if (!hostOnline() || !hostCanSpeak()) return json(res, 503, { ok: false, error: 'Mac can’t speak now' });
+        sendToHost({ type: 'tts', id: crypto.randomBytes(8).toString('hex'), warm: true });
+        return json(res, 202, { ok: true, warm: true });
+      }
       const text = trimText(body.text, maxChars);
       if (!text) return json(res, 400, { ok: false, error: 'no text' });
       return speak(res, text);
