@@ -26,14 +26,15 @@ if (only !== 'v1') {
   // browser about those chunks up front so they download alongside Next's own.
   const loadable = JSON.parse(fs.readFileSync(path.join(ROOT, 'next-v2', '.next', 'react-loadable-manifest.json'), 'utf8'));
   const early = Object.entries(loadable)
-    .filter(([k]) => /-> \.\.\/\.\.\/app\/v2\/boot\.jsx$|shell\/pages\.js -> \.\.\/views\/Home\.jsx$/.test(k))
+    .filter(([k]) => /-> (\.\.\/)+app\/v2\/boot\.jsx$|v2\/shell\/pages\.js -> \.\.\/views\/Home\.jsx$/.test(k))
     .flatMap(([, v]) => v.files);
   if (early.length < 2) throw new Error('build.mjs: boot/Home chunks not found in react-loadable-manifest.json');
   const links = early.map((f) => `<link rel="preload" as="script" href="/v2/_next/${f}"/>`).join('');
   const html = fs.readFileSync(path.join(out, 'index.html'), 'utf8').replace('</head>', `${links}</head>`);
   fs.writeFileSync(path.join(dist, 'v2.html'), html);
-  // Task 0445/0446: the v3 and v4 design directions, one page each (/v3a … /v4c).
-  for (const ui of ['v3a', 'v3b', 'v3c', 'v4a', 'v4b', 'v4c']) {
+  // Task 0445/0446: the v3 and v4 design directions, one page each (/v3a … /v4c);
+  // task 0483: v5 (/v5, or the device's pick via ?ui=v5).
+  for (const ui of ['v3a', 'v3b', 'v3c', 'v4a', 'v4b', 'v4c', 'v5']) {
     const f = path.join(out, `${ui}.html`);
     if (fs.existsSync(f)) fs.copyFileSync(f, path.join(dist, `${ui}.html`));
   }

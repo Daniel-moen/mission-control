@@ -17,7 +17,7 @@ export default forwardRef(function Page(
   { title, subtitle, actions, leading, toolbar, children, scroll = true, scrollProps = {}, maxW = 1100, bar = 'auto', className = '', pad = true, large = true },
   ref,
 ) {
-  const { route, depth, back } = usePage();
+  const { route, depth, back, close } = usePage();
   const local = useRef(null);
   const y = useMotionValue(0);
   // The small title arrives as the large one passes under the bar.
@@ -52,7 +52,7 @@ export default forwardRef(function Page(
   const solid = bar === 'solid' || !scroll;
 
   const navBar = (
-    <div className="pointer-events-none absolute inset-x-0 top-0 z-30" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+    <div className="pointer-events-none absolute inset-x-0 top-0 z-30" style={{ paddingTop: 'var(--page-safe-top, env(safe-area-inset-top))' }}>
       <motion.div
         aria-hidden="true"
         className="lens-navbar absolute inset-0"
@@ -70,6 +70,19 @@ export default forwardRef(function Page(
             <Icon name="back" size={22} strokeWidth={2.2} />
             <span className="hidden sm:inline">Back</span>
           </motion.button>
+        ) : close ? (
+          <>
+            <motion.button
+              {...tap}
+              onClick={close}
+              aria-label="Close"
+              data-close-window
+              className="-ml-1 grid h-10 w-10 flex-none place-items-center rounded-full text-ink hover:bg-fill"
+            >
+              <Icon name="close" size={19} strokeWidth={2.2} />
+            </motion.button>
+            {leading}
+          </>
         ) : (
           leading || <span className="w-1" />
         )}
@@ -88,7 +101,7 @@ export default forwardRef(function Page(
     return (
       <div className={`relative flex h-full min-h-0 flex-col ${className}`}>
         {navBar}
-        <div className="flex min-h-0 flex-1 flex-col" style={{ paddingTop: 'calc(env(safe-area-inset-top) + 52px)' }}>
+        <div className="flex min-h-0 flex-1 flex-col" style={{ paddingTop: 'calc(var(--page-safe-top, env(safe-area-inset-top)) + 52px)' }}>
           {children}
         </div>
       </div>
@@ -103,7 +116,7 @@ export default forwardRef(function Page(
         {...scrollProps}
         onScroll={onScroll}
         className={`v-scroll h-full ${scrollProps.className || ''}`}
-        style={{ paddingTop: 'calc(env(safe-area-inset-top) + 52px)', paddingBottom: 'var(--tabbar-space)' }}
+        style={{ paddingTop: 'calc(var(--page-safe-top, env(safe-area-inset-top)) + 52px)', paddingBottom: 'var(--tabbar-space)' }}
       >
         <div className={`mx-auto w-full ${pad ? 'px-4 sm:px-6' : ''}`} style={{ maxWidth: maxW }}>
           {title && large && (

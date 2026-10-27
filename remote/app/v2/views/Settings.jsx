@@ -65,6 +65,8 @@ function Appearance() {
   const theme = usePrefs((s) => s.theme);
   const motion = usePrefs((s) => s.motion);
   const glass = usePrefs((s) => s.glass);
+  // v5 (task 0483) runs this page too, and says so
+  const ui = document.documentElement.dataset.ui === 'v5' ? 'v5' : 'v2';
   return (
     <Group title="Appearance" footer="The classic interface is the panel as it was; this device remembers the choice. Every device chooses for itself.">
       <Row icon="eye" label="Theme">
@@ -76,8 +78,14 @@ function Appearance() {
       <Row icon="sparkles" label="Glass" hint={glass === 'lite' ? 'Lite: frosted, no live refraction — easiest on the battery.' : glass === 'full' ? 'Full: live refracting glass, always.' : 'Auto: full glass; lite on Reduce Motion or low power.'}>
         <Segmented size="sm" value={glass} onChange={setGlass} options={[{ value: 'auto', label: 'Auto' }, { value: 'full', label: 'Full' }, { value: 'lite', label: 'Lite' }]} data-glass-pref />
       </Row>
-      <Row icon="undo" label="Interface" hint="New (Lens) — switch back any time." last>
-        <Segmented size="sm" value="v2" onChange={(v) => v === 'v1' && switchUi('v1')} options={[{ value: 'v2', label: 'New' }, { value: 'v1', label: 'Classic' }]} data-ui-switch />
+      <Row icon="undo" label="Interface" hint={ui === 'v5' ? 'v5: the classic layout in Lens glass — switch any time.' : 'New (Lens) — switch back any time.'} last>
+        <Segmented
+          size="sm"
+          value={ui}
+          onChange={(v) => v !== ui && switchUi(v)}
+          options={ui === 'v5' ? [{ value: 'v5', label: 'v5' }, { value: 'v2', label: 'v2' }, { value: 'v1', label: 'Classic' }] : [{ value: 'v2', label: 'New' }, { value: 'v1', label: 'Classic' }]}
+          data-ui-switch
+        />
       </Row>
     </Group>
   );

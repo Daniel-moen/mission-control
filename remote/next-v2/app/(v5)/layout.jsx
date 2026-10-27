@@ -1,8 +1,8 @@
-import '../../app/v2/v2.css';
+import '../../../app/v5/v5.css';
 
-// Panel v2 (task 0444) as a Next.js App Router static export. The relay
-// (server.js) serves out/index.html as dist/v2.html to devices that chose v2,
-// assets under /v2/_next/; the API, WebSocket and realtime stay the relay's.
+// Panel v5 (task 0483) has its own root layout so that only its own
+// stylesheet (app/v5/v5.css) is on the page — not v2's
+// v2.css, and through it not v1's app.css.
 
 export const metadata = {
   title: 'Mission Control',
@@ -17,24 +17,25 @@ export const viewport = {
   initialScale: 1,
   viewportFit: 'cover',
   themeColor: [
-    { media: '(prefers-color-scheme: dark)', color: '#0b0b0d' },
-    { media: '(prefers-color-scheme: light)', color: '#f4f3ef' },
+    { media: '(prefers-color-scheme: dark)', color: '#08080a' },
+    { media: '(prefers-color-scheme: light)', color: '#e9e7e2' },
   ],
 };
 
-// Runs before first paint: ?ui=v1|v2 picks this device's front end (kept in
-// localStorage + the mc_ui cookie the relay reads), and the theme is set so
-// nothing flashes.
+// Before first paint: ?ui= picks this device's front end (localStorage + the
+// mc_ui cookie the relay reads), and the theme is set so nothing flashes.
 const BOOT = `(function () {
   try {
     var p = new URLSearchParams(location.search), q = p.get('ui');
-    if (/^(v1|v2|v[34][abc])$/.test(q)) {
+    if (/^(v1|v2|v5|v[34][abc])$/.test(q)) {
       localStorage.setItem('mc.ui', q);
       document.cookie = 'mc_ui=' + q + '; path=/; max-age=31536000; samesite=lax';
+      if (q !== 'v5') return location.replace('/?ui=' + q + location.hash);
     }
-    if ((q || localStorage.getItem('mc.ui')) === 'v1') return location.replace('/?ui=v1' + location.hash);
     if (q) { p.delete('ui'); history.replaceState(null, '', location.pathname + (p.toString() ? '?' + p : '') + location.hash); }
     var t = localStorage.getItem('mc.v2.theme') || 'system';
+    var f = p.get('theme');
+    if (f === 'light' || f === 'dark') t = f;
     var dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
     document.documentElement.dataset.theme = dark ? 'dark' : 'light';
   } catch (e) {
@@ -44,7 +45,7 @@ const BOOT = `(function () {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en" className="v2" suppressHydrationWarning>
+    <html lang="en" className="v5" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: BOOT }} />
       </head>

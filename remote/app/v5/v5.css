@@ -1,0 +1,741 @@
+/* ============================================================
+   Mission Control v5 (task 0483) — ORIGINAL STRUCTURE, LENS GLASS
+   v1's shape (a photograph, Home as the resting scene, every place a
+   window, the dock, the slim top bar) drawn entirely in v4's Lens glass.
+   This is v5's own stylesheet: it does NOT load v1's app.css or v2's
+   v2.css. It shares only src/shared.css — the terminal, the markdown
+   reader (.md) and its blocks, the keyframes — which take every colour
+   from the tokens below.
+
+   Three planes, and nothing else:
+     1. the scene — the photo (Scene.jsx), under everything
+     2. glass panes — windows, Home's cards and figures: drawn by the
+        Lens shader (.lens-live) or, lite / no WebGL, CSS glass tuned to
+        read the same
+     3. floating glass — top bar, dock, sheets, menus, toast: CSS glass
+        with a real backdrop blur (content scrolls under them)
+   Inside a window, cards are glass ON glass: a lighter inset plane with
+   a lit top edge, never an opaque card.
+   ============================================================ */
+@import 'tailwindcss';
+@import '@fontsource-variable/inter';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/600.css';
+@import '../src/shared.css';
+/* Class names to generate: v5, the v2 pages it runs, and the shared views. */
+@source '../';
+
+@theme {
+  --color-page: var(--v-page);
+  --color-card: var(--v-card);
+  --color-card2: var(--v-card2);
+  --color-fill: var(--v-fill);
+  --color-fill2: var(--v-fill2);
+  --color-hair: var(--v-hair);
+  --color-hair2: var(--v-hair2);
+  --color-scrim: var(--v-scrim);
+
+  --color-bg: var(--t-bg);
+  --color-surface: var(--t-surface);
+  --color-raised: var(--t-raised);
+  --color-inset: var(--t-inset);
+  --color-line: var(--v-hair);
+  --color-line2: var(--v-hair2);
+  --color-ink: var(--t-ink);
+  --color-ink2: var(--t-ink2);
+  --color-ink3: var(--t-ink3);
+  --color-accent: var(--t-accent);
+  --color-accent-bright: var(--t-accent-bright);
+  --color-accent-ink: var(--t-accent-ink);
+  --color-ok: var(--t-accent);
+  --color-warn: var(--t-warn);
+  --color-crit: var(--t-crit);
+  --color-mgr: var(--t-mgr);
+  --color-s1: var(--t-s1);
+  --color-s2: var(--t-s2);
+  --color-s3: var(--t-s3);
+  --color-s4: var(--t-s4);
+  --color-overlay: var(--v-scrim);
+  --color-glass: var(--g-fill);
+  --color-glass-strong: var(--g-strong);
+  --color-glass-soft: var(--v-fill);
+  --color-glass-line: var(--v-hair);
+  --color-glass-line2: var(--v-hair2);
+  --color-term: var(--t-term);
+
+  --font-sans: 'Inter Variable', -apple-system, system-ui, 'SF Pro Text', 'Segoe UI', sans-serif;
+  --font-display: 'Inter Variable', -apple-system, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', 'Menlo', monospace;
+
+  --radius-xl2: 14px;
+  --radius-xl3: 18px;
+  --radius-card: 22px;
+  --radius-tile: 26px;
+  --radius-field: 14px;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-2: 0 10px 28px -12px rgba(0, 0, 0, 0.5);
+  --shadow-3: 0 26px 64px -20px rgba(0, 0, 0, 0.6);
+
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+/* ---- themes ----------------------------------------------------------------
+   Dark: smoked glass over the photo, white ink. Light: a daylight photo
+   under white frosted glass, graphite ink. */
+:root,
+[data-theme='dark'] {
+  color-scheme: dark;
+  --t-bg: #08080a;
+  --t-surface: rgba(28, 28, 33, 0.55);
+  --t-raised: rgba(255, 255, 255, 0.09);
+  --t-inset: rgba(0, 0, 0, 0.22);
+  --t-ink: #f6f6f7;
+  --t-ink2: #c9c9d1;
+  --t-ink3: #9d9da8;
+  --t-accent: #3ecf8e;
+  --t-accent-bright: #5fe3a8;
+  --t-accent-ink: #052616;
+  --t-warn: #f0b429;
+  --t-crit: #f26d64;
+  --t-mgr: #a78bfa;
+  --t-s1: #34b27b;
+  --t-s2: #8a68ec;
+  --t-s3: #c08a2a;
+  --t-s4: #d97788;
+  --t-term: rgba(8, 8, 11, 0.82);
+
+  --v-page: #08080a;
+  --v-card: rgba(255, 255, 255, 0.07);
+  --v-card2: rgba(255, 255, 255, 0.1);
+  --v-fill: rgba(255, 255, 255, 0.08);
+  --v-fill2: rgba(255, 255, 255, 0.14);
+  --v-hair: rgba(255, 255, 255, 0.1);
+  --v-hair2: rgba(255, 255, 255, 0.18);
+  --v-scrim: rgba(0, 0, 0, 0.32);
+
+  /* glass */
+  --g-fill: rgba(22, 22, 27, 0.5); /* a pane, CSS-drawn */
+  --g-fill-lite: rgba(20, 20, 24, 0.74); /* a pane, lite (no backdrop blur) */
+  --g-win: rgba(18, 18, 22, 0.56); /* a window, CSS-drawn */
+  --g-win-lite: rgba(16, 16, 20, 0.84);
+  --g-strong: rgba(20, 20, 25, 0.66); /* sheets, menus */
+  --g-strong-lite: rgba(22, 22, 27, 0.96);
+  --g-chrome: rgba(26, 26, 31, 0.46); /* top bar chips, dock */
+  --g-chrome-lite: rgba(26, 26, 31, 0.9);
+  --g-line: rgba(255, 255, 255, 0.14);
+  --g-hi: rgba(255, 255, 255, 0.16);
+  --g-shadow: 0 24px 50px -26px rgba(0, 0, 0, 0.8);
+  --g-in: rgba(255, 255, 255, 0.065); /* glass on glass: a card in a window */
+  --g-in-line: rgba(255, 255, 255, 0.1);
+  --g-in-hi: rgba(255, 255, 255, 0.09);
+  --hero: #fff;
+  --hero2: rgba(255, 255, 255, 0.8);
+  --hero-shadow: 0 2px 18px rgba(0, 0, 0, 0.55);
+}
+[data-theme='light'] {
+  color-scheme: light;
+  --t-bg: #e4e1db;
+  --t-surface: rgba(255, 255, 255, 0.62);
+  --t-raised: rgba(255, 255, 255, 0.55);
+  --t-inset: rgba(255, 255, 255, 0.4);
+  --t-ink: #141418;
+  --t-ink2: #3d3d47;
+  --t-ink3: #63636e;
+  --t-accent: #13a067;
+  --t-accent-bright: #0e8a58;
+  --t-accent-ink: #ffffff;
+  --t-warn: #b7791f;
+  --t-crit: #d14343;
+  --t-mgr: #7354d6;
+  --t-s1: #1f9d66;
+  --t-s2: #7354d6;
+  --t-s3: #b07a1c;
+  --t-s4: #c75a72;
+  --t-term: rgba(18, 18, 22, 0.9);
+
+  --v-page: #e9e7e2;
+  --v-card: rgba(255, 255, 255, 0.5);
+  --v-card2: rgba(255, 255, 255, 0.62);
+  --v-fill: rgba(20, 20, 30, 0.06);
+  --v-fill2: rgba(20, 20, 30, 0.1);
+  --v-hair: rgba(20, 20, 30, 0.09);
+  --v-hair2: rgba(20, 20, 30, 0.16);
+  --v-scrim: rgba(30, 28, 24, 0.18);
+
+  --g-fill: rgba(255, 255, 255, 0.5);
+  --g-fill-lite: rgba(255, 255, 255, 0.82);
+  --g-win: rgba(255, 255, 255, 0.52);
+  --g-win-lite: rgba(250, 249, 246, 0.9);
+  --g-strong: rgba(255, 255, 255, 0.66);
+  --g-strong-lite: rgba(250, 249, 246, 0.97);
+  --g-chrome: rgba(255, 255, 255, 0.5);
+  --g-chrome-lite: rgba(250, 249, 246, 0.94);
+  --g-line: rgba(255, 255, 255, 0.75);
+  --g-hi: rgba(255, 255, 255, 0.95);
+  --g-shadow: 0 20px 44px -26px rgba(40, 35, 25, 0.4);
+  --g-in: rgba(255, 255, 255, 0.45);
+  --g-in-line: rgba(255, 255, 255, 0.7);
+  --g-in-hi: rgba(255, 255, 255, 0.9);
+  --hero: #121216;
+  --hero2: rgba(18, 18, 22, 0.74);
+  --hero-shadow: 0 1px 14px rgba(255, 255, 255, 0.55);
+}
+
+/* ---- base -------------------------------------------------------------------- */
+@layer base {
+  html,
+  body {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--t-bg);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-feature-settings: 'cv11', 'ss01';
+    -webkit-font-smoothing: antialiased;
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+    overscroll-behavior: none;
+    touch-action: manipulation;
+    overflow-x: clip;
+  }
+  button {
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+}
+html {
+  font-size: 16px;
+}
+/* Dynamic Type: on iOS the root size follows the reader's text-size setting. */
+@supports (font: -apple-system-body) {
+  html.v5 {
+    font: -apple-system-body;
+    font-family: var(--font-sans);
+  }
+}
+html.v5 #app {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+}
+::selection {
+  background: color-mix(in oklab, var(--color-accent) 30%, transparent);
+}
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+.to-screen-bottom {
+  bottom: calc(0px - var(--vgap, 0px));
+}
+:root {
+  --vgap: 0px;
+}
+
+/* ---- 1. the scene ------------------------------------------------------------ */
+.lens-scene {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.lens-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.lens-lite-photo,
+.lens-lite-blur {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: opacity 0.5s;
+}
+.lens-lite-blur {
+  transform: scale(1.15);
+}
+.lens-lite-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(6, 6, 8, 0.42);
+  transition: background 0.5s;
+}
+.lens-lite-scrim.open {
+  background: linear-gradient(to bottom, rgba(6, 6, 8, 0.28), rgba(6, 6, 8, 0.42));
+}
+.lens-lite-scrim.light {
+  background: rgba(238, 236, 231, 0.5);
+}
+.lens-lite-scrim.light.open {
+  background: rgba(238, 236, 231, 0.22);
+}
+
+/* ---- 2. glass panes ------------------------------------------------------------ */
+/* A window: v1's one large pane per place. */
+.v5-win-slot {
+  position: absolute;
+  inset: 0;
+  padding: var(--win-top, 12px) var(--win-x, 8px) var(--win-bottom, 12px);
+  display: flex;
+  flex-direction: column;
+}
+.v5-win {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  margin: 0 auto;
+  overflow: hidden;
+  border-radius: 30px;
+  background: var(--g-win);
+  border: 1px solid var(--g-line);
+  box-shadow: inset 0 1px 0 var(--g-hi), var(--g-shadow);
+  -webkit-backdrop-filter: blur(30px) saturate(1.7);
+  backdrop-filter: blur(30px) saturate(1.7);
+  /* the v2 pages inside: no status-bar inset, no tab bar to clear */
+  --page-safe-top: 0px;
+  --tabbar-space: 18px;
+}
+@media (max-width: 699px) {
+  .v5-win {
+    border-radius: 26px;
+  }
+}
+/* Home's panes: the cards waiting on you, the figures */
+.v-card,
+.v-tile,
+[data-lens] {
+  background: var(--g-fill);
+  border: 1px solid var(--g-line);
+  box-shadow: inset 0 1px 0 var(--g-hi), var(--g-shadow);
+  -webkit-backdrop-filter: blur(22px) saturate(1.7);
+  backdrop-filter: blur(22px) saturate(1.7);
+}
+.v-card {
+  border-radius: var(--radius-card);
+}
+.v-tile {
+  border-radius: var(--radius-tile);
+}
+/* lite: no backdrop blur anywhere (the photo behind is pre-blurred) */
+html[data-glass='lite'] .v5-win {
+  background: var(--g-win-lite);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+html[data-glass='lite'] .v-card,
+html[data-glass='lite'] .v-tile,
+html[data-glass='lite'] [data-lens] {
+  background: var(--g-fill-lite);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+/* drawn by the shader: the DOM pane steps aside */
+html[data-lensmode='gl'] .lens-live {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+.lens-amber-rim {
+  border-color: color-mix(in oklab, var(--color-warn) 55%, transparent) !important;
+}
+html[data-lensmode='gl'] .lens-amber-rim.lens-live {
+  border-color: transparent !important;
+}
+
+/* Glass on glass: anything card-like inside a window or a sheet is a
+   lighter inset plane with a lit top edge — never a second frosted slab. */
+.v5-win .v-card,
+.v5-win .v-tile,
+.v5-win [data-lens],
+.v5-win .glass,
+.v5-win .glass-strong,
+[role='dialog'] .v-card,
+[role='dialog'] .v-tile,
+[role='dialog'] .glass {
+  background: var(--g-in);
+  border: 1px solid var(--g-in-line);
+  box-shadow: inset 0 1px 0 var(--g-in-hi);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.v5-win .v-card .v-card,
+.v5-win .v-card .v-tile {
+  background: var(--v-fill);
+  border-color: transparent;
+  box-shadow: none;
+}
+.v5-win .lens-amber-rim {
+  border-color: color-mix(in oklab, var(--color-warn) 50%, transparent) !important;
+}
+
+/* A page's bar inside a window: the window's own top edge, frosted as
+   content passes under it. */
+.v5-win .lens-navbar {
+  background: linear-gradient(to bottom, color-mix(in oklab, var(--g-win) 70%, transparent), color-mix(in oklab, var(--g-win) 30%, transparent));
+  -webkit-backdrop-filter: blur(18px) saturate(1.6);
+  backdrop-filter: blur(18px) saturate(1.6);
+  border-bottom: 1px solid var(--g-in-line);
+}
+html[data-glass='lite'] .v5-win .lens-navbar {
+  background: var(--g-win-lite);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* ---- 3. floating glass ---------------------------------------------------------- */
+.v5-chip,
+.v5-dock,
+.v-bar,
+.v-menu,
+.lens-navbar,
+[data-toast],
+[data-conn] {
+  background: var(--g-chrome);
+  border: 1px solid var(--g-line);
+  box-shadow: inset 0 1px 0 var(--g-hi), 0 16px 36px -18px rgba(0, 0, 0, 0.55);
+  -webkit-backdrop-filter: blur(26px) saturate(1.8);
+  backdrop-filter: blur(26px) saturate(1.8);
+}
+.v-menu {
+  background: var(--g-strong) !important;
+}
+.v5-dock {
+  box-shadow: inset 0 1px 0 var(--g-hi), inset 0 -1px 0 rgba(255, 255, 255, 0.04), 0 22px 44px -18px rgba(0, 0, 0, 0.6);
+}
+.v5-dock-pill {
+  background: var(--v-fill2);
+  box-shadow: inset 0 1px 0 var(--g-in-hi);
+}
+.v5-chip:hover {
+  background: color-mix(in oklab, var(--g-chrome) 80%, var(--color-ink) 8%);
+}
+html[data-glass='lite'] .v5-chip,
+html[data-glass='lite'] .v5-dock,
+html[data-glass='lite'] .v-bar,
+html[data-glass='lite'] .v-menu,
+html[data-glass='lite'] [data-toast],
+html[data-glass='lite'] [data-conn] {
+  background: var(--g-chrome-lite) !important;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* Sheets and dialogs: the thickest glass, over a light scrim — the window
+   behind stays visible, frosted. */
+html.v5 [role='dialog'] {
+  background: var(--g-strong);
+  border: 1px solid var(--g-line);
+  box-shadow: inset 0 1px 0 var(--g-hi), 0 30px 80px -24px rgba(0, 0, 0, 0.7);
+  -webkit-backdrop-filter: blur(40px) saturate(1.8);
+  backdrop-filter: blur(40px) saturate(1.8);
+}
+html[data-glass='lite'] [role='dialog'] {
+  background: var(--g-strong-lite);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+[role='dialog'] .v-field {
+  background: var(--v-fill);
+}
+
+/* Full-screen takeovers (the console, the voice room, the photo viewer):
+   glass over the scene instead of a black room. */
+[data-overlay] > *:first-child,
+[data-voice] {
+  background: rgba(10, 10, 14, 0.58) !important;
+  -webkit-backdrop-filter: blur(36px) saturate(1.6) !important;
+  backdrop-filter: blur(36px) saturate(1.6) !important;
+}
+/* over the daylight photo the takeovers (dark rooms) need more smoke */
+html[data-theme='light'] [data-overlay] > *:first-child,
+html[data-theme='light'] [data-voice] {
+  background: rgba(14, 14, 18, 0.8) !important;
+}
+/* the console's screen is a terminal: smoked glass, still easy to read */
+[data-overlay='console'] main {
+  background: var(--t-term) !important;
+}
+html[data-glass='lite'] [data-overlay] > *:first-child,
+html[data-glass='lite'] [data-voice] {
+  background: rgba(12, 12, 16, 0.94) !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* ---- the scene's type (Home's greeting, the top bar's clock) -------------------- */
+.v5-hero-title {
+  color: var(--hero);
+  text-shadow: var(--hero-shadow);
+}
+.v5-hero-sub {
+  color: var(--hero2);
+  text-shadow: var(--hero-shadow);
+}
+button.v5-hero-sub:hover {
+  color: var(--hero);
+}
+.v5-btn {
+  box-shadow: 0 14px 34px -14px rgba(0, 0, 0, 0.6);
+}
+.v5-btn-primary {
+  background: var(--color-ink);
+  color: var(--v-page);
+}
+.v5-btn-warn {
+  background: var(--color-warn);
+  color: #241a02;
+}
+.v5-btn-glass {
+  background: var(--g-chrome);
+  color: var(--color-ink);
+  border: 1px solid var(--g-line);
+  box-shadow: inset 0 1px 0 var(--g-hi), 0 14px 34px -14px rgba(0, 0, 0, 0.55);
+  -webkit-backdrop-filter: blur(24px) saturate(1.8);
+  backdrop-filter: blur(24px) saturate(1.8);
+}
+.v5-figure {
+  color: var(--color-ink);
+}
+
+/* ---- the shapes the shared views and v2's pages use ------------------------------ */
+.glass,
+.glass-strong {
+  background: var(--g-fill);
+  border: 1px solid var(--g-line);
+  border-radius: 22px;
+  box-shadow: inset 0 1px 0 var(--g-hi), var(--g-shadow);
+  -webkit-backdrop-filter: blur(24px) saturate(1.7);
+  backdrop-filter: blur(24px) saturate(1.7);
+}
+.glass-strong {
+  background: var(--g-strong);
+}
+.glass-soft {
+  background: var(--v-fill);
+  border: 1px solid var(--v-hair);
+}
+.glass-soft-hover:hover {
+  background: var(--v-fill2);
+  border-color: var(--v-hair2);
+}
+.pill {
+  border-radius: 9999px;
+}
+.panel {
+  background: var(--g-in);
+  border: 1px solid var(--g-in-line);
+}
+.panel-hover:hover {
+  border-color: var(--v-hair2);
+}
+.label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--color-ink3);
+}
+.display {
+  font-family: var(--font-display);
+  letter-spacing: -0.01em;
+}
+.tnum,
+.v-num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum', 'cv11';
+}
+.v-fill {
+  background: var(--v-fill);
+}
+.v-field {
+  background: var(--v-fill);
+  border: 1px solid var(--v-hair);
+  border-radius: var(--radius-field);
+  color: var(--color-ink);
+  outline: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+.v-field::placeholder {
+  color: var(--color-ink3);
+}
+.v-field:focus {
+  border-color: var(--v-hair2);
+  background: var(--v-fill2);
+}
+.v-hair-b {
+  border-bottom: 1px solid var(--v-hair);
+}
+.v-hair-t {
+  border-top: 1px solid var(--v-hair);
+}
+.v-title {
+  font-size: 2.3rem;
+  line-height: 1.04;
+  font-weight: 750;
+  letter-spacing: -0.04em;
+}
+@media (min-width: 700px) {
+  .v-title {
+    font-size: 2.8rem;
+  }
+}
+.v-eyebrow {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-ink3);
+}
+.lens-eyebrow {
+  font-size: 0.76rem;
+  font-weight: 650;
+  color: var(--color-ink3);
+}
+.lens-giant {
+  font-weight: 250;
+  letter-spacing: -0.06em;
+  line-height: 0.9;
+  font-variant-numeric: tabular-nums;
+}
+.lens-chip {
+  background: var(--v-fill2);
+  box-shadow: inset 0 0 0 1px var(--g-in-line), inset 0 1px 0 var(--g-in-hi);
+}
+.v-scroll {
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.v-scroll::-webkit-scrollbar {
+  display: none;
+}
+.v-scroll-x {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.v-scroll-x::-webkit-scrollbar {
+  display: none;
+}
+.v-cv {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 88px;
+}
+.v-pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+.v-pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.v1-dark {
+  color-scheme: dark;
+}
+html.v5 :focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--color-accent) 70%, transparent);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+html.v5 button:focus:not(:focus-visible) {
+  outline: none;
+}
+@keyframes v-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+.v-breathe {
+  animation: v-breathe 2.4s ease-in-out infinite;
+}
+@keyframes v-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+.v-skeleton {
+  background: linear-gradient(90deg, var(--v-fill) 25%, var(--v-fill2) 50%, var(--v-fill) 75%);
+  background-size: 200% 100%;
+  animation: v-shimmer 1.6s linear infinite;
+  border-radius: 10px;
+}
+
+/* ---- Library: a plain vertical page — its filter chips wrap, nothing scrolls
+   sideways (Daniel, 27 Oct). ------------------------------------------------------- */
+.v5-win[data-win='library'] .v-scroll-x.flex {
+  flex-wrap: wrap;
+  overflow: visible;
+  margin-inline: 0;
+  padding-inline: 0;
+}
+/* the kind tabs and the status picker share a row while they fit; on a
+   phone the picker drops under them and the tabs wrap if they must */
+.v5-win[data-win='library'] .flex.items-center:has(> .v-scroll-x.min-w-0) {
+  flex-wrap: wrap;
+}
+.v5-win[data-win='library'] .v-scroll-x.min-w-0 {
+  overflow: visible;
+  flex: 1 1 auto;
+}
+.v5-win[data-win='library'] .v-scroll-x.min-w-0 > [role='tablist'] {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+/* ---- the reader (a doc / report window) ----------------------------------------- */
+html.v5 .md {
+  font-size: 1rem;
+  line-height: 1.68;
+}
+html.v5 .md h1 {
+  font-size: 1.6rem;
+}
+html.v5 .md h2 {
+  font-size: 1.25rem;
+}
+html.v5 .md h3 {
+  font-size: 1.06rem;
+}
+html.v5 .md pre,
+html.v5 .md .mdb-callout,
+html.v5 .md .mdb-fact {
+  background: var(--g-in);
+  border-color: var(--g-in-line);
+}
+html.v5 .md .mia-flash {
+  background: color-mix(in oklab, var(--color-ink) 9%, transparent);
+}
+html.v5 .md .mia-mark {
+  background: color-mix(in oklab, var(--color-accent) 18%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--color-accent) 18%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .v-breathe,
+  .v-skeleton {
+    animation: none;
+  }
+}

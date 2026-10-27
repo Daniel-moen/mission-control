@@ -4,7 +4,7 @@ import { createElement, lazy } from 'react';
 // nothing else. The likely-next pages are warmed up on idle (warmPages), so a
 // tap never waits on the network for code.
 
-const loaders = {
+let loaders = {
   home: () => import('../views/Home.jsx'),
   mia: () => import('../views/Mia.jsx'),
   agents: () => import('../views/Agents.jsx'),
@@ -15,6 +15,13 @@ const loaders = {
   settings: () => import('../views/Settings.jsx'),
   hq: () => import('../views/HQ.jsx'),
 };
+
+// v5 (task 0483) runs the same pages in its own frame: it swaps in its own
+// loaders (Home, the task page, each page wrapped in a glass window) before
+// anything renders.
+export function setPageLoaders(map) {
+  loaders = { ...loaders, ...map };
+}
 
 // Loaded page modules. A page whose code is already here renders directly —
 // React.lazy would still suspend for one frame even on a warm import, and

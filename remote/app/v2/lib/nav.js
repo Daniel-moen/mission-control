@@ -13,9 +13,12 @@ import { create } from 'zustand';
 // pushes (/#mia) and the e2e suites mean the same thing in both front ends.
 
 export const TABS = ['home', 'mia', 'agents', 'library'];
+// v5 (task 0483) gives a task its own page (#task/<id>); v2 opens it on the
+// board. Set once, before anything renders.
+export const navOpts = { taskPage: false };
 const ROOT = { home: 'home', mia: 'mia', agents: 'agents', library: 'library' };
 // Where a page lives when it's opened cold (a deep link at launch).
-const OWNER = { agent: 'agents', doc: 'library', insights: 'home', hq: 'home', settings: 'home' };
+const OWNER = { agent: 'agents', doc: 'library', insights: 'home', hq: 'home', settings: 'home', task: 'mia' };
 
 let seq = 0;
 const mk = (name, params = {}, extra = {}) => ({ name, params, key: `${name}:${++seq}`, ...extra });
@@ -107,6 +110,7 @@ export function setMiaSeg(miaSeg) {
   set({ miaSeg });
 }
 export function focusTask(id) {
+  if (navOpts.taskPage && id) return push('task', { id });
   const s = get();
   set({ focusTask: { id, n: (s.focusTask?.n || 0) + 1 }, miaSeg: 'tasks' });
   setTab('mia');
@@ -156,6 +160,8 @@ export function hashFor(s = get()) {
       return 'insights';
     case 'settings':
       return 'settings';
+    case 'task':
+      return `task/${top.params.id}`;
     case 'hq': {
       const p = top.params || {};
       if (p.section === 'channels') return p.channel ? `channels/${p.channel}` : 'channels';
@@ -180,6 +186,7 @@ export function applyHash(raw, { cold = false } = {}) {
   const page = (name, params) => push(name, params, cold ? { tab: OWNER[name] } : {});
   if (head === 'agent' && id) return page('agent', { id });
   if (head === 'doc' && id) return page('doc', { id });
+  if (head === 'task' && id) return navOpts.taskPage ? page('task', { id }) : focusTask(id);
   if (head === 'insights') return page('insights', {});
   if (head === 'settings') return page('settings', {});
   if (head === 'hq') return page('hq', id ? { company: id } : {});

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useMC, miaTaskAdd, miaTaskCancel, miaTaskSet, miaSchedule, agentName, agentStatus } from '../../../src/lib/store.js';
 import { dictate, speechSupported } from '../../../src/lib/speech.js';
-import { push } from '../../lib/nav.js';
+import { push, navOpts } from '../../lib/nav.js';
 import { usePrefs } from '../../lib/prefs.js';
 import { spring, tap } from '../../lib/motion.js';
 import { Dot, Empty, Icon, Select, Toggle, useArm } from '../../ui/kit.jsx';
@@ -146,8 +146,8 @@ function TaskCard({ t, agents, flash, cardRef }) {
         role="button"
         tabIndex={0}
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-        onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), setOpen((v) => !v))}
+        onClick={() => (navOpts.taskPage ? push('task', { id: t.id }) : setOpen((v) => !v))}
+        onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), navOpts.taskPage ? push('task', { id: t.id }) : setOpen((v) => !v))}
         className="flex cursor-pointer items-start gap-3 p-4"
       >
         <span className="mt-[7px] flex h-3 w-4 flex-none items-center justify-center">

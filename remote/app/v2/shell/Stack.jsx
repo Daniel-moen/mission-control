@@ -20,7 +20,7 @@ import Boundary from '../ui/Boundary.jsx';
 // state and DOM kept (Back is instant), effects paused (no watch leases, no
 // 1 Hz re-renders for pages nobody can see).
 
-export const PageCtx = createContext({ route: null, active: true, depth: 0, back: () => {} });
+export const PageCtx = createContext({ route: null, active: true, depth: 0, back: () => {}, close: null });
 export const usePage = () => useContext(PageCtx);
 
 const EDGE = 26; // px of left edge that starts a back-swipe
@@ -46,7 +46,7 @@ function useLayers(stack) {
   return [layers, settle];
 }
 
-export default function Stack({ tab, active }) {
+export default function Stack({ tab, active, onClose = null }) {
   const stack = useNav((s) => s.stacks[tab]);
   const [layers, settle] = useLayers(stack);
   const box = useRef(null);
@@ -74,6 +74,7 @@ export default function Stack({ tab, active }) {
               aboveZoom={!!layers[i + 1]?.r.origin}
               w={w || window.innerWidth}
               h={h || window.innerHeight}
+              onClose={onClose}
               onSettled={settle}
             />
           </Activity>
@@ -83,7 +84,7 @@ export default function Stack({ tab, active }) {
   );
 }
 
-function Layer({ layer, index, top, under, live, depth, cover, aboveZoom, w, h, onSettled }) {
+function Layer({ layer, index, top, under, live, depth, cover, aboveZoom, w, h, onSettled, onClose }) {
   const { r, state } = layer;
   const reduce = usePrefs((s) => s.reduce);
   const zoom = !!r.origin && !reduce;
@@ -190,7 +191,7 @@ function Layer({ layer, index, top, under, live, depth, cover, aboveZoom, w, h, 
     else animate(x, 0, { ...spring.page, velocity: info.velocity.x });
   };
 
-  const ctx = { route: r, active: live, depth, back };
+  const ctx = { route: r, active: live, depth, back, close: depth === 0 ? onClose : null };
   const Page = pageFor(r.name);
 
   return (
