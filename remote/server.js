@@ -417,6 +417,8 @@ const ALLOWED_VIEWER_TYPES = [
   // Mia, the persistent assistant (docs/mia.md §8).
   'miaSend', 'miaAnswer', 'miaDismiss', 'miaQuestionAge', 'miaRead', 'miaTaskAdd', 'miaTaskCancel', 'miaTaskSet',
   'miaStart', 'miaStop', 'miaRestart', 'miaSetModel', 'miaSchedule', 'miaPushTest',
+  // tars trigger on the Mac (the bridge calls 127.0.0.1:8421 with its own Keychain token).
+  'tars.run', 'tars.status',
 ];
 
 // ---------------------------------------------------------------------------

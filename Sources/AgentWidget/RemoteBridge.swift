@@ -29,6 +29,7 @@ import Combine
 ///                  {type:"pushKey", key}           relay's VAPID public key (echoed in the snapshot)
 ///                  {type:"miaSend|miaAnswer|miaDismiss|miaQuestionAge|miaRead|miaTaskAdd|miaTaskCancel|miaTaskSet|
 ///                         miaStart|miaStop|miaRestart|miaSetModel|miaSchedule|miaPushTest", …}  Mia (docs/mia.md §8)
+///                  {type:"tars.run", task} / {type:"tars.status"}  → local tars trigger; ack carries `tars`
 ///                  {type:"panelResult", id, ok, action, arg, detail}   how a `mia panel` command landed
 ///                  {type:"upload", id, key, name, mime, size, sha256, caption?, batch?, batchId?}
 ///                                                  a file for Mia; fetch GET /upload/<id> (token + X-MC-Key)
@@ -228,6 +229,9 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
 
         case let t where t.hasPrefix("mia"):
             handleMia(t, obj)
+
+        case "tars.run", "tars.status":
+            handleTars(type, obj)
 
         case "panelResult":
             // How a `mia panel` command landed (relay or panel) — docs/mia.md §8.2.
@@ -472,6 +476,51 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
 
         default:
             break
+        }
+    }
+
+    // MARK: tars trigger
+
+    /// tars.run {task} / tars.status → the local trigger (127.0.0.1:8421). The
+    /// bearer token is read from the Keychain (service "tars-trigger") here and
+    /// never leaves the Mac; the answer goes back as an ack carrying `tars`.
+    private func handleTars(_ type: String, _ obj: [String: Any]) {
+        let task = ((obj["task"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if type == "tars.run" && task.isEmpty { ack(false, cmd: type, detail: "Write a task first"); return }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            func reply(_ ok: Bool, _ detail: String, _ tars: [String: Any]) {
+                DispatchQueue.main.async { self?.sendJSON(["type": "ack", "ok": ok, "cmd": type, "detail": detail, "tars": tars]) }
+            }
+            let kc = Process()
+            kc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+            kc.arguments = ["find-generic-password", "-s", "tars-trigger", "-w"]
+            let pipe = Pipe(); kc.standardOutput = pipe; kc.standardError = Pipe()
+            guard (try? kc.run()) != nil else { return reply(false, "Couldn't read the tars token", [:]) }
+            let tokData = pipe.fileHandleForReading.readDataToEndOfFile(); kc.waitUntilExit()
+            let token = (String(data: tokData, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard kc.terminationStatus == 0, !token.isEmpty else { return reply(false, "No tars token in the Keychain", [:]) }
+
+            var req = URLRequest(url: URL(string: "http://127.0.0.1:8421/tars/" + (type == "tars.run" ? "run" : "status"))!)
+            req.timeoutInterval = 10
+            req.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+            if type == "tars.run" {
+                req.httpMethod = "POST"
+                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                req.httpBody = try? JSONSerialization.data(withJSONObject: ["task": String(task.prefix(4000))])
+            }
+            let sem = DispatchSemaphore(value: 0)
+            var out: (Int, [String: Any])?
+            URLSession.shared.dataTask(with: req) { data, resp, _ in
+                if let http = resp as? HTTPURLResponse {
+                    let j = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+                    out = (http.statusCode, j)
+                }
+                sem.signal()
+            }.resume()
+            sem.wait()
+            guard let (code, json) = out else { return reply(false, "The tars trigger isn't running on the Mac", [:]) }
+            let ok = (200..<300).contains(code)
+            reply(ok, ok ? "ok" : ((json["error"] as? String) ?? "tars said \(code)"), json)
         }
     }
 

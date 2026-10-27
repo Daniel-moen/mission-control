@@ -60,6 +60,7 @@ export { fmtTokens, fmtInt, fmtMem, clockOf };
 const LS_TOKEN = 'mc_token';
 
 export const useMC = create(() => ({
+  tars: null, // last answer from the Mac's tars trigger: {status, result, task, ok, error, at}
   token: '',
   link: 'offline', // 'offline' | 'relay' | 'linked'
   transport: 'ws', // 'ws' | 'poll' — poll = HTTP fallback when WebSockets can't get through
@@ -1261,6 +1262,11 @@ function ingestDoc(msg) {
 let lastKeyFailAt = 0;
 
 function handleAck(msg) {
+  if (msg.cmd === 'tars.run' || msg.cmd === 'tars.status') {
+    // The trigger's own JSON (status/result/…) — shown by the tars card, not toasted.
+    set({ tars: { ...(msg.tars || {}), ok: !!msg.ok, error: msg.ok ? '' : msg.detail || 'failed', at: Date.now() } });
+    return;
+  }
   // Both docCreate and research mint a new file and carry its id back so the
   // Library can jump straight to it; research additionally spins up an agent.
   if (msg.cmd === 'docCreate') {
@@ -1337,6 +1343,14 @@ export function broadcast(text) {
   const ok = send({ type: 'broadcast', text });
   if (ok) toast('Broadcast to all agents');
   return ok;
+}
+// tars trigger on the Mac (see RemoteBridge.handleTars): run a task / read the last run.
+export function tarsRun(task) {
+  task = (task || '').trim();
+  return task ? send({ type: 'tars.run', task }) : false;
+}
+export function tarsStatus() {
+  return send({ type: 'tars.status' });
 }
 export function kill(sessionId) {
   return send({ type: 'kill', sessionId });

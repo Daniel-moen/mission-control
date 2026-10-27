@@ -18,6 +18,7 @@ import Viewer from './shell/Viewer.jsx';
 import Lightbox from './shell/Lightbox.jsx';
 import { lightboxOpen, closeLightbox } from './lib/lightbox.js';
 import MiniMia from './shell/MiniMia.jsx';
+import TarsCard from './shell/TarsCard.jsx';
 import { startTalk } from './lib/talkSession.js';
 
 import Home from './views/home/Home.jsx';
@@ -587,6 +588,7 @@ export default function App() {
         hidden={(!viewerOn && (mainKind === 'mia' || phoneKind === 'mia' || shown === 'doc')) || !!sheet || !!composer || !!console_ || palette}
         onOpenMia={() => panelApi.current.view('mia')}
       />
+      <TarsCard hidden={chrome === 'none' || !!sheet || !!composer || !!console_ || palette} />
       {talkHost}
       <Toast />
     </div>
