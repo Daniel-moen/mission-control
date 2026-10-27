@@ -63,9 +63,11 @@
   --color-glass-line2: var(--v-hair2);
   --color-term: var(--t-term);
 
-  --font-sans: 'Inter Variable', -apple-system, system-ui, 'SF Pro Text', 'Segoe UI', sans-serif;
-  --font-display: 'Inter Variable', -apple-system, system-ui, sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', 'Menlo', monospace;
+  /* Apple's own type on Apple devices (task 0484): SF Pro / SF Mono via the
+     system stack; Inter and Plex only where there's no San Francisco. */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, 'Inter Variable', 'Segoe UI', sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, 'Inter Variable', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'IBM Plex Mono', 'Menlo', monospace;
 
   --radius-xl2: 14px;
   --radius-xl3: 18px;
@@ -179,7 +181,7 @@
   --g-in-hi: rgba(255, 255, 255, 0.9);
   --hero: #121216;
   --hero2: rgba(18, 18, 22, 0.74);
-  --hero-shadow: 0 1px 14px rgba(255, 255, 255, 0.55);
+  --hero-shadow: 0 0 2px rgba(255, 255, 255, 0.7), 0 1px 16px rgba(255, 255, 255, 0.8);
 }
 
 /* ---- base -------------------------------------------------------------------- */
@@ -420,6 +422,13 @@ html[data-glass='lite'] .v5-win .lens-navbar {
 .v5-dock {
   box-shadow: inset 0 1px 0 var(--g-hi), inset 0 -1px 0 rgba(255, 255, 255, 0.04), 0 22px 44px -18px rgba(0, 0, 0, 0.6);
 }
+/* The selected tab: tinted like iOS 26's, not just brighter. */
+.v5-tab-on {
+  color: var(--color-accent-bright);
+}
+html[data-theme='light'] .v5-tab-on {
+  color: var(--color-accent);
+}
 .v5-dock-pill {
   background: var(--v-fill2);
   box-shadow: inset 0 1px 0 var(--g-in-hi);
@@ -585,15 +594,18 @@ button.v5-hero-sub:hover {
 .v-hair-t {
   border-top: 1px solid var(--v-hair);
 }
+/* The iOS large title: 34 pt bold, SF's own tracking — not squeezed. */
 .v-title {
-  font-size: 2.3rem;
-  line-height: 1.04;
-  font-weight: 750;
-  letter-spacing: -0.04em;
+  font-family: var(--font-display);
+  font-size: 2.125rem;
+  line-height: 1.12;
+  font-weight: 700;
+  letter-spacing: 0.01em;
 }
 @media (min-width: 700px) {
   .v-title {
-    font-size: 2.8rem;
+    font-size: 2.5rem;
+    letter-spacing: 0;
   }
 }
 .v-eyebrow {
@@ -711,7 +723,10 @@ html.v5 .md {
   line-height: 1.68;
 }
 html.v5 .md h1 {
-  font-size: 1.6rem;
+  font-family: var(--font-display);
+  font-size: 2rem;
+  font-weight: 700;
+  line-height: 1.15;
 }
 html.v5 .md h2 {
   font-size: 1.25rem;
@@ -738,4 +753,50 @@ html.v5 .md .mia-mark {
   .v-skeleton {
     animation: none;
   }
+}
+
+/* ---- toolbars, the iOS 26 way (task 0484) ----------------------------------------
+   Back is a round glass button with a chevron (no word), and a page's
+   trailing icon buttons share one glass capsule. */
+.v5-win [data-back] {
+  width: 2.5rem;
+  padding: 0;
+  justify-content: center;
+  background: var(--v-fill);
+  box-shadow: inset 0 1px 0 var(--g-in-hi);
+}
+.v5-win [data-back] > span {
+  display: none;
+}
+.v5-win [data-close-window] {
+  background: var(--v-fill);
+  box-shadow: inset 0 1px 0 var(--g-in-hi);
+}
+.v5-win [data-bar-actions]:has(> button:not([class*='bg-ink']):not([class*='bg-crit']):nth-of-type(2)) {
+  gap: 0;
+  padding: 0 0.125rem;
+  border-radius: 999px;
+  background: var(--v-fill);
+  box-shadow: inset 0 1px 0 var(--g-in-hi);
+}
+.v5-win [data-bar-actions] > button[class*='bg-ink'],
+.v5-win [data-bar-actions] > button[class*='bg-crit'] {
+  margin-left: 0.375rem;
+}
+
+/* ---- the reader, like Apple's (task 0484) ---------------------------------------
+   One readable column, centred in the window (Notes/Books measure); tables
+   and the meta row line up with it. */
+.v5-win[data-win='doc'] [data-doc-head],
+.v5-win[data-win='doc'] article.md,
+.v5-win[data-win='doc'] textarea {
+  max-width: 46rem;
+  margin-inline: auto;
+}
+.v5-win[data-win='doc'] textarea {
+  display: block;
+}
+.v5-win[data-win='doc'] article.md {
+  font-size: 1.0625rem;
+  line-height: 1.6;
 }

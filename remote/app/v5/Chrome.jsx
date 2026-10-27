@@ -10,8 +10,9 @@ import { startVoice } from '../v2/shell/TalkHost.jsx';
 // v5's chrome (task 0483) — v1's two pieces, in Lens glass:
 //   • the top bar: time and date on the left; on the right Claude usage
 //     (past 80%), the link, Search, Launch, Settings. Nothing else.
-//   • the dock: Mia · Home · HQ · Fleet · Insights · Library, one highlight
-//     gliding between them, the mic as the raised circle, Launch on an iPad.
+//   • the dock — an iOS tab bar: Home · Mia · Fleet · Library · Insights · HQ,
+//     labelled, one highlight gliding between them, the mic as the raised
+//     circle. Launch lives once, in the top bar (task 0484: Apple's restraint).
 //     'compact' (icons only) under a report; 'none' in Mia's chat.
 // Both float over content, so they're CSS glass with a real backdrop blur
 // (what scrolls under them is frosted, never cut off by a shader pane).
@@ -56,7 +57,9 @@ export function TopBar() {
   const via = http ? `${l.label} · over HTTP (WebSocket blocked on this network)` : l.label;
   return (
     <header className="v5-topbar fixed inset-x-0 top-0 z-30 flex items-center gap-3 px-4 sm:px-6" data-topbar style={{ paddingTop: 'calc(env(safe-area-inset-top) + 10px)' }}>
-      <Clock now={now} />
+      <div className="max-sm:hidden">
+        <Clock now={now} />
+      </div>
       <div className="ml-auto flex flex-none items-center gap-1.5">
         {worst && lvl !== 'ok' && (
           <motion.button
@@ -102,13 +105,15 @@ export function place(key) {
 }
 export const goSettings = () => place('settings');
 
+// v1's six places, in the order Apple would put them (task 0484): Home
+// first, then what you use most. Every tab is labelled, as in an iOS tab bar.
 const ITEMS = [
-  { key: 'mia', label: 'Mia', icon: 'mia' },
   { key: 'home', label: 'Home', icon: 'sparkles' },
-  { key: 'hq', label: 'HQ', icon: 'hq' },
+  { key: 'mia', label: 'Mia', icon: 'mia' },
   { key: 'fleet', label: 'Fleet', icon: 'agents' },
-  { key: 'insights', label: 'Insights', icon: 'overview' },
   { key: 'library', label: 'Library', icon: 'library' },
+  { key: 'insights', label: 'Insights', icon: 'overview' },
+  { key: 'hq', label: 'HQ', icon: 'hq' },
 ];
 
 export function Dock({ mode = 'full', active = 'home', wide = false }) {
@@ -144,8 +149,8 @@ export function Dock({ mode = 'full', active = 'home', wide = false }) {
                     aria-current={on ? 'page' : undefined}
                     data-tab={it.key}
                     className={`relative flex items-center justify-center rounded-full font-semibold transition-colors ${
-                      slim ? 'h-9 w-10' : wide ? 'h-11 gap-2 px-4 text-[0.84rem]' : 'h-11 w-[46px]'
-                    } ${on ? 'text-ink' : 'text-ink2 hover:text-ink'}`}
+                      slim ? 'h-9 w-10' : wide ? 'h-11 gap-2 px-4 text-[0.84rem]' : 'h-[52px] w-[50px] flex-col gap-[3px] max-[379px]:w-[46px]'
+                    } ${on ? 'v5-tab-on' : 'text-ink2 hover:text-ink'}`}
                   >
                     {on && <motion.span layoutId="v5-dock-pill" transition={spring.snappy} className="v5-dock-pill absolute inset-0 rounded-full" />}
                     <span className="relative flex">
@@ -159,7 +164,7 @@ export function Dock({ mode = 'full', active = 'home', wide = false }) {
                         </span>
                       )}
                     </span>
-                    {wide && !slim && <span className="relative">{it.label}</span>}
+                    {!slim && <span className={`relative leading-none ${wide ? '' : 'text-[0.625rem] font-medium tracking-[0.01em]'}`}>{it.label}</span>}
                   </motion.button>
                 );
               })}
@@ -169,16 +174,10 @@ export function Dock({ mode = 'full', active = 'home', wide = false }) {
                 onClick={() => startVoice()}
                 aria-label={talkOn ? 'Back to the conversation' : 'Talk to Mia'}
                 data-tab-talk
-                className={`grid flex-none place-items-center rounded-full ${slim ? 'h-9 w-9' : 'h-11 w-11'} ${talkOn ? 'bg-accent text-accent-ink' : 'bg-ink text-page'}`}
+                className={`grid flex-none place-items-center rounded-full ${slim ? 'h-9 w-9' : wide ? 'h-11 w-11' : 'h-12 w-12'} ${talkOn ? 'bg-accent text-accent-ink' : 'bg-ink text-page'}`}
               >
                 <Icon name="mic" size={slim ? 17 : 20} strokeWidth={2} />
               </motion.button>
-              {wide && !slim && (
-                <motion.button {...tap} onClick={() => openSheet('launch')} className="v5-chip ml-1 flex h-11 items-center gap-2 rounded-full px-4 text-[0.84rem] font-semibold text-ink" data-dock-launch>
-                  <Icon name="launch" size={17} />
-                  Launch
-                </motion.button>
-              )}
             </nav>
           </LayoutGroup>
         </motion.div>

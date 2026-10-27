@@ -52,6 +52,8 @@ function Scene() {
   ) : null;
 }
 
+// Tabs don't close (an iOS tab bar is always there) — except Mia's chat,
+// which hides the tab bar (v1's rule, 0290), so it keeps a close button.
 function TabPane({ tab, active }) {
   const o = useMotionValue(1);
   const s = useMotionValue(1);
@@ -71,7 +73,7 @@ function TabPane({ tab, active }) {
   }, [active]);
   return (
     <motion.div className="absolute inset-0" style={{ opacity: o, scale: s }} data-tabpane={tab}>
-      <Stack tab={tab} active={active} onClose={tab === 'home' ? null : () => goView('home')} />
+      <Stack tab={tab} active={active} onClose={tab === 'mia' ? () => goView('home') : null} />
     </motion.div>
   );
 }

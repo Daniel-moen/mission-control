@@ -85,6 +85,10 @@ export default function Home() {
     <div className="v5-home v-scroll absolute inset-0" data-home>
       <div className="mx-auto flex min-h-full w-full max-w-[1040px] flex-col px-4 sm:px-6" style={{ paddingTop: 'var(--win-top)', paddingBottom: 'var(--home-bottom)' }}>
         <section className={`flex flex-col items-center justify-center text-center ${shownItems.length ? 'min-h-[min(46dvh,420px)] py-8' : 'flex-1 py-10'}`} data-hero>
+          {/* the date, as an iOS eyebrow — a phone's top bar has no clock (the status bar has the time) */}
+          <p className="v5-hero-sub mb-2 text-[0.8rem] font-semibold uppercase tracking-[0.06em] sm:hidden" data-home-date>
+            {new Date(t).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}
+          </p>
           <motion.h1
             initial={reduce ? { opacity: 0 } : { opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}

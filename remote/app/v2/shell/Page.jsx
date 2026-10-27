@@ -92,7 +92,7 @@ export default forwardRef(function Page(
         >
           {solid ? title : title}
         </motion.div>
-        <div className="flex flex-none items-center gap-1.5">{actions}</div>
+        <div className="flex flex-none items-center gap-1.5" data-bar-actions>{actions}</div>
       </div>
     </div>
   );
