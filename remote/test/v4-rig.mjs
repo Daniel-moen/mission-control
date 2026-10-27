@@ -339,6 +339,143 @@ async function perf(browser, ui, dev) {
   return out;
 }
 
+// Task 0458 — the glass bends the photo. REFRACT=1 TAG=before|after:
+//   • edge crops: a pane's corner over the photo, per direction, iPad +
+//     iPhone, dark + light → <dir>-<dev>-<theme>-edge-<tag>.png (+ full screen)
+//   • COMPARE=1: before | after side by side for every crop that has both
+//   • TAG=after also records a pane gliding over the photo (CSS `translate`,
+//     so the shader sees it move) while the pointer sweeps (tilt + light)
+//     → <dir>-<dev>-glass-move.mp4, and WebKit frame timings at iPhone size
+//     with a pane moving → refract-perf-webkit-iphone.json
+// The pane: the first shader-drawn one fully on screen.
+const pickPane = (page) =>
+  page.evaluate(() => {
+    for (const el of document.querySelectorAll('.lens-live')) {
+      const r = el.getBoundingClientRect();
+      if (r.left >= 8 && r.top >= 8 && r.right <= innerWidth - 8 && r.bottom <= innerHeight - 8 && r.width > 120) {
+        document.querySelectorAll('[data-refract-pick]').forEach((x) => x.removeAttribute('data-refract-pick'));
+        el.setAttribute('data-refract-pick', '');
+        return { x: r.left, y: r.top, w: r.width, h: r.height };
+      }
+    }
+    return null;
+  });
+// Glide the picked pane along a loop for `ms`, sweeping the pointer too.
+async function glide(page, ms = 4200) {
+  const { width: W, height: H } = page.viewportSize();
+  const t0 = Date.now();
+  page.evaluate((ms) => {
+    const el = document.querySelector('[data-refract-pick]');
+    if (!el) return;
+    const t0 = performance.now();
+    const f = (t) => {
+      const k = (t - t0) / ms;
+      if (k >= 1) {
+        el.style.translate = '';
+        return;
+      }
+      const a = k * Math.PI * 2;
+      const amp = Math.min(innerWidth, innerHeight) * 0.16;
+      el.style.translate = `${(Math.sin(a) * amp * 1.4).toFixed(1)}px ${(Math.sin(a * 2) * amp * 0.6).toFixed(1)}px`;
+      requestAnimationFrame(f);
+    };
+    requestAnimationFrame(f);
+  }, ms);
+  while (Date.now() - t0 < ms) {
+    const k = (Date.now() - t0) / ms;
+    await page.mouse.move(W * (0.5 + 0.42 * Math.cos(k * Math.PI * 2)), H * (0.5 + 0.38 * Math.sin(k * Math.PI * 4)));
+    await sleep(30);
+  }
+  await sleep(200);
+}
+async function refract(chromium) {
+  const tag = process.env.TAG || 'after';
+  const devs = (process.env.DEVS || 'ipad,phone').split(',');
+  if (process.env.COMPARE) return compareEdges(chromium);
+  for (const ui of DIRS) {
+    for (const dev of devs) {
+      for (const theme of (process.env.THEME || 'dark,light').split(',')) {
+        const { page, ctx } = await open(chromium, ui, dev, { theme });
+        await page.mouse.move(-5, -5).catch(() => {});
+        const r = await pickPane(page);
+        const base = `${NAMES[ui]}-${dev}-${theme}`;
+        await page.screenshot({ path: path.join(OUT, `${base}-full-${tag}.png`) });
+        if (r) {
+          // the pane's bottom-left corner (the photos' detail — trees, rock,
+          // water — sits low), photo on both sides of the edge
+          const cw = dev === 'phone' ? 200 : 300;
+          const ch = dev === 'phone' ? 150 : 210;
+          const { width: VW, height: VH } = DEVICES[dev].viewport;
+          const clip = { x: Math.max(0, r.x - cw * 0.3), y: Math.min(VH - ch, Math.max(0, r.y + r.h - ch * 0.7)), width: Math.min(cw, VW), height: ch };
+          await page.screenshot({ path: path.join(OUT, `${base}-edge-${tag}.png`), clip });
+        }
+        await ctx.close();
+      }
+      if (tag === 'after' && !process.env.SKIP_VIDEO) {
+        const vdir = fs.mkdtempSync(path.join(TMP, 'vid-'));
+        const { page, ctx } = await open(chromium, ui, dev, { video: vdir });
+        await pickPane(page);
+        await glide(page, 5000);
+        await ctx.close();
+        const f = fs.readdirSync(vdir).find((x) => x.endsWith('.webm'));
+        const out = path.join(OUT, `${NAMES[ui]}-${dev}-glass-move.mp4`);
+        if (f)
+          await new Promise((res) => {
+            const p = spawn('ffmpeg', ['-y', '-loglevel', 'error', '-ss', '2.4', '-i', path.join(vdir, f), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '20', '-movflags', '+faststart', out]);
+            p.on('close', res);
+            p.on('error', res);
+          });
+      }
+      console.log(`refract ${ui} ${dev} ${tag} done`);
+    }
+  }
+  if (tag === 'after' && !process.env.SKIP_PERF) {
+    const webkit = await pw.webkit.launch();
+    const res = {};
+    for (const ui of DIRS) {
+      const { page, ctx } = await open(webkit, ui, 'phone', { scale: 3 });
+      await pickPane(page);
+      const m = async (fn) => {
+        await page.evaluate(() => window.__v3perf.start());
+        await fn();
+        return page.evaluate(() => window.__v3perf.stop());
+      };
+      res[ui] = {
+        idle: await m(() => sleep(3000)),
+        paneMoving: await m(() => glide(page, 4000)),
+        gpu: await page.evaluate(() => window.__lens?.bench?.(40)).catch(() => null),
+        mode: await page.evaluate(() => document.documentElement.dataset.lensmode),
+      };
+      console.log(ui, JSON.stringify({ idle: res[ui].idle.fps, moving: res[ui].paneMoving.fps, p95: res[ui].paneMoving.p95Ms, gpu: res[ui].gpu, mode: res[ui].mode }));
+      await ctx.close();
+    }
+    fs.writeFileSync(path.join(OUT, 'refract-perf-webkit-iphone.json'), JSON.stringify(res, null, 2));
+    await webkit.close();
+  }
+  console.log('errors:', errors.length ? errors : 'none');
+}
+// before | after, each crop shown at 2× so the bend reads at a glance
+async function compareEdges(chromium) {
+  const files = fs.readdirSync(OUT).filter((f) => f.endsWith('-edge-before.png'));
+  const ctx = await chromium.newContext({ deviceScaleFactor: 1 });
+  const page = await ctx.newPage();
+  for (const f of files) {
+    const a = path.join(OUT, f.replace('-before', '-after'));
+    if (!fs.existsSync(a)) continue;
+    const uri = (p) => `data:image/png;base64,${fs.readFileSync(p).toString('base64')}`;
+    const label = f.replace('-edge-before.png', '');
+    await page.setContent(`<body style="margin:0;background:#111;font:600 22px -apple-system,system-ui;color:#eee;display:inline-flex;gap:18px;padding:18px">
+      <figure style="margin:0"><figcaption style="margin-bottom:8px">${label} — before (0448)</figcaption><img id=a src="${uri(path.join(OUT, f))}"></figure>
+      <figure style="margin:0"><figcaption style="margin-bottom:8px">after (0458)</figcaption><img id=b src="${uri(a)}"></figure></body>`);
+    await page.evaluate(() => Promise.all([...document.images].map((i) => i.decode())));
+    await page.evaluate(() => document.querySelectorAll('img').forEach((i) => (i.style.width = `${Math.min(i.naturalWidth, 900)}px`)));
+    const box = await page.locator('body').boundingBox();
+    await page.screenshot({ path: path.join(OUT, `${label}-edge-compare.png`), clip: { x: 0, y: 0, width: Math.ceil(box.width), height: Math.ceil(box.height) } });
+  }
+  await ctx.close();
+  console.log('compare done', files.length);
+}
+
 async function main() {
   writeLibrary();
   fs.writeFileSync(path.join(MIA_DIR, 'messages.jsonl'), '');
@@ -374,6 +511,11 @@ async function main() {
       await ctx.close();
     }
     console.log('errors:', errors.length ? errors : 'none');
+    await chromium.close();
+    return;
+  }
+  if (process.env.REFRACT) {
+    await refract(chromium);
     await chromium.close();
     return;
   }

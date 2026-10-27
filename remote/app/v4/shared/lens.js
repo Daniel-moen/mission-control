@@ -14,6 +14,18 @@ import { createGL } from '../../v2/lens/gl.js';
 //     photo's colour shows through every pane
 //   • "focus" (something open full-screen) dims far less than v2's inner
 //     pages: the photo stays visible; legibility is the panes' job
+// 0458 — the glass bends the photo (Liquid-Glass style), not just blurs it:
+//   • each pane is a slab with a convex rim: a band in from the edge (from
+//     its rounded-rect SDF, thicker at the corners) samples the photo from
+//     further in along a dome's slope — the photo visibly warps round the
+//     edge — with an RGB split, less frost and more of the photo's light
+//   • the flat body magnifies the photo a little and stays frosted + toned
+//     for text (the rim band is narrow enough that text sits on the body)
+//   • a bright specular line where the edge faces the light, a fainter one
+//     opposite, a sheen on the steep part of the dome
+//   • the bend shifts with tilt / pointer and leans against the pane's own
+//     motion (u_dyn: velocity per pane, growth while it opens / flies in)
+//   • u_q = 0 (the runner at its lowest resolution) drops the RGB split
 
 export const MAX = 14;
 export const PANES = '[data-lens], .st-card, .at-room-glass, .nw-card';
@@ -25,7 +37,7 @@ export const NO = '[data-no-lens], .st-open-wrap, .st-thread-wrap, .at-window, .
 const FRAG = `
 uniform vec2 u_res; uniform float u_px; uniform float u_time;
 uniform sampler2D u_tex; uniform sampler2D u_type;
-uniform vec4 u_rects[${MAX}]; uniform vec4 u_meta[${MAX}]; uniform float u_alpha[${MAX}]; uniform float u_count;
+uniform vec4 u_rects[${MAX}]; uniform vec4 u_meta[${MAX}]; uniform vec4 u_dyn[${MAX}]; uniform float u_count; uniform float u_q;
 uniform vec2 u_light; uniform vec2 u_tilt; uniform float u_dof; uniform float u_dim; uniform float u_touch; uniform float u_typeA; uniform float u_theme; uniform vec2 u_typeOff;
 
 float sdRound(vec2 p, vec2 b, float r){ vec2 q = abs(p) - b + r; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }
@@ -69,49 +81,89 @@ void main(){
     vec4 R = u_rects[i]; vec4 M = u_meta[i];
     vec2 h = R.zw * 0.5; vec2 c = R.xy + h + vec2(u_tilt.x * -10.0 * M.w, 14.0 + u_tilt.y * -8.0 * M.w);
     float d = sdRound(f - c, h, M.x);
-    sh = max(sh, (1.0 - smoothstep(-22.0, 42.0, d)) * (0.45 - 0.3 * u_theme) * M.w * u_alpha[i]);
+    sh = max(sh, (1.0 - smoothstep(-22.0, 42.0, d)) * (0.45 - 0.3 * u_theme) * M.w * u_dyn[i].z);
   }
   col *= 1.0 - sh;
 
   for (int i = 0; i < ${MAX}; i++){
     if (float(i) >= u_count) break;
-    vec4 R = u_rects[i]; vec4 M = u_meta[i];
+    vec4 R = u_rects[i]; vec4 M = u_meta[i]; vec4 D = u_dyn[i];
     vec2 h = R.zw * 0.5; vec2 c = R.xy + h; vec2 p = f - c;
     if (abs(p.x) > h.x + 2.0 || abs(p.y) > h.y + 2.0) continue;
     float d = sdRound(p, h, M.x);
-    float a = (1.0 - smoothstep(-0.8, 0.6, d)) * u_alpha[i];
+    float a = (1.0 - smoothstep(-0.8, 0.6, d)) * D.z;
     if (a <= 0.0) continue;
-    vec2 n = nRound(p, h, M.x);
-    float e = clamp(-d / 24.0, 0.0, 1.0);
-    float bend = pow(1.0 - e, 2.2);
-    vec2 off = -n * bend * 26.0 / u_res;
-    vec2 lens = -(p / u_res) * 0.06;
-    float lod = 3.6 + M.y + u_dof * 0.4;
+
+    // ---- the lens (0458): a convex rim, thicker at the corners ----------
+    // band: how far in from the edge the glass curves (narrow panes → narrow
+    // band, so text that starts ~12 px in sits on the flat body)
+    float w0 = clamp(min(h.x, h.y) * 0.25, 10.0, 28.0);
+    vec2 q = abs(p) - h + M.x;
+    float corner = clamp(min(q.x, q.y) / max(M.x, 1.0), 0.0, 1.0);
+    float w = w0 * (1.0 + 0.75 * corner);
+    // smooth normal: the SDF of the same pane with a radius ≥ the band, so
+    // the bend has no seam on the corner diagonals
+    float R2 = max(M.x, w * 1.25);
+    vec2 n = nRound(p, h, min(R2, min(h.x, h.y)));
+    float t = clamp(1.0 + d / w, 0.0, 1.0);        // 0 inside the band → 1 at the edge
+    // a dome's profile, steep at the rim but capped short of vertical (a
+    // vertical slope squeezes the photo into sparkle)
+    float tt = t * 0.93;
+    float dome = (1.0 - sqrt(1.0 - tt * tt)) / 0.632;
+    float clear = smoothstep(0.35, 0.8, t);         // outer band: little frost, the bend shows
+    // where it samples: from further in (the photo bends round the rim),
+    // the body magnified a little; tilt and the pane's own motion shift the
+    // bend so it reads as a thick piece of glass, not a sticker
+    vec2 tilt = u_tilt * vec2(-1.0, -1.0);
+    vec2 vel = D.xy;
+    float amp = w * 1.75 + 6.0;
+    vec2 offPx = -n * dome * amp + (tilt * 9.0 - vel * 0.9) * (0.25 + dome);
+    float mag = 0.075 + clamp(D.w, -0.4, 0.4) * 0.35;
+    vec2 bodyPx = -p * mag + tilt * 5.0;
+    vec2 base = uv + bodyPx / u_res;
+    vec2 off = offPx / u_res;
+    float lod = mix(3.6 + M.y + u_dof * 0.4, 1.3 + u_dof * 0.3, clear);
     vec3 g;
-    g.r = scene(uv + lens + off * 0.9, lod).r;
-    g.g = scene(uv + lens + off * 1.15, lod).g;
-    g.b = scene(uv + lens + off * 1.4, lod).b;
-    g = sat(g, 1.55);
-    if (u_theme < 0.5) {
-      // smoked glass, the photo's colour through it; never brighter than text can bear
-      g = mix(g, vec3(0.05, 0.05, 0.06), 0.24 + 0.12 * e);
-      g *= mix(1.0, 0.17 / max(lumOf(g), 1e-3), smoothstep(0.17, 0.5, lumOf(g)));
+    // (uniform branch only: a texture read under a per-pixel branch gets
+    // undefined mip derivatives → seams and sparkle)
+    if (u_q > 0.5) {
+      // chromatic split along the bend: red bends least, blue most
+      vec2 ca = n * dome * (1.2 + 0.035 * amp) / u_res;
+      g.r = scene(base + off * 0.93 + ca, lod).r;
+      g.g = scene(base + off, lod).g;
+      g.b = scene(base + off * 1.07 - ca, lod).b;
     } else {
-      // white frosted glass: the photo tints it, it never goes grey
-      g = mix(g, vec3(0.995, 0.99, 0.985), 0.6 + 0.1 * e);
-      g = mix(g, vec3(1.0), smoothstep(0.9, 0.62, lumOf(g)) * 0.65);
+      g = scene(base + off, lod);
     }
+    g = sat(g, mix(1.55, 1.3, clear));
+    if (u_theme < 0.5) {
+      // smoked glass, the photo's colour through it; never brighter than text
+      // can bear on the body — the rim may carry more of the photo
+      g = mix(g, vec3(0.05, 0.05, 0.06), mix(0.24, 0.08, clear));
+      float ceil_ = mix(0.17, 0.5, clear);
+      g *= mix(1.0, ceil_ / max(lumOf(g), 1e-3), smoothstep(ceil_, ceil_ + 0.33, lumOf(g)));
+    } else {
+      // white frosted glass: the photo tints it, it never goes grey; the rim
+      // shows the bent photo through a thinner frost
+      g = mix(g, vec3(0.995, 0.99, 0.985), mix(0.62, 0.12, clear));
+      g = mix(g, vec3(1.0), smoothstep(0.9, 0.62, lumOf(g)) * 0.65 * (1.0 - clear));
+    }
+
+    // ---- light: a bright rim where the edge faces the light, a fainter one
+    // opposite (light passing through), and a sheen where the dome is steep
     vec2 L = normalize(u_light - c + 1e-3);
     float facing = max(0.0, dot(n, L));
-    float rim = (1.0 - smoothstep(0.0, 1.5, -d)) * (0.16 + 0.84 * facing);
-    float bevel = (1.0 - smoothstep(0.0, 12.0, -d)) * (0.04 + 0.08 * facing);
+    float back = max(0.0, -dot(n, L));
+    float line = 1.0 - smoothstep(0.0, 1.6, -d);
+    float rim = line * (0.22 + 1.1 * facing * facing + 0.45 * back * back);
+    float sheen = pow(t, 5.0) * (0.05 + 0.28 * facing + 0.1 * back);
     float spec = exp(-pow(length(f - u_light) / (170.0 + 120.0 * u_touch), 2.0)) * (0.04 + 0.11 * u_touch);
     vec3 rimC = mix(vec3(1.0), vec3(1.0, 0.72, 0.26), M.z);
-    float rimK = u_theme < 0.5 ? 0.6 : 0.9;
-    g += rimC * (rim * rimK + bevel) * (u_theme < 0.5 ? 1.0 : 0.5) + spec * (1.0 - 0.6 * u_theme);
-    if (u_theme > 0.5) g -= (1.0 - smoothstep(0.0, 1.2, -d)) * (1.0 - facing) * 0.1;
-    if (u_theme > 0.5) g = mix(g, vec3(1.0, 0.86, 0.6), M.z * (1.0 - e) * 0.35);
-    g += vec3(0.14, 0.09, 0.02) * M.z * (0.5 + 0.5 * sin(u_time * 2.2)) * (1.0 - e) * 0.6;
+    float k = u_theme < 0.5 ? 1.0 : 0.7;
+    g += rimC * (rim * (u_theme < 0.5 ? 0.62 : 0.9) + sheen) * k + spec * (1.0 - 0.6 * u_theme);
+    if (u_theme > 0.5) g -= line * (1.0 - facing) * 0.12 + pow(t, 3.0) * (1.0 - facing) * 0.06;
+    if (u_theme > 0.5) g = mix(g, vec3(1.0, 0.86, 0.6), M.z * (1.0 - t) * 0.3);
+    g += vec3(0.14, 0.09, 0.02) * M.z * (0.5 + 0.5 * sin(u_time * 2.2)) * (1.0 - t) * 0.6;
     col = mix(col, g, a);
   }
   float nz = fract(sin(dot(gl_FragCoord.xy + u_time, vec2(12.9898, 78.233))) * 43758.5453);

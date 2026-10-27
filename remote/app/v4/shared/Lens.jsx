@@ -145,11 +145,12 @@ export default function Scene() {
     s.texture('u_tex', fallbackCanvas(document.documentElement.dataset.theme !== 'light'), 0);
     const rects = new Float32Array(MAX * 4);
     const meta = new Float32Array(MAX * 4);
-    const alpha = new Float32Array(MAX);
+    const dyn = new Float32Array(MAX * 4); // per pane: velocity x/y (px per 60 Hz frame), opacity, growth
     const glow = { t: 0 };
     const type = { key: '', a: 0, ox: 0, oy: 0 };
     let live = new Set();
-    s.setFrame(() => {
+    s.setFrame((t, dt) => {
+      const fr = Math.min(4, Math.max(0.25, dt / 16.7));
       const H = innerHeight;
       const W = innerWidth;
       const els = document.querySelectorAll(PANES);
@@ -163,7 +164,7 @@ export default function Scene() {
         if (r.bottom < -30 || r.top > H + 30 || r.right < -30 || r.left > W + 30 || r.width < 8 || r.height < 8) continue;
         const op = opacityOf(el);
         if (op < 0.02) continue;
-        alpha[n] = op;
+        dyn[n * 4 + 2] = op;
         rects[n * 4] = r.left;
         rects[n * 4 + 1] = r.top;
         rects[n * 4 + 2] = r.width;
@@ -175,10 +176,25 @@ export default function Scene() {
         meta[n * 4 + 1] = +(el.dataset.frost || 0);
         meta[n * 4 + 2] = el.matches(AMBER) ? 1 : 0;
         meta[n * 4 + 3] = +(el.dataset.depth || 0.6);
+        // how the pane is moving (drag, fly-in, open): the bend leans
+        // against it, and a growing pane magnifies a little more
+        const cx = r.left + r.width / 2;
+        const cy = r.top + r.height / 2;
+        const v = el.__lensV || (el.__lensV = { x: cx, y: cy, w: r.width, vx: 0, vy: 0, vs: 0 });
+        const cl = (x, m) => Math.max(-m, Math.min(m, x));
+        v.vx += (cl((cx - v.x) / fr, 60) - v.vx) * 0.35;
+        v.vy += (cl((cy - v.y) / fr, 60) - v.vy) * 0.35;
+        v.vs += (cl((r.width - v.w) / Math.max(v.w, 1) / fr * 8, 1) - v.vs) * 0.35;
+        v.x = cx;
+        v.y = cy;
+        v.w = r.width;
+        dyn[n * 4] = v.vx;
+        dyn[n * 4 + 1] = v.vy;
+        dyn[n * 4 + 3] = v.vs;
         now.add(el);
         n++;
       }
-      for (const el of live) if (!now.has(el)) el.classList.remove('lens-live');
+      for (const el of live) if (!now.has(el)) (el.classList.remove('lens-live'), delete el.__lensV);
       for (const el of now) if (!live.has(el)) el.classList.add('lens-live');
       live = now;
 
@@ -200,7 +216,9 @@ export default function Scene() {
       const want = c ? opacityOf(c.el) : 0;
       type.a += (want - type.a) * 0.18;
 
-      set(s, rects, meta, alpha, n, glow, type.a);
+      // at the adaptive floor (a struggling GPU) the rim skips its RGB split
+      s.set('u_q', s.stats.scale > 0.6 ? 1 : 0);
+      set(s, rects, meta, dyn, n, glow, type.a);
     });
     s.start();
     window.__lens = s.stats;
@@ -254,10 +272,10 @@ export default function Scene() {
   );
 }
 
-function set(s, rects, meta, alpha, n, glow, typeA) {
+function set(s, rects, meta, dyn, n, glow, typeA) {
   s.set('u_rects', rects);
   s.set('u_meta', meta);
-  s.set('u_alpha', alpha, '1fv');
+  s.set('u_dyn', dyn);
   s.set('u_count', n);
   glow.t += ((touching.get() ? 1 : 0) - glow.t) * 0.12;
   s.set('u_touch', glow.t);
