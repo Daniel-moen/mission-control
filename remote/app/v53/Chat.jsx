@@ -215,10 +215,17 @@ function DocCard({ d }) {
   );
 }
 
+// A task that really is running (task 0503): its status says so AND it has an
+// executor that hasn't finished. A status alone lies — 0154 sat at "checking"
+// for weeks after its executor ended, and the card named it as working.
+export function taskRunning(t) {
+  return (t?.status === 'running' || t?.status === 'checking') && !!t.executor && !t.executor.finishedAt;
+}
+
 // What's running right now — the foot of the stream, live.
 function LiveCard() {
   const ex = useExecutors();
-  const tasks = useMC(useShallow((s) => (s.mia?.tasks || []).filter((t) => t.status === 'running' || t.status === 'checking')));
+  const tasks = useMC(useShallow((s) => (s.mia?.tasks || []).filter(taskRunning)));
   const [open, setOpen] = useState(false);
   if (!ex.length && !tasks.length) return null;
   const waiting = ex.filter((a) => agentStatus(a) === 'waiting').length;
@@ -779,7 +786,7 @@ export default function Thread({ mia, active = true, thinking = false }) {
         data-reader="thread"
         {...press}
       >
-        <div ref={inner} className="mx-auto flex w-full max-w-[720px] flex-col" style={{ paddingTop: 'var(--stage-head, 72px)', paddingBottom: 'var(--stage-foot, 150px)' }}>
+        <div ref={inner} className="mx-auto flex w-full max-w-[720px] flex-col" style={{ paddingTop: 'var(--stage-head, 72px)', paddingBottom: 'calc(var(--stage-foot, 150px) + var(--stage-chrome, 0px))' }}>
           {!mia.enabled && (
             <div className="mb-2 mt-2 flex items-center gap-3 rounded-[18px] bg-fill px-4 py-3">
               <span className="min-w-0 flex-1 text-[0.86rem] leading-snug text-ink2">Mia is off. Messages and tasks wait here until she starts.</span>
@@ -838,7 +845,7 @@ export default function Thread({ mia, active = true, thinking = false }) {
             transition={spring.snappy}
             onClick={() => toBottom(true)}
             className="v-bar absolute left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full px-4 py-2 text-[0.8rem] font-semibold text-ink"
-            style={{ bottom: 'calc(var(--stage-foot, 150px) + 6px)' }}
+            style={{ bottom: 'calc(var(--stage-foot, 150px) + var(--stage-chrome, 0px) + 6px)' }}
             data-new-messages
           >
             <Icon name="arrowDown" size={14} />

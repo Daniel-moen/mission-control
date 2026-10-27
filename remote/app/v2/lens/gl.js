@@ -11,7 +11,14 @@
 
 const VERT = `attribute vec2 p; void main(){ gl_Position = vec4(p, 0.0, 1.0); }`;
 
-export function createGL(canvas, frag, { dprCap = 1.5, minScale = 0.45, still = false, onFrame = null, alpha = false } = {}) {
+// `calmDt` / `calmN` / `streak` (task 0503, v5.3): the recovery test. The
+// default (13 ms × 180) can only pass on a 120 Hz screen, so on a 60 Hz one
+// (an iPhone in Low Power Mode, most iPads) a single busy spell — a page
+// mounting — left the glass at its lowest resolution for good. v5.3 counts
+// a frame that makes vsync as calm, needs the slow frames to be consecutive,
+// ignores one-off stalls (a main-thread hitch is not the GPU), and backs off
+// if it keeps bouncing.
+export function createGL(canvas, frag, { dprCap = 1.5, minScale = 0.45, still = false, onFrame = null, alpha = false, calmDt = 13, calmN = 180, streak = false } = {}) {
   const gl =
     canvas.getContext('webgl', { antialias: false, alpha, premultipliedAlpha: false, depth: false, stencil: false, powerPreference: 'default', preserveDrawingBuffer: false }) || null;
   if (!gl) return { ok: false, start() {}, stop() {}, set() {}, draw() {}, destroy() {}, texture() {} };
@@ -96,6 +103,7 @@ export function createGL(canvas, frag, { dprCap = 1.5, minScale = 0.45, still = 
     // Shaders work in CSS pixels; px = device pixels per CSS pixel.
     set('u_res', [r.width, r.height]);
     set('u_px', dpr * scale);
+    stats.backing = [w, h];
   };
 
   let hook = onFrame;
@@ -104,22 +112,25 @@ export function createGL(canvas, frag, { dprCap = 1.5, minScale = 0.45, still = 
   let last = t0;
   let slow = 0;
   let fast = 0;
-  const stats = { frames: 0, scale: 1 };
+  let backoff = 1;
+  const stats = { frames: 0, scale: 1, dpr };
   const frame = (now) => {
     raf = requestAnimationFrame(frame);
     const dt = now - last;
     last = now;
     // Adapt: 8 long frames in a row → render fewer pixels; 3 s of easy
     // frames → try more again. (dt includes the compositor, so it's honest.)
-    if (dt > 21) slow += 1;
-    else slow = Math.max(0, slow - 1);
-    if (dt < 13) fast += 1;
+    if (dt > 21 && !(streak && dt > 120)) slow += 1;
+    else slow = streak ? 0 : Math.max(0, slow - 1);
+    if (dt < calmDt) fast += 1;
     else fast = 0;
     if (slow > 8 && scale > minScale) {
       scale = Math.max(minScale, scale * 0.8);
       slow = 0;
+      fast = 0;
+      if (streak) backoff = Math.min(8, backoff * 2);
       resize();
-    } else if (fast > 180 && scale < 1) {
+    } else if (fast > calmN * backoff && scale < 1) {
       scale = Math.min(1, scale * 1.15);
       fast = 0;
       resize();

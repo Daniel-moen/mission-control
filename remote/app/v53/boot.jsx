@@ -5,7 +5,7 @@ import { initViewportGap } from '../src/lib/viewport.js';
 import { initUpdates } from '../src/lib/update.js';
 import { initPrefs } from '../v2/lib/prefs.js';
 import { navOpts, useNav } from '../v2/lib/nav.js';
-import { initBackdrop } from '../v2/lens/backdrop.js';
+import { initBackdrop, useBackdrop } from '../v2/lens/backdrop.js';
 import { hydrateFromCache, startCaching } from '../v2/lib/offline.js';
 import { preload } from '../v2/shell/pages.js';
 import { initQuality } from '../v3/shared/quality.js';
@@ -57,6 +57,22 @@ const first = { doc: 'doc', agent: 'agent', home: 'home', fleet: 'agents', libra
   location.hash.replace(/^#/, '').split('/')[0]
 ];
 const ready = Promise.all([import('./Chat.jsx'), first && preload(first)]);
+
+// Task 0503 (no pop-in): the glass's photo and the shader's code start loading
+// now, beside the chat's, not when the scene mounts on idle — so the photo is
+// decoded and the module parsed by the time the shader asks for them.
+import('./Scene.jsx').catch(() => {});
+const warmed = new Set();
+const warmPhoto = (src) => {
+  if (!src || warmed.has(src)) return;
+  warmed.add(src);
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.src = src;
+  img.decode?.().catch(() => {});
+};
+warmPhoto(useBackdrop.getState().src);
+useBackdrop.subscribe((s) => warmPhoto(s.src));
 
 export default function Boot() {
   const [go, setGo] = useState(false);

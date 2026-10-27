@@ -49,7 +49,7 @@ uniform vec2 u_res; uniform float u_px; uniform float u_time;
 uniform sampler2D u_tex; uniform sampler2D u_type;
 uniform vec4 u_rects[${MAX}]; uniform vec4 u_meta[${MAX}]; uniform vec4 u_dyn[${MAX}]; uniform float u_count; uniform float u_q;
 uniform vec2 u_light; uniform vec2 u_tilt; uniform float u_dof; uniform float u_dim; uniform float u_touch; uniform float u_typeA; uniform float u_theme; uniform vec2 u_typeOff;
-uniform vec4 u_amb[3]; uniform vec4 u_ambC[3]; uniform float u_flow;
+uniform vec4 u_amb[3]; uniform vec4 u_ambC[3]; uniform float u_flow; uniform float u_lodK;
 
 float sdRound(vec2 p, vec2 b, float r){ vec2 q = abs(p) - b + r; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r; }
 vec2 nRound(vec2 p, vec2 b, float r){
@@ -96,7 +96,7 @@ vec3 grade(vec3 c, vec2 uv){
 void main(){
   vec2 f = vec2(gl_FragCoord.x, u_res.y * u_px - gl_FragCoord.y) / u_px;
   vec2 uv = f / u_res;
-  vec3 col = grade(scene(uv, u_dof), uv);
+  vec3 col = grade(scene(uv, u_dof + u_lodK * min(u_dof, 1.0)), uv);
 
   float sh = 0.0;
   for (int i = 0; i < ${MAX}; i++){
@@ -114,7 +114,9 @@ void main(){
     vec2 h = R.zw * 0.5; vec2 c = R.xy + h; vec2 p = f - c;
     if (abs(p.x) > h.x + 2.0 || abs(p.y) > h.y + 2.0) continue;
     float d = sdRound(p, h, M.x);
-    float a = (1.0 - smoothstep(-0.8, 0.6, d)) * D.z;
+    // the edge's anti-aliasing: ~1.5 canvas px (task 0503; it was 1.4 CSS px,
+    // four device px of blur round every pane on a 3× screen)
+    float a = (1.0 - smoothstep(-0.9 / u_px, 0.6 / u_px, d)) * D.z;
     if (a <= 0.0) continue;
 
     // ---- the lens (0458): a convex rim, thicker at the corners ----------
@@ -145,7 +147,7 @@ void main(){
     vec2 bodyPx = -p * mag + tilt * 5.0;
     vec2 base = uv + bodyPx / u_res;
     vec2 off = offPx / u_res;
-    float lod = mix(3.6 + M.y + u_dof * 0.4, 1.3 + u_dof * 0.3, clear);
+    float lod = mix(3.6 + M.y + u_dof * 0.4, 1.3 + u_dof * 0.3, clear) + u_lodK;
     vec3 g;
     // (uniform branch only: a texture read under a per-pixel branch gets
     // undefined mip derivatives → seams and sparkle)
@@ -224,6 +226,41 @@ export function typeCanvas(W, H, { time, date, t, d }) {
   return c;
 }
 
+// Resolution (task 0503). Daniel, on an iPhone: "the liquid glass it seems a
+// bit like low res". It was: the canvas rendered at 1.5 device px per CSS px
+// (an iPhone has 3, so every rim was upscaled 2×), a busy spell could drop it
+// to 0.75 for good (gl.js's recovery needed a 120 Hz screen), and the photo
+// was a 1024² texture stretched over a 2532-px-tall screen.
+//   • up to 2 device px per CSS px: the rims are anti-aliased in CSS px, so
+//     2× reads as crisp on a 3× screen, at 44% of 3×'s fragment cost
+//   • the adaptive floor is 1.5 (what every frame used to be), and it climbs
+//     back once frames make vsync again at 60 Hz (calmDt/streak, gl.js)
+//   • the frost is a mip-LOD bias, so its blur is measured in canvas pixels:
+//     u_lodK (Scene.jsx) adds log2(px / 1.5) so it stays the same in CSS px
+export const DPR_CAP = 2;
 export function createScene(canvas, opts) {
-  return createGL(canvas, FRAG, { dprCap: 1.5, minScale: 0.5, ...opts });
+  return createGL(canvas, FRAG, { dprCap: DPR_CAP, minScale: 0.75, calmDt: 18.5, calmN: 120, streak: true, ...opts });
+}
+
+// The photograph at the screen's resolution (task 0503): a power-of-two
+// texture per axis (WebGL 1 mipmaps), sized to the canvas's device pixels
+// (≤ 2048 per side), the photo cropped to the screen's aspect. v4/v5 used one
+// square sized to CSS px — half the detail on a 3× screen.
+const ceilPot = (n) => 2 ** Math.ceil(Math.log2(Math.max(2, n)));
+export function photoTexture(img, W, H, px, max = 2048) {
+  const tw = Math.min(max, ceilPot(W * px));
+  const th = Math.min(max, ceilPot(H * px));
+  const c = document.createElement('canvas');
+  c.width = tw;
+  c.height = th;
+  const x = c.getContext('2d');
+  x.imageSmoothingQuality = 'high';
+  const ar = W / H;
+  const ir = img.width / img.height;
+  let sw = img.width;
+  let sh = img.height;
+  if (ir > ar) sw = img.height * ar;
+  else sh = img.width / ar;
+  x.drawImage(img, (img.width - sw) / 2, (img.height - sh) / 2, sw, sh, 0, 0, tw, th);
+  return c;
 }

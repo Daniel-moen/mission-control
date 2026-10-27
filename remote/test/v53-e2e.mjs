@@ -319,6 +319,9 @@ const st = (page) =>
       mini: document.querySelector('[data-v53-bar]')?.dataset.mini,
       active: document.querySelector('[data-tab][aria-current="page"]')?.dataset.tab || '',
       stage: r('[data-v53-stage]'),
+      full: document.querySelector('[data-v53-stage]')?.dataset.full === '1',
+      foot: r('[data-stage-foot]'),
+      head: r('[data-stage-head]'),
       paneR: r('[data-v53-pane]'),
       bar: r('[data-v53-bar]'),
       search: r('[data-bar-search]'),
@@ -375,8 +378,16 @@ async function chatFirst(browser, tag, theme) {
   await settle(1500);
   const s = await st(page);
   ok(s.hash === '' && s.pane === 'closed' && s.active === 'chat', `${T}: opens on the chat (no hash, no pane, Chat lit) (${s.hash} ${s.pane} ${s.active})`);
-  ok(s.stage && s.stage.w >= s.W * 0.95 && s.stage.t <= 16 && s.stage.h >= s.H * 0.72, `${T}: the chat fills the view down to the composer (${s.stage?.w}×${s.stage?.h} of ${s.W}×${s.H})`);
-  ok(s.acc && s.stage.b <= s.acc.t && s.acc.t - s.stage.b <= 16, `${T}: the composer sits just under the chat, not over it (${s.stage.b} → ${s.acc?.t})`);
+  if (s.full) {
+    // task 0503 (Daniel: "maximise space"): on iPhone and iPad portrait the
+    // chat's glass is the whole screen; the chrome floats over it
+    ok(s.stage.l <= 0 && s.stage.t <= 0 && s.stage.r >= s.W && s.stage.b >= s.H, `${T}: the chat's glass fills the screen edge to edge, top to bottom (${s.stage.l},${s.stage.t} → ${s.stage.r},${s.stage.b} of ${s.W}×${s.H})`);
+    ok(s.acc && s.acc.t > s.stage.t && s.acc.b < s.stage.b && s.foot && s.foot.b <= s.acc.t && s.acc.t - s.foot.b <= 16, `${T}: the composer and the suggestions float over the chat, the suggestions just above the composer (${s.foot?.b} → ${s.acc?.t})`);
+    await floatingChrome(page, T);
+  } else {
+    ok(s.stage && s.stage.w >= s.W * 0.95 && s.stage.t <= 16 && s.stage.h >= s.H * 0.72, `${T}: the chat fills the view down to the composer (${s.stage?.w}×${s.stage?.h} of ${s.W}×${s.H})`);
+    ok(s.acc && s.stage.b <= s.acc.t && s.acc.t - s.stage.b <= 16, `${T}: the composer sits just under the chat, not over it (${s.stage.b} → ${s.acc?.t})`);
+  }
   ok(s.bar && s.acc.b <= s.bar.t && s.bar.t - s.acc.b <= 16, `${T}: the tab bar sits under the composer (${s.acc.b} → ${s.bar?.t})`);
   ok(s.bar && s.H - s.bar.b <= 30 && s.bar.h >= 50 && s.bar.h <= 64, `${T}: the bar floats at the foot (${s.H - s.bar?.b}px up, ${s.bar?.h}px tall)`);
   const mid = (s.bar.l + s.search.r) / 2;
@@ -572,12 +583,14 @@ async function tabBar(browser, tag) {
 
   // minimise: scrolling up into the chat's history shrinks the bar; the composer slides down beside it
   const before = await st(page);
+  before.fade = await fadeOf(page);
   await scrollBy(page, THREAD, -500, 14);
   await settle(700);
   s = await st(page);
   ok(s.mini === '1' && s.bar.w <= 50, `${T}: scrolling into the history minimises the bar (${s.mini}, ${s.bar.w}px)`);
   ok(Math.abs(s.acc.b - s.bar.b) <= 3 && s.acc.l >= s.bar.r, `${T}: …the composer slides down beside it (bar ${s.bar.l}–${s.bar.r}, composer ${s.acc.l}–${s.acc.r})`);
-  ok(s.stage.b > before.stage.b + 40, `${T}: …and the chat gets the room (${before.stage.b} → ${s.stage.b})`);
+  if (s.full) ok(s.foot.b > before.foot.b + 40 && (await fadeOf(page)) < (before.fade ?? 1e9) - 40, `${T}: …and the chat gets the room: the suggestions and the fade follow the composer down (${before.foot.b} → ${s.foot.b})`);
+  else ok(s.stage.b > before.stage.b + 40, `${T}: …and the chat gets the room (${before.stage.b} → ${s.stage.b})`);
   ok(await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('[data-bar-search]')).opacity) < 0.1), `${T}: …search steps aside for the composer`);
   await shotV(page, `${tag}-bar-mini`);
   await scrollBy(page, THREAD, 20000, 6);
@@ -952,6 +965,148 @@ async function frames(browser, tag) {
   await page.context().close();
 }
 
+// Task 0503 (Daniel on an iPhone: "the liquid glass ... seems a bit like low
+// res and it keeps like popping in"). The shader's canvas renders at the
+// screen's density (≤ 2 device px per CSS px) with the photo at that
+// resolution, and the first pane switch looks like the second: the window is
+// there at once, and the shader takes it from the CSS glass in a cross-fade —
+// never a frame without glass, never a one-frame swap.
+async function sharpAndSteady(browser, tag) {
+  console.log(`Full-DPR glass and no late glass: ${tag}`);
+  const T = `${tag} 0503`;
+  const vp = VIEWPORTS[tag];
+  const ctx = await browser.newContext({ ...vp, ...(tag === 'phone' ? { deviceScaleFactor: 3 } : {}), hasTouch: true, colorScheme: 'dark' });
+  await ctx.addInitScript(() => { navigator.getBattery = () => Promise.resolve({ charging: true, level: 1, addEventListener() {}, removeEventListener() {} }); });
+  const page = await ctx.newPage();
+  page.errors = [];
+  page.on('pageerror', (e) => page.errors.push(`pageerror: ${e.message}`));
+  await page.goto(`${BASE}/v53?token=${TOKEN}&bg=01`);
+  await page.waitForSelector('[data-v5-shell]', { timeout: 15000 });
+  await until(() => page.evaluate(() => !!window.__lensTex), 15000, 'photo on the GPU').catch(() => {});
+  await settle(1200);
+  const d = await page.evaluate(() => {
+    const c = document.querySelector('.lens-canvas');
+    return { dpr: devicePixelRatio, cw: c.clientWidth, ch: c.clientHeight, w: c.width, h: c.height, scale: window.__lens?.scale, tex: window.__lensTex };
+  });
+  const want = Math.min(d.dpr, 2);
+  ok(d.scale === 1 && Math.abs(d.w - Math.round(d.cw * want)) <= 1 && Math.abs(d.h - Math.round(d.ch * want)) <= 1, `${T}: the shader canvas renders at ${want}× (DPR ${d.dpr}, capped at 2): ${d.w}×${d.h} for ${d.cw}×${d.ch} CSS px`);
+  ok(d.tex && d.tex[0] >= Math.min(2048, d.cw * want) / 1.01 && d.tex[1] >= Math.min(2048, d.ch * want) / 1.01, `${T}: the photo texture covers the canvas's device pixels: ${d.tex?.join('×')}`);
+  await page.screenshot({ path: path.join(SHOTS, `0503-${tag}-dpr${d.dpr}-chat.png`) });
+
+  // the first visit to a tab, then the second: every frame from the tap
+  const watch = (hash) =>
+    page.evaluate(async (hash) => {
+      const out = [];
+      location.hash = hash;
+      const t0 = performance.now();
+      const alpha = (c) => {
+        const m = /rgba?\(([^)]+)\)/.exec(c || '');
+        if (!m) return 0;
+        const v = m[1].split(',');
+        return v.length > 3 ? parseFloat(v[3]) : 1;
+      };
+      for (let i = 0; i < 60; i++) {
+        await new Promise((r) => requestAnimationFrame(r));
+        const w = [...document.querySelectorAll('[data-v53-pane="open"] .v5-win')].find((e) => e.getClientRects().length);
+        const vis = w && getComputedStyle(w).visibility !== 'hidden';
+        const cs = vis && getComputedStyle(w);
+        const blur = cs ? parseFloat(/blur\(([\d.]+)px\)/.exec(cs.backdropFilter || cs.webkitBackdropFilter || '')?.[1] || 0) : 0;
+        const k = w?.__lensIn ?? 0;
+        out.push({ t: performance.now() - t0, win: !!vis, css: cs ? alpha(cs.backgroundColor) : 0, blur, live: !!w?.classList.contains('lens-live'), shader: w?.classList.contains('lens-live') ? k * k * (3 - 2 * k) : 0 });
+      }
+      return out;
+    }, hash);
+  const judge = (tl, label) => {
+    const at = tl.findIndex((f) => f.win);
+    const css0 = Math.max(...tl.map((f) => f.css));
+    // glass on the window, every frame after it shows: CSS share + shader share
+    const cover = tl.slice(at).map((f) => f.css / css0 + f.shader);
+    const jumps = tl.slice(at + 1).map((f, i) => Math.abs(f.css - tl[at + i].css) / css0);
+    const hand = tl.findIndex((f) => f.live);
+    const fade = hand < 0 ? 0 : tl.slice(hand).findIndex((f) => f.shader >= 0.99);
+    ok(at >= 0 && at <= 3, `${T} ${label}: the window is on screen within ${at + 1} frames of the tap`);
+    ok(Math.min(...cover) >= 0.8, `${T} ${label}: the window always has glass (min CSS + shader share ${Math.min(...cover).toFixed(2)})`);
+    ok(hand > 0 && fade >= 8 && Math.max(...jumps) < 0.3, `${T} ${label}: the shader takes over in a cross-fade (${fade} frames; biggest one-frame drop of the CSS glass ${(Math.max(...jumps) * 100).toFixed(0)}%), not a pop`);
+    return { at, hand: hand < 0 ? -1 : tl[hand].t, fade };
+  };
+  const first = judge(await watch('library'), 'first visit');
+  await page.evaluate(() => (location.hash = 'mia'));
+  await settle(1000);
+  const second = judge(await watch('library'), 'second visit');
+  ok(Math.abs(first.at - second.at) <= 2 && Math.abs(first.hand - second.hand) <= 120, `${T}: the first visit looks like the second (window at frame ${first.at} vs ${second.at}, hand-over at ${Math.round(first.hand)} vs ${Math.round(second.hand)} ms)`);
+  await page.screenshot({ path: path.join(SHOTS, `0503-${tag}-dpr${d.dpr}-library.png`) });
+  flush(page, T);
+  await ctx.close();
+}
+
+// Full-bleed (task 0503): the text scrolls under the floating header,
+// suggestions, composer and bar, and fades out before it reaches any of them —
+// iOS 26's scroll-edge effect — so it never sits behind a control unreadably.
+const fadeOf = (page) => page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('[data-v53-stage]')).getPropertyValue('--stage-fade')) || 0);
+async function floatingChrome(page, T) {
+  const m = await page.evaluate(() => {
+    const th = document.querySelector('[data-v53-stage] [data-reader="thread"]');
+    const cs = getComputedStyle(th);
+    const mask = cs.maskImage || cs.webkitMaskImage || '';
+    const tb = th.getBoundingClientRect();
+    // resolve a length (the vars are calc()s) with a probe inside the thread
+    const v = (expr) => {
+      const p = document.createElement('div');
+      p.style.cssText = `position:absolute;visibility:hidden;height:${expr}`;
+      th.appendChild(p);
+      const h = p.getBoundingClientRect().height;
+      p.remove();
+      return h;
+    };
+    const head = document.querySelector('[data-stage-head]').getBoundingClientRect();
+    const foot = document.querySelector('[data-stage-foot]').getBoundingClientRect();
+    const acc = document.querySelector('[data-v53-acc]').getBoundingClientRect();
+    const bar = document.querySelector('[data-v53-bar]').getBoundingClientRect();
+    // where the thread's mask is fully clear (text gone), top and bottom, in px
+    const topClear = tb.top + v('calc(var(--stage-head) - 4px)');
+    const botClear = tb.bottom - v('calc(var(--stage-foot, 56px) + var(--stage-fade, 0px) - 18px)');
+    const inner = th.firstElementChild;
+    const padB = parseFloat(getComputedStyle(inner).paddingBottom);
+    return { dbg: [v('var(--stage-foot)'), v('var(--stage-chrome)'), v('var(--stage-fade)'), v('var(--stage-head)')], mask: !!mask && mask !== 'none', topClear, botClear, head: head.bottom, foot: foot.top, acc: acc.top, bar: bar.top, padB, stageH: tb.height, H: innerHeight, scrolls: th.scrollHeight > th.clientHeight };
+  });
+  ok(m.mask && m.topClear >= m.head - 1, `${T}: the text fades out before it reaches the floating header (clear from ${Math.round(m.topClear)} px, header ends ${Math.round(m.head)})`);
+  ok(m.mask && m.botClear <= m.foot + 24 && m.botClear < m.acc && m.botClear < m.bar, `${T}: …and before the suggestions, composer and bar (clear from ${Math.round(m.botClear)} px; chips ${Math.round(m.foot)}, composer ${Math.round(m.acc)}, bar ${Math.round(m.bar)})`);
+  // the newest message, scrolled to the end, ends just above the suggestions: clear of the chrome, no wasted room
+  const end = m.stageH - m.padB;
+  ok(end <= m.foot && end >= m.foot - 40, `${T}: the newest message scrolls clear of the chrome and no further (ends ${Math.round(end)} px, suggestions at ${Math.round(m.foot)}; foot/chrome/fade/head ${m.dbg.map(Math.round).join('/')})`);
+}
+
+// Task 0503 (Daniel: the 'Now · N agents working' card named alovewebsite,
+// task 0154, which wasn't running): the card lists only tasks that really
+// run — a running status AND an executor that hasn't finished.
+async function nowCard(browser) {
+  console.log('Now card: only tasks that really run');
+  const add = (title, fx) => api('POST', '/api/v1/mia/tasks', { title, detail: `fixture:${JSON.stringify(fx)}` });
+  await add('alovewebsite: make it 10x better', { status: 'checking', executor: { dispatchedAt: isoAgo(60 * 24 * 19), finishedAt: isoAgo(60 * 24 * 19), sessionId: 'stale' } });
+  await add('stale-running: no executor', { status: 'running', executor: null });
+  await add('live-task: really running', { status: 'running', executor: { dispatchedAt: isoAgo(3), finishedAt: null, sessionId: 'live' } });
+  const page = await newPage(browser, 'phone', { theme: 'dark' });
+  await settle(1500);
+  const c = await until(
+    () => page.evaluate(() => {
+      const el = document.querySelector('[data-live-card]');
+      return el && /live-task/.test(el.textContent) ? el.textContent : null;
+    }),
+    8000,
+    'the Now card',
+  ).catch(() => '');
+  ok(/live-task: really running/.test(c), 'now card: a task with a live executor is listed');
+  ok(!/alovewebsite/.test(c), 'now card: a "checking" task whose executor finished is not (task 0154)');
+  ok(!/stale-running/.test(c), 'now card: a "running" task with no executor is not');
+  await page.locator('[data-live-card] [data-grow="live"], [data-live-card] button').first().click().catch(() => {});
+  await settle(600);
+  const open = await page.evaluate(() => document.querySelector('[data-live-card]')?.textContent || '');
+  ok(!/alovewebsite|stale-running/.test(open), 'now card: …nor when it is opened');
+  await shotV(page, 'phone-now-card');
+  flush(page, 'now card');
+  await page.context().close();
+}
+
 // v5.2's Library list scroll, the same sample on the same rig (a baseline).
 async function libBaseline(browser, tag) {
   const vp = VIEWPORTS[tag];
@@ -1085,7 +1240,9 @@ async function main() {
     await extras(browser, tag);
   }
   for (const tag of only.filter((t) => t !== 'ipad-port')) await frames(browser, tag);
+  for (const tag of only.filter((t) => t !== 'ipad-port')) await sharpAndSteady(browser, tag);
   if (process.env.VIDEO) await videos(browser);
+  if (PART !== 'frames') await nowCard(browser);
   await liteChecks(browser);
 
   await browser.close();

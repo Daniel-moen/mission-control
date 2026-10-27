@@ -10,10 +10,11 @@ import Orb from './Orb.jsx';
 import Rings, { useExecutors } from './Rings.jsx';
 import { place } from './TabBar.jsx';
 
-// The chat stage (tasks 0491, 0502): Mia's conversation IS the home screen.
-// One big pane of Lens glass from the top of the screen down to the
-// composer (which floats under it with the tab bar, over the photo —
-// App.jsx). Over the top of the thread: Mia, what she's doing, the agents'
+// The chat stage (tasks 0491, 0502, 0503): Mia's conversation IS the home
+// screen. One big pane of Lens glass: on iPad landscape from the top of the
+// screen down to the composer (which floats under it with the tab bar, over
+// the photo — App.jsx); on iPhone and iPad portrait (0503) the whole screen,
+// edge to edge, with the composer and the bar floating over it. Over the top of the thread: Mia, what she's doing, the agents'
 // progress rings and the ··· menu (HQ, Insights, Settings live there now
 // that the tab bar holds five places). At its foot: quiet suggestions.
 
@@ -122,7 +123,7 @@ function RestartOffer({ mia }) {
   );
 }
 
-export default function Stage({ geo, L, R, bottom, back, onThinking }) {
+export default function Stage({ geo, L, R, bottom, chrome = 0, back, onThinking }) {
   const mia = useMC((s) => s.mia);
   const snapshot = useMC((s) => s.snapshot);
   const local = useMC((s) => s.miaLocal);
@@ -140,12 +141,18 @@ export default function Stage({ geo, L, R, bottom, back, onThinking }) {
     const ro = new ResizeObserver(() => host.style.setProperty('--stage-foot', `${el.offsetHeight + 14}px`));
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+    // (task 0503: re-run once Mia arrives — the foot isn't there on the first
+    // render, so it never measured and the thread fell back to 150 px)
+  }, [!!mia]);
 
   // under a pane (iPhone, iPad portrait), the chat recedes a little
   const scale = useTransform(back, (b) => 1 - 0.035 * b);
   const dim = useTransform(back, (b) => `rgba(0, 0, 0, ${(b * 0.3).toFixed(3)})`);
   const ty = useTransform(back, (b) => b * 3);
+  // full-bleed: the suggestions sit on the composer, following it as the bar
+  // minimises (a transform; no relayout per frame)
+  const footY = useTransform(() => (geo.full ? -bottom.get() : 0));
+  const full = geo.full;
 
   const dot = { live: 'bg-accent', warn: 'bg-warn', off: 'bg-ink3' }[status.tone];
   const orbState = !mia?.enabled || status.tone === 'off' ? 'off' : thinking || status.text.endsWith('working') ? 'thinking' : 'idle';
@@ -154,13 +161,20 @@ export default function Stage({ geo, L, R, bottom, back, onThinking }) {
     <motion.section
       ref={box}
       className="v53-stage"
-      style={{ left: L, right: R, top: geo.top, bottom, scale, y: ty, borderRadius: geo.radius }}
+      style={
+        full
+          ? { left: 0, right: 0, top: 0, bottom: 0, scale, y: ty, borderRadius: 0, '--stage-chrome': `${chrome}px`, '--stage-fade': `${chrome}px`, '--stage-safe-top': 'env(safe-area-inset-top)' }
+          : { left: L, right: R, top: geo.top, bottom, scale, y: ty, borderRadius: geo.radius }
+      }
+      data-full={full ? '1' : undefined}
+      data-lens-r={full ? '0.01' : String(geo.radius)}
+      data-lens-bleed={full ? '60' : undefined}
       data-lens
       data-depth="0.7"
       data-v53-stage
       aria-label="Chat with Mia"
     >
-      <div className="v53-stage-inner" style={{ width: geo.stageW }}>
+      <div className="v53-stage-inner" style={{ width: full ? geo.W : geo.stageW }}>
         {!snapshot && !mia ? (
           <div className="flex flex-1 items-center justify-center">
             <Empty icon="mia" title="Connecting to your Mac…" hint="Mia lives on your Mac — this fills in as soon as it answers." />
@@ -197,11 +211,11 @@ export default function Stage({ geo, L, R, bottom, back, onThinking }) {
         <div className="pointer-events-none absolute inset-x-0 top-[calc(var(--stage-head,64px)-8px)] z-10">{mia && <RestartOffer mia={mia} />}</div>
 
         {mia && (
-          <div ref={foot} className="v53-foot" data-stage-foot>
+          <motion.div ref={foot} className="v53-foot" style={{ y: footY }} data-stage-foot>
             <div className="mx-auto w-full max-w-[720px]">
               <Chips mia={mia} />
             </div>
-          </div>
+          </motion.div>
         )}
       </div>
       <motion.div className="pointer-events-none absolute inset-0 z-30 rounded-[inherit]" style={{ backgroundColor: dim }} aria-hidden="true" />

@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { animate, motionValue } from 'motion/react';
 import { hasWebGL } from '../v2/lens/gl.js';
-import { photoCanvas, fallbackCanvas } from '../v2/lens/scene.js';
+import { fallbackCanvas } from '../v2/lens/scene.js';
 import { initBackdrop, useBackdrop } from '../v2/lens/backdrop.js';
 import { useTilt, tiltX, tiltY, lightX, lightY, touching } from '../v2/lens/tilt.js';
 import { useLensMode } from '../v2/lens/mode.js';
 import { usePrefs } from '../v2/lib/prefs.js';
 import { useNav, navOpts } from '../v2/lib/nav.js';
 import { useQuality } from '../v3/shared/quality.js';
-import { createScene, MAX } from './lens.js';
+import { createScene, photoTexture, MAX } from './lens.js';
 import { installScrollSync, scrollGate } from '../v2/lens/scrollsync.js';
 import { lights, tick } from './ambient.js';
 
@@ -79,6 +79,8 @@ export default function Scene() {
   const on = gl && !low && !lite;
   const api = useRef(null);
   const [ready, setReady] = useState(false);
+  // a lost WebGL context (iOS drops them under memory pressure) rebuilds the scene
+  const [gen, setGen] = useState(0);
   useTilt();
 
   useEffect(() => {
@@ -112,6 +114,11 @@ export default function Scene() {
       return undefined;
     }
     api.current = s;
+    const canvas = ref.current;
+    const lost = (e) => e.preventDefault();
+    const restored = () => setGen((g) => g + 1);
+    canvas.addEventListener('webglcontextlost', lost);
+    canvas.addEventListener('webglcontextrestored', restored);
     s.texture('u_tex', fallbackCanvas(document.documentElement.dataset.theme !== 'light'), 0);
     // no type plane in v5 (v1's Home sets its greeting in the DOM) — a blank one
     const blank = document.createElement('canvas');
@@ -123,6 +130,8 @@ export default function Scene() {
     const dyn = new Float32Array(MAX * 4); // per pane: velocity x/y (px per 60 Hz frame), opacity, growth
     const glow = { t: 0 };
     let live = new Set();
+    let booted = false;
+    let drawn = new Set();
     installScrollSync();
     // how fast anything is scrolling (px per frame, signed, smoothed)
     const flow = { raw: 0, v: 0 };
@@ -135,7 +144,12 @@ export default function Scene() {
       if (was != null) flow.raw += el.scrollTop - was;
     };
     window.addEventListener('scroll', onScroll, { capture: true, passive: true });
+    // the shader's pane fades in over the hand-over from CSS glass (task 0503;
+    // v53.css melts the CSS glass over the same 260 ms) instead of one frame
+    const IN_MS = 260;
     const amb = new Float32Array(12);
+    // frost blur is a mip bias, i.e. in canvas px: hold it in CSS px (lens.js)
+    const refPx = Math.min(devicePixelRatio || 1, 1.5);
     const ambC = new Float32Array(12);
     s.setFrame((t, dt) => {
       // the moving light and the scroll's lean, before anything else
@@ -151,12 +165,14 @@ export default function Scene() {
       s.set('u_amb', amb);
       s.set('u_ambC', ambC);
       s.set('u_flow', Math.max(-1, Math.min(1, flow.v / 24)));
+      s.set('u_lodK', Math.max(0, Math.log2((s.stats.dpr * s.stats.scale) / refPx)));
       window.__flow = flow.v;
       const fr = Math.min(4, Math.max(0.25, dt / 16.7));
       const H = innerHeight;
       const W = innerWidth;
       const els = document.querySelectorAll(PANES);
       const now = new Set();
+      const drawnNow = new Set();
       let n = 0;
       let scrolled = 0;
       for (let i = 0; i < els.length && n < MAX; i++) {
@@ -174,12 +190,25 @@ export default function Scene() {
           if (f < 0.02) scrolled++;
           continue;
         }
-        dyn[n * 4 + 2] = op;
-        rects[n * 4] = r.left;
-        rects[n * 4 + 1] = r.top;
-        rects[n * 4 + 2] = r.width;
-        rects[n * 4 + 3] = r.height;
-        if (el.__lensR === undefined) el.__lensR = parseFloat(getComputedStyle(el).borderTopLeftRadius) || 22;
+        // a page's window newly handed to the shader fades in (not one drawn
+        // last frame; not the bar, the composer or the lens, which never hand over)
+        let fin = 1;
+        if (el.classList.contains('v5-win')) {
+          if (!drawn.has(el)) el.__lensIn = booted ? 0 : 1;
+          fin = el.__lensIn = Math.min(1, el.__lensIn + Math.max(dt, 1) / IN_MS);
+          drawnNow.add(el);
+        }
+        dyn[n * 4 + 2] = op * fin * fin * (3 - 2 * fin);
+        // data-lens-bleed: a full-screen pane (0503's chat) reaches past the
+        // screen's edges, so its rim — the bend and the bright line — is off it
+        const bl = el.dataset.lensBleed ? +el.dataset.lensBleed : 0;
+        rects[n * 4] = r.left - bl;
+        rects[n * 4 + 1] = r.top - bl;
+        rects[n * 4 + 2] = r.width + 2 * bl;
+        rects[n * 4 + 3] = r.height + 2 * bl;
+        // data-lens-r: a radius that changes (0503's full-bleed chat is square)
+        if (el.dataset.lensR) el.__lensR = +el.dataset.lensR;
+        else if (el.__lensR === undefined) el.__lensR = parseFloat(getComputedStyle(el).borderTopLeftRadius) || 22;
         // a pane scaled by its ancestors (Atlas's map) keeps its proportions
         const k = el.offsetWidth ? r.width / el.offsetWidth : 1;
         meta[n * 4] = Math.min(el.__lensR * k, r.height / 2, r.width / 2);
@@ -207,6 +236,8 @@ export default function Scene() {
       }
       window.__lensScrolled = scrolled;
       for (const el of live) if (!now.has(el)) (el.classList.remove('lens-live'), delete el.__lensV);
+      drawn = drawnNow;
+      booted = true;
       for (const el of now) if (!live.has(el)) el.classList.add('lens-live');
       live = now;
 
@@ -214,16 +245,21 @@ export default function Scene() {
       s.set('u_q', s.stats.scale > 0.6 ? 1 : 0);
       set(s, rects, meta, dyn, n, glow, 0, flow.v);
     });
+    // pre-warm: draw once now, so the program is compiled and the textures
+    // are on the GPU before anything is shown (the canvas is still at 0 opacity)
+    s.draw();
     s.start();
     window.__lens = s.stats;
     window.__lensLive = () => live.size;
     return () => {
+      canvas.removeEventListener('webglcontextlost', lost);
+      canvas.removeEventListener('webglcontextrestored', restored);
       window.removeEventListener('scroll', onScroll, { capture: true });
       for (const el of live) el.classList.remove('lens-live');
       s.destroy();
       api.current = null;
     };
-  }, [on]);
+  }, [on, gen]);
 
   // the photograph
   useEffect(() => {
@@ -239,10 +275,16 @@ export default function Scene() {
     img.crossOrigin = 'anonymous';
     const load = () => {
       if (dead || !img.naturalWidth) return;
-      s.texture('u_tex', photoCanvas(img, innerWidth, innerHeight), 0);
+      // at the canvas's device resolution (task 0503), not CSS px
+      const px = Math.max(1, s.stats.dpr || 1);
+      const tex = photoTexture(img, innerWidth, innerHeight, px);
+      s.texture('u_tex', tex, 0);
+      s.draw();
+      window.__lensTex = [tex.width, tex.height];
       setReady(true);
     };
-    img.onload = load;
+    // decoded off the main thread before the upload, so it never janks a frame
+    img.onload = () => (img.decode ? img.decode().catch(() => {}) : Promise.resolve()).then(load);
     img.onerror = () => {
       if (dead) return;
       s.texture('u_tex', fallbackCanvas(dark), 0);
@@ -255,7 +297,7 @@ export default function Scene() {
       dead = true;
       window.removeEventListener('resize', onResize);
     };
-  }, [on, src, dark]);
+  }, [on, src, dark, gen]);
 
   return (
     <div className="lens-scene" aria-hidden="true">

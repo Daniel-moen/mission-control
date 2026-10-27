@@ -656,10 +656,14 @@ function handleMia(type, msg) {
       if (!title) return ack(false, 'Title is empty');
       const max = mia.tasks.reduce((n, t) => Math.max(n, Number(t.id) || 0), 0);
       const id = String(max + 1).padStart(4, '0');
+      // a test fixture (v53-e2e, task 0503): detail "fixture:{json}" sets the
+      // task's status and executor, e.g. a stale "checking" task whose
+      // executor finished long ago
+      const fx = /^fixture:/.test(msg.detail ?? '') ? JSON.parse(msg.detail.slice(8)) : null;
       mia.tasks.push({
-        id, title, detail: msg.detail ?? '', dir: msg.dir ?? null, status: 'queued',
+        id, title, detail: fx ? '' : msg.detail ?? '', dir: msg.dir ?? null, status: fx?.status || 'queued',
         priority: Number.isInteger(msg.priority) ? msg.priority : 3,
-        createdAt: iso(), updatedAt: iso(), questions: [], executor: null, log: [], result: null,
+        createdAt: iso(), updatedAt: iso(), questions: [], executor: fx?.executor ?? null, log: [], result: null,
       });
       return ack(true, `Task ${id} queued`, { id });
     }

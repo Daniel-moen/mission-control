@@ -112,6 +112,10 @@ function geometry({ W, sb }, pane) {
     b0: Math.max(G, sb - 12),
     top: `calc(env(safe-area-inset-top) + ${G}px)`,
     radius: narrow ? 30 : 24,
+    // narrow (task 0503, Daniel: "maximise space"): the chat's glass fills the
+    // screen edge to edge, top to bottom; the header, suggestions, composer and
+    // bar float over it, iOS 26 style, the thread fading out under them
+    full: !wide,
   };
 }
 
@@ -242,10 +246,15 @@ export default function App() {
   const paneBottom = geo.wide ? geo.G : geo.b0 + BAR_H + 10;
 
   const acc = useRef(null);
+  const [ah, setAh] = useState(46);
+  // full-bleed: how far up from the screen's foot the floating chrome reaches.
+  // The thread pads by it (a React value: it changes on a minimise, not per
+  // frame); the suggestions ride on stageBottom itself, as a transform.
+  const chrome = geo.full ? (covered ? geo.b0 + BAR_H + 10 : geo.b0 + (barHidden || mini ? 0 : BAR_H + 10)) + ah + 10 : 0;
   useEffect(() => {
     const el = acc.current;
     if (!el || typeof ResizeObserver === 'undefined') return undefined;
-    const ro = new ResizeObserver(() => AH.set(el.offsetHeight));
+    const ro = new ResizeObserver(() => (AH.set(el.offsetHeight), setAh(el.offsetHeight)));
     ro.observe(el);
     return () => ro.disconnect();
   }, [AH, needsToken]);
@@ -464,7 +473,7 @@ export default function App() {
       >
         <Ambient thinking={thinking} />
         <main className="absolute inset-0">
-          <Stage geo={geo} L={L} R={R} bottom={stageBottom} back={back} onThinking={setThinking} />
+          <Stage geo={geo} L={L} R={R} bottom={stageBottom} chrome={chrome} back={back} onThinking={setThinking} />
           <motion.div
             ref={acc}
             className="v53-acc"

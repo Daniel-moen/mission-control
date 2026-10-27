@@ -103,10 +103,33 @@ html[data-glass='lite'] .v53-stage[data-lens] {
   z-index: 20;
   padding: 0 16px 12px;
 }
-/* the thread fades out under the header and the suggestions, rather than being cut */
+/* the thread fades out under the header and the suggestions, rather than being cut.
+   Full-bleed (task 0503) the composer and the bar float over the chat too: the
+   fade sits over them (--stage-fade, eased when the bar minimises) — iOS 26's
+   scroll-edge effect, so text never runs under a control. */
+@property --stage-fade {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
+}
+.v53-stage[data-full] {
+  border: 0;
+  transition: --stage-fade 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+}
+.v53-stage[data-full] .v53-stage-inner {
+  --stage-head: calc(64px + var(--stage-safe-top, 0px));
+}
+.v53-stage[data-full] .v53-head {
+  top: var(--stage-safe-top, 0px);
+}
 .v53-thread {
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, transparent calc(var(--stage-head) - 22px), #000 calc(var(--stage-head) + 10px), #000 calc(100% - var(--stage-foot, 56px) - 6px), transparent calc(100% - var(--stage-foot, 56px) + 18px));
-  mask-image: linear-gradient(to bottom, transparent 0, transparent calc(var(--stage-head) - 22px), #000 calc(var(--stage-head) + 10px), #000 calc(100% - var(--stage-foot, 56px) - 6px), transparent calc(100% - var(--stage-foot, 56px) + 18px));
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, transparent calc(var(--stage-head) - 22px), #000 calc(var(--stage-head) + 10px), #000 calc(100% - var(--stage-foot, 56px) - var(--stage-fade, 0px) - 6px), transparent calc(100% - var(--stage-foot, 56px) - var(--stage-fade, 0px) + 18px));
+  mask-image: linear-gradient(to bottom, transparent 0, transparent calc(var(--stage-head) - 22px), #000 calc(var(--stage-head) + 10px), #000 calc(100% - var(--stage-foot, 56px) - var(--stage-fade, 0px) - 6px), transparent calc(100% - var(--stage-foot, 56px) - var(--stage-fade, 0px) + 18px));
+}
+/* full-bleed, the header floats over the text: the fade clears it fully first */
+.v53-stage[data-full] .v53-thread {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, transparent calc(var(--stage-head) - 4px), #000 calc(var(--stage-head) + 26px), #000 calc(100% - var(--stage-foot, 56px) - var(--stage-fade, 0px) - 6px), transparent calc(100% - var(--stage-foot, 56px) - var(--stage-fade, 0px) + 18px));
+  mask-image: linear-gradient(to bottom, transparent 0, transparent calc(var(--stage-head) - 4px), #000 calc(var(--stage-head) + 26px), #000 calc(100% - var(--stage-foot, 56px) - var(--stage-fade, 0px) - 6px), transparent calc(100% - var(--stage-foot, 56px) - var(--stage-fade, 0px) + 18px));
 }
 @media (max-width: 599px) {
   .v53-head {
@@ -454,6 +477,16 @@ html[data-lensmode='gl'] .v53-field.lens-live:focus-within {
   backdrop-filter: blur(34px) saturate(1.7);
   box-shadow: inset 0 1px 0 var(--g-hi), 0 30px 80px -30px rgba(0, 0, 0, 0.75);
 }
+/* The hand-over (task 0503). Daniel: "it keeps like popping in like I go to
+   different panel then it pops in". The pane flies in as CSS glass and the
+   shader takes it at rest; that used to be a one-frame swap. Now the CSS glass
+   melts away over the same 260 ms that Scene.jsx fades the shader's pane in,
+   so the two cross-fade. Only on the way TO the shader: when .lens-live goes
+   (a close, a drag) the CSS glass is back in the same frame, no gap. */
+html[data-lensmode='gl'] .v53-pane .v5-win.lens-live {
+  --lens-in: cubic-bezier(0.45, 0, 0.55, 1); /* ≈ the shader's smoothstep: the two add up to one pane */
+  transition: background-color 0.26s var(--lens-in), border-color 0.26s var(--lens-in), box-shadow 0.26s var(--lens-in), -webkit-backdrop-filter 0.26s var(--lens-in), backdrop-filter 0.26s var(--lens-in);
+}
 html[data-glass='lite'] .v53-pane .v5-win {
   background: var(--g-win-lite);
   -webkit-backdrop-filter: none;
@@ -719,4 +752,7 @@ html.v53 [data-figure] > span:first-child {
 [data-v53-shell][data-covered='1'][data-layout='narrow'] .v53-stage-inner,
 [data-v53-shell][data-covered='1'][data-layout='narrow'] .v53-stage > [aria-hidden] {
   visibility: hidden;
+  opacity: 0;
+  /* task 0503: steps out over the hand-over (below), not in one frame */
+  transition: opacity 0.26s ease, visibility 0s 0.26s;
 }
