@@ -177,6 +177,9 @@ function onScreen(nav) {
     // root stays null until the body renders, so callers wait for it.
     if (sc) return { scroller: sc, root: sc.querySelector('article.md'), what: 'the open doc' };
   }
+  // a front end that knows what's in front (v5.2's pane over the chat) says so
+  const own = nav?.scroller?.();
+  if (own) return { scroller: own, root: own, what: 'the view' };
   const sc = biggestScroller();
   return sc ? { scroller: sc, root: sc, what: 'the view' } : null;
 }

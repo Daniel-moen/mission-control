@@ -357,8 +357,9 @@ const server = http.createServer((req, res) => {
     }
   }
 
-  // The v3, v4 and v5 designs (tasks 0445, 0446, 0483) also live at their own paths.
-  const v3 = /^\/(v[34][abc]|v5)\/?$/.exec(pathname);
+  // The v3, v4 and v5 designs (tasks 0445, 0446, 0483) also live at their own
+  // paths; so does v5.2, the chat-first panel (task 0491), at /v52.
+  const v3 = /^\/(v[34][abc]|v52?)\/?$/.exec(pathname);
   if (v3 && fs.existsSync(path.join(DIST, `${v3[1]}.html`))) return serveFile(res, path.join(DIST, `${v3[1]}.html`), { req });
 
   // SPA fallback — every other route renders the app shell: the device's
@@ -373,7 +374,7 @@ const server = http.createServer((req, res) => {
 // v3a/v3b/v3c are the three design directions of task 0445 (Home + Mia only).
 // v4a/v4b/v4c are the three structural directions of task 0446; v5 (task 0483)
 // is v1's structure in v4's Lens glass.
-const UIS = new Set(['v1', 'v2', 'v3a', 'v3b', 'v3c', 'v4a', 'v4b', 'v4c', 'v5']);
+const UIS = new Set(['v1', 'v2', 'v3a', 'v3b', 'v3c', 'v4a', 'v4b', 'v4c', 'v5', 'v52']);
 function uiFor(req, url, res) {
   const q = url.searchParams.get('ui');
   const built = (ui) => (ui !== 'v1' && fs.existsSync(path.join(DIST, `${ui}.html`)) ? ui : 'v1');
@@ -381,7 +382,7 @@ function uiFor(req, url, res) {
     res.setHeader('set-cookie', `mc_ui=${q}; Path=/; Max-Age=31536000; SameSite=Lax`);
     return built(q);
   }
-  const want = /(?:^|;\s*)mc_ui=(v2|v5|v[34][abc])(?:;|$)/.exec(req.headers.cookie || '');
+  const want = /(?:^|;\s*)mc_ui=(v2|v52?|v[34][abc])(?:;|$)/.exec(req.headers.cookie || '');
   return want ? built(want[1]) : 'v1';
 }
 

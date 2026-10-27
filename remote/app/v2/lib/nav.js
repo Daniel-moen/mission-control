@@ -15,12 +15,14 @@ import { create } from 'zustand';
 export const TABS = ['home', 'mia', 'agents', 'library'];
 // v5 (task 0483) gives a task its own page (#task/<id>); v2 opens it on the
 // board. Set once, before anything renders.
-export const navOpts = { taskPage: false, placeRoots: null };
+export const navOpts = { taskPage: false, placeRoots: null, chatFirst: false };
+// v5.2 (task 0491) is chat-first: Mia's chat is the resting state (no hash),
+// Home is a place of its own (#home), and Mia's board is a page (#tasks).
 // v5.1 (task 0486): pages that are a tab of their own although they open over
 // Home (HQ) — their Page shows no Back, as a tab's root doesn't.
 const ROOT = { home: 'home', mia: 'mia', agents: 'agents', library: 'library' };
 // Where a page lives when it's opened cold (a deep link at launch).
-const OWNER = { agent: 'agents', doc: 'library', insights: 'home', hq: 'home', settings: 'home', task: 'mia' };
+const OWNER = { agent: 'agents', doc: 'library', insights: 'home', hq: 'home', settings: 'home', task: 'mia', tasks: 'mia' };
 
 let seq = 0;
 const mk = (name, params = {}, extra = {}) => ({ name, params, key: `${name}:${++seq}`, ...extra });
@@ -147,9 +149,11 @@ export function hashFor(s = get()) {
   const top = topOf(s);
   switch (top.name) {
     case 'home':
-      return '';
+      return navOpts.chatFirst ? 'home' : '';
     case 'mia':
-      return 'mia';
+      return navOpts.chatFirst ? '' : 'mia';
+    case 'tasks':
+      return 'tasks';
     case 'agents':
       return 'fleet';
     case 'library':
@@ -185,7 +189,9 @@ export function applyHash(raw, { cold = false } = {}) {
   if (s.overlay && (s.overlay.name === 'tv' || s.overlay.name === 'car')) closeOverlay();
   if (head === 'console') return openOverlay('console', { id: id || null });
   if (head === 'launch') return openSheet('launch');
-  const page = (name, params) => push(name, params, cold ? { tab: OWNER[name] } : {});
+  // chat-first (v5.2): a cold Insights / HQ / Settings / task opens over the chat
+  const owner = (name) => (navOpts.chatFirst && OWNER[name] === 'home' ? 'mia' : OWNER[name]);
+  const page = (name, params) => push(name, params, cold ? { tab: owner(name) } : {});
   if (head === 'agent' && id) return page('agent', { id });
   if (head === 'doc' && id) return page('doc', { id });
   if (head === 'task' && id) return navOpts.taskPage ? page('task', { id }) : focusTask(id);
@@ -193,11 +199,12 @@ export function applyHash(raw, { cold = false } = {}) {
   if (head === 'settings') return page('settings', {});
   if (head === 'hq') return page('hq', id ? { company: id } : {});
   if (head === 'channels') return page('hq', id ? { section: 'channels', channel: id } : { section: 'channels' });
+  if (navOpts.chatFirst && (head === 'home' || head === 'tasks')) return head === 'home' ? toRoot('home') : page('tasks', {});
   if (head === 'mia' || head === 'library') return toRoot(head);
   if (head === 'fleet') return toRoot('agents');
   if (!head) {
     closeSheet();
-    return toRoot('home');
+    return toRoot(navOpts.chatFirst ? 'mia' : 'home');
   }
   return undefined;
 }

@@ -27,7 +27,7 @@ export const viewport = {
 const BOOT = `(function () {
   try {
     var p = new URLSearchParams(location.search), q = p.get('ui');
-    if (/^(v1|v2|v5|v[34][abc])$/.test(q)) {
+    if (/^(v1|v2|v52?|v[34][abc])$/.test(q)) {
       localStorage.setItem('mc.ui', q);
       document.cookie = 'mc_ui=' + q + '; path=/; max-age=31536000; samesite=lax';
       if (q !== 'v5') return location.replace('/?ui=' + q + location.hash);

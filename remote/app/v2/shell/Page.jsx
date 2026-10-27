@@ -49,7 +49,7 @@ export default forwardRef(function Page(
     scrollProps.onScroll?.(e);
   };
 
-  const showBack = depth > 0 && !(depth === 1 && navOpts.placeRoots?.has(route?.name));
+  const showBack = depth > 0 && !close && !(depth === 1 && navOpts.placeRoots?.has(route?.name));
   const solid = bar === 'solid' || !scroll;
 
   const navBar = (

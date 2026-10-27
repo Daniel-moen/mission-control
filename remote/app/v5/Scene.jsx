@@ -6,7 +6,7 @@ import { initBackdrop, useBackdrop } from '../v2/lens/backdrop.js';
 import { useTilt, tiltX, tiltY, lightX, lightY, touching } from '../v2/lens/tilt.js';
 import { useLensMode } from '../v2/lens/mode.js';
 import { usePrefs } from '../v2/lib/prefs.js';
-import { useNav } from '../v2/lib/nav.js';
+import { useNav, navOpts } from '../v2/lib/nav.js';
 import { useQuality } from '../v3/shared/quality.js';
 import { createScene, MAX } from '../v4/shared/lens.js';
 import { installScrollSync, scrollGate } from '../v2/lens/scrollsync.js';
@@ -27,8 +27,10 @@ export const AMBER = '[data-amber]';
 export const NO = '[data-no-lens], [role="dialog"], [data-sheet], .v-menu, [data-toast], [data-conn]';
 
 // Something is open over Home → the photo racks focus and dims a touch.
+// v5.2 (task 0491, chat first) keeps the photo sharp behind its glass, so the
+// panes have something to bend; only a full-screen overlay racks focus.
 function useFocused() {
-  return useNav((s) => s.tab !== 'home' || s.stacks.home.length > 1 || !!s.overlay);
+  return useNav((s) => (navOpts.chatFirst ? !!s.overlay : s.tab !== 'home' || s.stacks.home.length > 1 || !!s.overlay));
 }
 
 // Daylight photos for the light theme (bg/light/, as in v4). ?bg=11|12 pins one.
@@ -130,6 +132,8 @@ export default function Scene() {
         const el = els[i];
         if (el.__lensNo === undefined) el.__lensNo = !!el.closest(NO) || !!el.parentElement?.closest(PANES);
         if (el.__lensNo) continue;
+        // v5.2: a pane flying over other glass, or a sheet over the chat, is CSS glass for now
+        if (el.closest('[data-lens-off]')) continue;
         const r = el.getBoundingClientRect();
         if (r.bottom < -30 || r.top > H + 30 || r.right < -30 || r.left > W + 30 || r.width < 8 || r.height < 8) continue;
         // a pane inside a moving scroller shows its CSS glass (scrollsync.js)

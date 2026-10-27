@@ -46,8 +46,10 @@ function useLayers(stack) {
   return [layers, settle];
 }
 
-export default function Stack({ tab, active, onClose = null }) {
-  const stack = useNav((s) => s.stacks[tab]);
+export default function Stack({ tab, active, onClose = null, closeDepth = 0, frozen = null }) {
+  // v5.2 (task 0491): a closing pane keeps drawing the stack it had (frozen)
+  const live = useNav((s) => s.stacks[tab]);
+  const stack = frozen || live;
   const [layers, settle] = useLayers(stack);
   const box = useRef(null);
   const { w, h } = useSize(box);
@@ -75,6 +77,7 @@ export default function Stack({ tab, active, onClose = null }) {
               w={w || window.innerWidth}
               h={h || window.innerHeight}
               onClose={onClose}
+              closeDepth={closeDepth}
               onSettled={settle}
             />
           </Activity>
@@ -84,7 +87,7 @@ export default function Stack({ tab, active, onClose = null }) {
   );
 }
 
-function Layer({ layer, index, top, under, live, depth, cover, aboveZoom, w, h, onSettled, onClose }) {
+function Layer({ layer, index, top, under, live, depth, cover, aboveZoom, w, h, onSettled, onClose, closeDepth = 0 }) {
   const { r, state } = layer;
   const reduce = usePrefs((s) => s.reduce);
   const zoom = !!r.origin && !reduce;
@@ -191,7 +194,8 @@ function Layer({ layer, index, top, under, live, depth, cover, aboveZoom, w, h, 
     else animate(x, 0, { ...spring.page, velocity: info.velocity.x });
   };
 
-  const ctx = { route: r, active: live, depth, back, close: depth === 0 ? onClose : null };
+  // v5.2 (task 0491): a pane over the chat closes from its first page too (closeDepth 1)
+  const ctx = { route: r, active: live, depth, back, close: depth <= closeDepth ? onClose : null };
   const Page = pageFor(r.name);
 
   return (

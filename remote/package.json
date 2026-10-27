@@ -42,6 +42,7 @@
     "test:v2": "node test/v2-e2e.mjs",
     "test:v2-budget": "node test/v2-budget.mjs",
     "test:v5": "node test/v5-e2e.mjs",
+    "test:v52": "node test/v52-e2e.mjs",
     "dev:v2": "next dev --webpack next-v2"
   },
   "engines": {
