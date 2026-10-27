@@ -361,19 +361,27 @@ async function tour(browser, tag, theme) {
   ok((await page.evaluate(() => document.documentElement.dataset.theme)) === theme, `${T}: theme ${theme}`);
   await check(page, T, 'Home', { want: 'home', win: false });
   ok((await page.locator('[data-topbar]').count()) === 1 && (await page.locator('[data-dock="full"]').count()) === 1, `${T}: Home has v1's top bar and dock`);
-  ok((await page.locator('[data-tab]').count()) === 6, `${T}: the dock has v1's six places`);
+  ok((await page.locator('[data-tab]').count()) === 5, `${T}: the tab bar has five tabs (Apple's iPhone limit; v5.1)`);
+  ok((await page.locator('[data-tab-talk]').count()) === 1 && !(await page.locator('nav[aria-label="Main"] [data-tab-talk]').count()), `${T}: the mic is its own glass circle beside the tab bar`);
   ok((await page.locator('[data-home] [data-hero]').count()) === 1, `${T}: Home is v1's scene (greeting, sentence, button, figures)`);
   await snap('home');
 
   // the dock's places, each its own window
   for (const [key, want, name] of [['mia', 'mia', 'mia'], ['fleet', 'agents', 'fleet'], ['library', 'library', 'library'], ['insights', 'insights', 'insights'], ['hq', 'hq', 'hq']]) {
-    await page.locator(`[data-tab="${key}"]`).first().click().catch(() => {});
+    if (key === 'insights') {
+      // Insights is Home's page now: its figures open it
+      await page.locator('[data-tab="home"]').first().click().catch(() => {});
+      await sleep(600);
+      await page.locator('[data-figure="burn"]').first().click().catch(() => {});
+    } else await page.locator(`[data-tab="${key}"]`).first().click().catch(() => {});
     if (key === 'mia') {
       await sleep(1200);
       // Mia's chat has no dock (v1, task 0290) — close goes Home
       ok((await page.locator('[data-dock]').count()) === 0, `${T}: Mia's chat has no dock under it`);
     } else await sleep(1000);
     await check(page, T, name, { want });
+    if (key === 'hq') ok(!(await page.locator('[data-page="hq"][data-top="true"] [data-back]').count()), `${T}: HQ is a tab — no Back on its first page`);
+    if (key === 'fleet') ok((await page.locator('[data-page="agents"][data-top="true"] h1').first().textContent()) === 'Fleet', `${T}: the Fleet tab's page is called Fleet`);
     await snap(name);
     if (key === 'mia') {
       const tasksTab = page.locator('[role="tab"]', { hasText: 'Tasks' });
@@ -402,6 +410,12 @@ async function tour(browser, tag, theme) {
         await sleep(1100);
         await check(page, T, 'agent window', { want: 'agent' });
         await snap('agent');
+        await page.locator('[data-page="agent"][data-top="true"] [data-agent-more]').first().click();
+        await sleep(500);
+        const its = await page.locator('[data-context-menu] [data-menu-item]').evaluateAll((els) => els.map((e) => e.dataset.menuItem));
+        ok(its.includes('Stop agent') && !its.includes('Open'), `${T}: the agent's ⋯ menu holds Stop (no red Kill in the title bar) — ${its.join(', ')}`);
+        await page.keyboard.press('Escape');
+        await sleep(400);
       }
     }
     if (key === 'library') {
@@ -545,6 +559,194 @@ async function glChecks(browser) {
   await page.context().close();
 }
 
+// ---- v5.1 (task 0486): the Library's one search field + Filter menu, and the
+// things an Apple app does without being asked ---------------------------------------
+async function uxChecks(browser, tag) {
+  console.log(`v5.1 UX: ${tag}`);
+  const T = `ux ${tag}`;
+  const page = await newPage(browser, tag);
+  const lib = '[data-page="library"][data-top="true"]';
+  await page.locator('[data-tab="library"]').first().click();
+  await sleep(1100);
+
+  // the toolbar is one search field — no tag, company or status chips on show
+  const bar = await page.evaluate((sel) => {
+    const root = document.querySelector(sel);
+    const text = root?.querySelector('header')?.innerText || '';
+    return { tags: /#bulk|#roblox|#mandate/.test(text), cos: root?.querySelectorAll('[data-co]').length || 0, selects: root?.querySelectorAll('header select').length || 0, search: root?.querySelectorAll('[data-library-search]').length || 0, menu: root?.querySelectorAll('[data-filter-menu]').length || 0 };
+  }, lib);
+  ok(bar.search === 1 && !bar.tags && !bar.cos && !bar.selects, `${T}: the Library leads with one search field — no tag/company/status chips (${JSON.stringify(bar)})`);
+  ok(!bar.menu && !(await page.locator('[data-filter-menu]').count()), `${T}: the Filter menu is hidden by default`);
+  const row = await page.locator(`${lib} [data-doc]`).first().innerText();
+  ok(!/words|by you|by an agent|#bulk/.test(row), `${T}: a row shows only useful info (${JSON.stringify(row.replace(/\n/g, ' | '))})`);
+  ok((await page.locator(`${lib} [data-library-section]`).count()) >= 1, `${T}: newest first, in date sections`);
+
+  // Filter: a glass pull-down (iPad) / a sheet (phone), with every tag inside
+  await page.locator(`${lib} [data-filter-button]`).click();
+  await sleep(700);
+  ok((await page.locator('[data-filter-menu]').count()) === 1, `${T}: Filter opens the menu`);
+  const isSheet = (await page.locator('[role="dialog"] [data-filter-menu]').count()) === 1;
+  ok(tag === 'phone' ? isSheet : !isSheet, `${T}: the menu is ${tag === 'phone' ? 'a sheet on a phone' : 'a pull-down on an iPad'}`);
+  const g = await glassAudit(page);
+  ok(!g.problems.length, `${T}: the Filter menu is glass ${g.problems.slice(0, 2).join(' | ')}`);
+  ok((await page.locator('[data-filter="tag"]').count()) >= 2, `${T}: tags live in the menu`);
+  ok((await page.locator('[data-filter="co"]').count()) >= 2, `${T}: companies live in the menu`);
+  ok((await page.locator('[data-filter="status"][data-value="done"]').count()) === 1, `${T}: status lives in the menu`);
+  await shot(page, `${tag}-ux-01-filter-menu`);
+  ok((await page.locator('[data-filter="tag"]').count()) <= 7, `${T}: only the most used tags show until you ask for all of them`);
+  await page.locator('[data-all-tags]').click().catch(() => {});
+  await sleep(300);
+  await page.locator('[data-filter="tag"][data-value="roblox"]').scrollIntoViewIfNeeded().catch(() => {});
+  await page.locator('[data-filter="tag"][data-value="roblox"]').click();
+  await sleep(400);
+  await page.locator('[data-filter-done]').click();
+  await sleep(700);
+  ok((await page.locator('[data-filter-menu]').count()) === 0, `${T}: Done closes the menu`);
+  const ids = await page.locator(`${lib} [data-doc]`).evaluateAll((els) => els.map((e) => e.dataset.doc));
+  ok(ids.length === 1 && ids[0] === 'crystal-retention.md', `${T}: #roblox leaves just its document (${ids.join(', ')})`);
+  ok((await page.locator(`${lib} [data-filter-token="tag"]`).count()) === 1 && (await page.locator(`${lib} [data-filter-button][data-active="1"]`).count()) === 1, `${T}: the active filter shows as a token and on the button`);
+  await shot(page, `${tag}-ux-02-filtered`);
+  // remembered on this device — and a cold launch (no #hash) resumes the place
+  await page.goto(`${BASE}/v5?token=${TOKEN}&bg=01`);
+  await page.waitForSelector('[data-v5-shell]');
+  await sleep(1600);
+  ok((await page.locator(`${lib} [data-filter-token="tag"]`).count()) === 1, `${T}: the filter is remembered after a reload`);
+  ok((await top(page)) === 'library', `${T}: a cold launch soon after comes back to the Library`);
+  await page.locator(`${lib} [data-filter-token="tag"]`).click();
+  await sleep(600);
+  ok((await page.locator(`${lib} [data-filter-token]`).count()) === 0 && (await page.locator(`${lib} [data-doc]`).count()) > 5, `${T}: tapping the token clears it`);
+
+  // empty state with a way out
+  await libSearch(page, 'zzzz-nothing-like-this');
+  await sleep(900);
+  ok((await page.locator(`${lib}`).innerText()).includes('No results for'), `${T}: a search with no hits says so`);
+  await libSearch(page, '');
+
+  // long-press / right-click: what you can do to a document
+  const first = page.locator(`${lib} [data-doc]`).first();
+  await first.click({ button: 'right' });
+  await sleep(600);
+  const items = await page.locator('[data-context-menu] [data-menu-item]').evaluateAll((els) => els.map((e) => e.dataset.menuItem));
+  ok(items.includes('Open') && items.includes('Ask Mia about it') && items.includes('Archive') && items[items.length - 1] === 'Delete', `${T}: a document's context menu (${items.join(', ')})`);
+  await shot(page, `${tag}-ux-03-context-menu`);
+  await page.keyboard.press('Escape');
+  await sleep(500);
+  ok((await page.locator('[data-context-menu]').count()) === 0, `${T}: Esc closes the context menu`);
+  ok((await top(page)) === 'library', `${T}: …without leaving the Library`);
+
+  // swipe a row left: Ask Mia · Archive
+  const box = await first.boundingBox();
+  await page.mouse.move(box.x + box.width - 30, box.y + box.height / 2);
+  await page.mouse.down();
+  for (let i = 1; i <= 10; i++) await page.mouse.move(box.x + box.width - 30 - i * 15, box.y + box.height / 2 + 1);
+  await page.mouse.up();
+  await sleep(500);
+  const shown = await page.locator(`${lib} [data-swipe-row] [data-swipe-action="archive"]`).first().evaluate((e) => e.getBoundingClientRect().width);
+  ok(shown > 40, `${T}: swiping a row left reveals Ask Mia and Archive (${Math.round(shown)}px)`);
+  await shot(page, `${tag}-ux-04-swipe`);
+  await sleep(200);
+  await first.click();
+  await sleep(500);
+  ok((await top(page)) === 'library', `${T}: a tap on an open row closes it (doesn't open the doc)`);
+
+  // pull to refresh (a real touch drag)
+  if (tag === 'phone') {
+    await page.locator('[data-tab="fleet"]').first().click();
+    await sleep(900);
+    const cdp = await page.context().newCDPSession(page);
+    const pt = (y) => [{ x: 195, y }];
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: pt(260) });
+    for (let y = 270; y <= 520; y += 25) {
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: pt(y) });
+      await sleep(16);
+    }
+    const pulled = await page.locator('[data-ptr]').getAttribute('data-ptr').catch(() => null);
+    await shot(page, `${tag}-ux-05-pull-to-refresh`);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await sleep(150);
+    const busy = await page.locator('[data-ptr]').getAttribute('data-ptr').catch(() => null);
+    ok(pulled === 'armed' && (busy === 'busy' || busy === 'done' || busy === 'same'), `${T}: pull to refresh on Fleet (${pulled} → ${busy})`);
+    await until(async () => !(await page.locator('[data-ptr]').count()), 4000).catch(() => {});
+    ok((await page.locator('[data-ptr]').count()) === 0, `${T}: …and it settles back`);
+  }
+
+  // iPad keyboard: ⌘ shortcuts and the hold-⌘ list
+  if (tag !== 'phone') {
+    await page.keyboard.press('Meta+3');
+    await sleep(800);
+    ok((await top(page)) === 'agents', `${T}: ⌘3 opens Fleet`);
+    await page.keyboard.press('Meta+4');
+    await sleep(800);
+    await page.keyboard.press('Meta+f');
+    await sleep(300);
+    ok(await page.evaluate(() => document.activeElement?.matches('[data-library-search]')), `${T}: ⌘F finds in the Library`);
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => document.activeElement?.blur());
+    await page.keyboard.press('Meta+i');
+    await sleep(900);
+    ok((await top(page)) === 'insights', `${T}: ⌘I opens Insights`);
+    await page.keyboard.press('Meta+/');
+    await sleep(500);
+    ok((await page.locator('[data-shortcuts]').count()) === 1, `${T}: ⌘/ lists the shortcuts`);
+    await shot(page, `${tag}-ux-06-shortcuts`);
+    await page.keyboard.press('Meta+/');
+    await sleep(400);
+  }
+  flush(page, T);
+  await page.context().close();
+}
+
+// Daniel (on v4): "whenever I scroll, the liquid glass lags behind the text".
+// While a page scrolls, no pane inside it is drawn by the shader (its CSS glass
+// moves with the text in the compositor's frame); at rest the shader has it back.
+async function scrollSyncChecks(browser) {
+  console.log('Glass follows the scroll (task 0486)');
+  const page = await newPage(browser, 'phone');
+  await sleep(1800);
+  const mode = await page.evaluate(() => document.documentElement.dataset.lensmode);
+  ok(mode === 'gl', `scroll: the shader is on (${mode})`);
+  const rest0 = await page.evaluate(() => document.querySelectorAll('.v5-home .lens-live').length);
+  ok(rest0 >= 1, `scroll: at rest, Home's cards are shader glass (${rest0})`);
+  // scroll Home with the wheel for ~40 frames, sampling every frame
+  const res = await page.evaluate(async () => {
+    const el = document.querySelector('.v5-home');
+    let bad = 0;
+    let frames = 0;
+    let gated = 0;
+    const lag = [];
+    for (let i = 0; i < 40; i++) {
+      el.dispatchEvent(new WheelEvent('wheel', { deltaY: 18, bubbles: true }));
+      el.scrollTop += i < 20 ? 18 : -18;
+      await new Promise((r) => requestAnimationFrame(r));
+      frames++;
+      // after the first frame, nothing inside the scroller may be shader glass
+      if (i > 0 && document.querySelectorAll('.v5-home .lens-live').length) bad++;
+      if (window.__lensScrolled > 0) gated++;
+      lag.push(window.__lensScrolled || 0);
+    }
+    return { bad, frames, gated };
+  });
+  ok(res.bad === 0 && res.gated >= res.frames - 2, `scroll: while scrolling, Home's cards show CSS glass, never a lagging shader pane (${JSON.stringify(res)})`);
+  await sleep(700);
+  const rest1 = await page.evaluate(() => document.querySelectorAll('.v5-home .lens-live').length);
+  ok(rest1 >= 1, `scroll: once still, the shader takes them back (${rest1})`);
+  // the window itself (it doesn't scroll) stays shader glass throughout
+  await go(page, 'library', 1300);
+  const win = await page.evaluate(async () => {
+    const s = document.querySelector('[data-page="library"][data-top="true"] .v-scroll');
+    let off = 0;
+    for (let i = 0; i < 20; i++) {
+      s.scrollTop += 30;
+      await new Promise((r) => requestAnimationFrame(r));
+      if (!document.querySelector('[data-page="library"][data-top="true"] .v5-win.lens-live')) off++;
+    }
+    return off;
+  });
+  ok(win === 0, `scroll: a window stays refracting glass while its content scrolls (${win} frames off)`);
+  flush(page, 'scroll');
+  await page.context().close();
+}
+
 async function componentChecks() {
   console.log('No v1 components');
   const v1html = await (await fetch(`${BASE}/?ui=v1`)).text();
@@ -588,6 +790,8 @@ async function main() {
   }
   await liteChecks(browser);
   await glChecks(browser);
+  for (const tag of ['phone', 'ipad-land']) if (!process.env.ONLY || only.includes(tag)) await uxChecks(browser, tag);
+  await scrollSyncChecks(browser);
   await browser.close();
   await componentChecks();
   const errs = [...new Set(allErrors)];

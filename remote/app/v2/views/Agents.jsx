@@ -4,7 +4,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useMC, agentStatus, agentName, fmtInt, groupFleets, fleetMembers, fleetProgress, sparkOf, isMiaAgent, statusLabel, counts } from '../../src/lib/store.js';
 import { useUsage, liveWindows, levelOf, fmtReset } from '../../src/lib/usage.js';
 import Sparkline from '../../src/ui/Sparkline.jsx';
-import { openSheet, openOverlay } from '../lib/nav.js';
+import { openSheet, openOverlay, push } from '../lib/nav.js';
 import { zoomTo } from '../lib/zoom.js';
 import { usePrefs } from '../lib/prefs.js';
 import { spring } from '../lib/motion.js';
@@ -83,6 +83,40 @@ const AgentCard = memo(function AgentCard({ a, grid, at }) {
   );
 });
 
+// v5.1 (task 0486): Fleet shows usage as one quiet row — the window
+// that's closest to its limit — and the full breakdown lives in Insights.
+function UsageRow() {
+  const now = useMC((s) => s.now);
+  const usage = useUsage((s) => s.usage);
+  const ws = liveWindows(usage, now || Date.now());
+  if (!ws.length) return null;
+  const w = [...ws].sort((a, b) => b.pct - a.pct)[0];
+  const lv = levelOf(w.pct);
+  const c = lv === 'crit' ? 'bg-crit' : lv === 'warn' ? 'bg-warn' : 'bg-accent';
+  return (
+    <motion.button
+      whileTap={{ scale: 0.985 }}
+      onClick={() => push('insights', {})}
+      className="v-card flex w-full items-center gap-3 px-4 py-3 text-left"
+      data-usage
+      data-usage-window={w.key}
+      data-level={lv}
+    >
+      <span className="min-w-0 flex-1">
+        <span className="flex items-baseline gap-2 text-[0.84rem]">
+          <span className="font-semibold text-ink2">Claude usage · {w.label}</span>
+          <span className={`v-num ml-auto font-bold ${lv === 'ok' ? 'text-ink' : lv === 'warn' ? 'text-warn' : 'text-crit'}`}>{Math.round(w.pct)}%</span>
+        </span>
+        <span className="mt-1.5 block h-1.5 overflow-hidden rounded-full bg-fill2">
+          <motion.span className={`block h-full rounded-full ${c}`} initial={false} animate={{ width: `${Math.min(100, w.pct)}%` }} transition={spring.gentle} />
+        </span>
+        <span className="mt-1 block truncate text-[0.72rem] text-ink3">{w.reset ? 'reset since the last reading' : fmtReset(w.resetsAt, now || Date.now())}</span>
+      </span>
+      <Icon name="chevronRight" size={16} className="flex-none text-ink3" />
+    </motion.button>
+  );
+}
+
 function Usage() {
   const now = useMC((s) => s.now);
   const usage = useUsage((s) => s.usage);
@@ -113,7 +147,7 @@ function Usage() {
   );
 }
 
-export default function Agents() {
+export default function Agents({ v5 = false }) {
   const { agents, fleetList, at } = useMC(useShallow((s) => ({ agents: s.agents, fleetList: s.fleets, at: s.lastSnapshotAt })));
   const wide = useWide(700);
   const [q, setQ] = useState('');
@@ -149,18 +183,18 @@ export default function Agents() {
 
   return (
     <Page
-      title="Agents"
+      title={v5 ? 'Fleet' : 'Agents'}
       subtitle={agents.length ? `${c.working} working${waiting ? ` · ${waiting} need${waiting === 1 ? 's' : ''} you` : ''} · ${agents.length} total` : 'No agents running'}
       actions={
         <>
-          <IconBtn icon="terminal" label="Terminal console" tone="ghost" onClick={() => openOverlay('console', { id: null })} />
+          <IconBtn icon="terminal" label="All terminals" tone="ghost" onClick={() => openOverlay('console', { id: null })} data-all-terminals />
           <IconBtn icon="plus" label="Launch" tone="primary" onClick={() => openSheet('launch')} data-agents-launch />
         </>
       }
       toolbar={agents.length > 6 ? <SearchField value={q} onChange={setQ} placeholder="Search agents" /> : null}
     >
       <div className="flex flex-col gap-6" data-agents>
-        <Usage />
+        {v5 ? <UsageRow /> : <Usage />}
         {!fleets.length && !singles.length ? (
           <Empty
             icon="agents"

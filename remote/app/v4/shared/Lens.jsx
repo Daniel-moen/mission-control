@@ -8,6 +8,7 @@ import { useQuality } from '../../v3/shared/quality.js';
 import { createScene, typeCanvas, MAX, PANES, AMBER, NO } from './lens.js';
 import { useTheme } from './theme.js';
 import { useRoute } from './route.js';
+import { installScrollSync, scrollGate } from '../../v2/lens/scrollsync.js';
 
 // v4 (task 0448): Lens's scene under every v4 direction (see lens.js). Mounted
 // once per direction, under everything. Per moment it decides:
@@ -149,6 +150,7 @@ export default function Scene() {
     const glow = { t: 0 };
     const type = { key: '', a: 0, ox: 0, oy: 0 };
     let live = new Set();
+    installScrollSync();
     s.setFrame((t, dt) => {
       const fr = Math.min(4, Math.max(0.25, dt / 16.7));
       const H = innerHeight;
@@ -162,7 +164,8 @@ export default function Scene() {
         if (el.__lensNo) continue;
         const r = el.getBoundingClientRect();
         if (r.bottom < -30 || r.top > H + 30 || r.right < -30 || r.left > W + 30 || r.width < 8 || r.height < 8) continue;
-        const op = opacityOf(el);
+        const f = scrollGate(el, t, dt);
+        const op = opacityOf(el) * f;
         if (op < 0.02) continue;
         dyn[n * 4 + 2] = op;
         rects[n * 4] = r.left;
@@ -191,7 +194,7 @@ export default function Scene() {
         dyn[n * 4] = v.vx;
         dyn[n * 4 + 1] = v.vy;
         dyn[n * 4 + 3] = v.vs;
-        now.add(el);
+        if (f >= 0.5) now.add(el); // scrolling: its CSS glass shows (scrollsync.js)
         n++;
       }
       for (const el of live) if (!now.has(el)) (el.classList.remove('lens-live'), delete el.__lensV);

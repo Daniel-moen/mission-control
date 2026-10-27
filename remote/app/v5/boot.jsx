@@ -24,6 +24,7 @@ root.classList.remove('v2');
 root.classList.add('v5');
 root.dataset.ui = 'v5';
 navOpts.taskPage = true;
+navOpts.placeRoots = new Set(['hq']); // v5.1: HQ is a tab (task 0486)
 initPages();
 initBackdrop();
 hydrateFromCache();

@@ -17,7 +17,8 @@ import { Toast, ConnPill, Gate } from '../v2/shell/Chrome.jsx';
 import { warmPages } from '../v2/shell/pages.js';
 import { sheetOpen } from '../v2/ui/Sheet.jsx';
 import Boundary from '../v2/ui/Boundary.jsx';
-import { TopBar, Dock, place } from './Chrome.jsx';
+import { TopBar, Dock, place, goSettings } from './Chrome.jsx';
+import { PullToRefresh, ContextMenus, ShortcutsHUD, useRemembered, refreshNow } from './ux.jsx';
 
 // v5's root (task 0483): Mission Control's ORIGINAL structure — v1's — in
 // v4's Lens glass. The photograph is the room and Home is its resting state
@@ -91,9 +92,9 @@ function useKeyboardUp() {
 }
 
 // Which dock button is lit: the place you're in.
+// HQ is a tab that opens over Home (Insights and Settings are Home's pages).
 function activeOf(s) {
-  const top = topOf(s);
-  if (top.name === 'insights' || top.name === 'hq') return top.name;
+  if (s.tab === 'home' && s.stacks.home[1]?.name === 'hq') return 'hq';
   if (s.tab === 'agents') return 'fleet';
   return s.tab;
 }
@@ -116,6 +117,7 @@ export default function App() {
   }, [viewer]);
   const [diag, setDiag] = useState(location.hash === '#diag');
   useUsageSync();
+  useRemembered();
 
   // ---- address bar ⇄ navigation (v1's hashes) ---------------------------------
   useEffect(() => {
@@ -214,12 +216,37 @@ export default function App() {
       const el = document.activeElement;
       return el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable);
     };
+    // the field to find in: the top page's search box (Library, Fleet), else Search
+    const findField = () => {
+      const tops = [...document.querySelectorAll('[data-page][data-top="true"]')].filter((el) => el.getClientRects().length);
+      return tops.pop()?.querySelector('input[type="search"], input[placeholder^="Search"]') || null;
+    };
     const onKey = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      const cmd = e.metaKey || e.ctrlKey;
+      const k = e.key.toLowerCase();
+      if (cmd && k === 'k') {
         e.preventDefault();
         if (useNav.getState().sheet?.name === 'search') closeSheet();
         else openSheet('search');
         return;
+      }
+      // iPadOS conventions (task 0486): ⌘1–5 the tabs, ⌘[ back, ⌘F find,
+      // ⌘N new, ⌘L launch, ⌘R refresh, ⌘, settings, ⌘I insights
+      if (cmd && !e.altKey && !e.shiftKey) {
+        const tabKey = { 1: 'home', 2: 'mia', 3: 'fleet', 4: 'library', 5: 'hq' }[e.key];
+        const find = () => {
+          const f = findField();
+          if (f) (f.focus(), f.select());
+          else openSheet('search');
+        };
+        const acts = { '[': () => pop() || (useNav.getState().tab !== 'home' && goView('home')), f: find, n: () => openSheet('newdoc'), l: () => openSheet('launch'), r: () => refreshNow(), ',': () => goSettings(), i: () => place('insights') };
+        const act = tabKey ? () => place(tabKey) : acts[k];
+        if (act) {
+          if (typing() && (k === 'f' || k === 'r' || k === '[')) return; // the field's own find/undo
+          e.preventDefault();
+          act();
+          return;
+        }
       }
       if (e.key === 'Escape') {
         if (sheetOpen()) return; // the sheet closes itself
@@ -232,6 +259,7 @@ export default function App() {
         return;
       }
       if (typing() || e.metaKey || e.ctrlKey || e.altKey) return;
+      // v1's single keys, kept for its muscle memory
       const jump = { 1: 'home', 2: 'fleet', 3: 'insights', 4: 'library', 5: 'mia', 6: 'hq', 7: 'channels' }[e.key];
       if (jump) {
         e.preventDefault();
@@ -253,10 +281,11 @@ export default function App() {
     const r = document.documentElement.style;
     r.setProperty('--win-top', topBar ? 'calc(env(safe-area-inset-top) + 62px)' : `calc(env(safe-area-inset-top) + ${wide ? 14 : 6}px)`);
     r.setProperty('--win-x', wide ? '16px' : '6px');
-    r.setProperty(
-      '--win-bottom',
-      dock === 'full' ? 'calc(env(safe-area-inset-bottom) + 80px)' : dock === 'compact' ? 'calc(env(safe-area-inset-bottom) + 62px)' : `max(${wide ? 14 : 6}px, env(safe-area-inset-bottom))`,
-    );
+    // v5.1 (task 0486): a window runs to the bottom edge and its content
+    // scrolls on under the floating tab bar (iOS 26), instead of stopping
+    // short of it on a band of photo.
+    r.setProperty('--win-bottom', `max(${wide ? 14 : 6}px, env(safe-area-inset-bottom))`);
+    r.setProperty('--win-pad-bottom', dock === 'full' ? `calc(${wide ? 72 : 84}px + max(0px, env(safe-area-inset-bottom) - 6px))` : dock === 'compact' ? 'calc(58px + env(safe-area-inset-bottom))' : '18px');
     r.setProperty('--home-bottom', 'calc(env(safe-area-inset-bottom) + 96px)');
     // v2's pages pad for its tab bar with this; inside a v5 window it's local (v5.css)
     r.setProperty('--tabbar-space', 'calc(env(safe-area-inset-bottom) + 84px)');
@@ -304,6 +333,9 @@ export default function App() {
           <Overlays />
         </Boundary>
         <TalkHost />
+        <PullToRefresh />
+        <ContextMenus />
+        <ShortcutsHUD />
         {lightbox && (
           <Suspense fallback={null}>
             <Lightbox />

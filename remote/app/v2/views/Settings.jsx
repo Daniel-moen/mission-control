@@ -76,10 +76,10 @@ function Appearance() {
       <Row icon="eye" label="Theme">
         <Segmented size="sm" value={theme} onChange={setTheme} options={[{ value: 'system', label: 'Auto' }, { value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }]} />
       </Row>
-      <Row icon="sparkles" label="Motion" hint={motion === 'reduce' ? 'Fades only — nothing slides or zooms.' : 'Follows the system’s Reduce Motion.'}>
+      <Row icon="play" label="Motion" hint={motion === 'reduce' ? 'Fades only — nothing slides or zooms.' : 'Follows the system’s Reduce Motion.'}>
         <Segmented size="sm" value={motion} onChange={setMotionPref} options={[{ value: 'system', label: 'Full' }, { value: 'reduce', label: 'Reduced' }]} />
       </Row>
-      <Row icon="sparkles" label="Glass" hint={glass === 'lite' ? 'Lite: frosted, no live refraction — easiest on the battery.' : glass === 'full' ? 'Full: live refracting glass, always.' : 'Auto: full glass; lite on Reduce Motion or low power.'}>
+      <Row icon="eye" label="Glass" hint={glass === 'lite' ? 'Lite: frosted, no live refraction — easiest on the battery.' : glass === 'full' ? 'Full: live refracting glass, always.' : 'Auto: full glass; lite on Reduce Motion or low power.'}>
         <Segmented size="sm" value={glass} onChange={setGlass} options={[{ value: 'auto', label: 'Auto' }, { value: 'full', label: 'Full' }, { value: 'lite', label: 'Lite' }]} data-glass-pref />
       </Row>
       <Row icon="undo" label="Interface" hint={ui === 'v5' ? 'v5: the classic layout in Lens glass — switch any time.' : 'New (Lens) — switch back any time.'} last>

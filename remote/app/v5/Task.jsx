@@ -1,6 +1,7 @@
 import { useShallow } from 'zustand/react/shallow';
 import { motion } from 'motion/react';
-import { useMC, miaTaskCancel, miaTaskSet, agentName, agentStatus } from '../src/lib/store.js';
+import { useMC, miaTaskCancel, miaTaskSet, agentName, agentStatus, miaOpenQuestions } from '../src/lib/store.js';
+import { QuestionCard } from '../v2/views/parts/Needs.jsx';
 import { push, pop } from '../v2/lib/nav.js';
 import { tap } from '../v2/lib/motion.js';
 import { Dot, Empty, Group, Icon, Row, Select, useArm } from '../v2/ui/kit.jsx';
@@ -30,7 +31,7 @@ const when = (at) => (ms(at) ? new Date(ms(at)).toLocaleString([], { weekday: 's
 const clock = (at) => (ms(at) ? new Date(ms(at)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '');
 
 export default function Task({ params }) {
-  const { t, agents } = useMC(useShallow((s) => ({ t: (s.mia?.tasks || []).find((x) => x.id === params.id) || null, agents: s.agents })));
+  const { t, agents, mia, miaLocal } = useMC(useShallow((s) => ({ t: (s.mia?.tasks || []).find((x) => x.id === params.id) || null, agents: s.agents, mia: s.mia, miaLocal: s.miaLocal })));
   const [armed, fire] = useArm();
   if (!t)
     return (
@@ -45,6 +46,9 @@ export default function Task({ params }) {
   const questions = Array.isArray(t.questions) ? t.questions : [];
   const log = Array.isArray(t.log) ? t.log : [];
   const prio = Number(t.priority) || 3;
+  // v5.1 (task 0486): a question waiting on Daniel is answered right here,
+  // not a dead end that says "Waiting on you" with nothing to press
+  const open = miaOpenQuestions(mia, miaLocal).filter((q) => String(q.taskId || '') === String(t.id));
 
   return (
     <Page title={t.title || 'Untitled task'} subtitle={null} maxW={860}>
@@ -91,12 +95,21 @@ export default function Task({ params }) {
           </section>
         )}
 
+        {open.length > 0 && (
+          <section className="flex flex-col gap-3" data-task-asks>
+            <div className="v-eyebrow px-1 text-warn">Waiting on you</div>
+            {open.map((q) => (
+              <QuestionCard key={q.questionId} q={q} />
+            ))}
+          </section>
+        )}
+
         {questions.length > 0 && (
           <Group title="Questions">
             {questions.map((q, i) => (
               <div key={q.id || i} className={`px-4 py-3 ${i < questions.length - 1 ? 'v-hair-b' : ''}`}>
                 <div className="text-[0.94rem] text-ink">{q.text}</div>
-                <div className={`mt-1 text-[0.84rem] ${q.answer != null ? 'text-ink2' : 'text-warn'}`}>{q.answer != null ? `→ ${q.answer}` : 'Waiting on you'}</div>
+                <div className={`mt-1 text-[0.84rem] ${q.answer != null ? 'text-ink2' : 'text-warn'}`}>{q.answer != null ? `→ ${q.answer}` : 'Not answered yet'}</div>
               </div>
             ))}
           </Group>

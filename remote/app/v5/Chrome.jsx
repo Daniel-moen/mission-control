@@ -7,7 +7,8 @@ import { spring, tap } from '../v2/lib/motion.js';
 import { Icon } from '../v2/ui/kit.jsx';
 import { startVoice } from '../v2/shell/TalkHost.jsx';
 
-// v5's chrome (task 0483) — v1's two pieces, in Lens glass:
+// v5's chrome (task 0483; v5.1 0486: five tabs + the mic beside them, one
+// status pill, the tools in one capsule) — v1's two pieces, in Lens glass:
 //   • the top bar: time and date on the left; on the right Claude usage
 //     (past 80%), the link, Search, Launch, Settings. Nothing else.
 //   • the dock — an iOS tab bar: Home · Mia · Fleet · Library · Insights · HQ,
@@ -39,7 +40,7 @@ function Clock({ now }) {
 
 function Btn({ icon, label, onClick, ...rest }) {
   return (
-    <motion.button {...tap} onClick={onClick} aria-label={label} title={label} className="v5-chip grid h-9 w-9 flex-none place-items-center rounded-full text-ink" {...rest}>
+    <motion.button {...tap} onClick={onClick} aria-label={label} title={label} className="grid h-9 w-10 flex-none place-items-center rounded-full text-ink hover:bg-fill" {...rest}>
       <Icon name={icon} size={17} />
     </motion.button>
   );
@@ -53,41 +54,44 @@ export function TopBar() {
   const l = LINK[link] || LINK.offline;
   const worst = worstWindow(usage, now || Date.now());
   const lvl = worst ? levelOf(worst.pct) : 'ok';
+  const hot = worst && lvl !== 'ok';
   const age = link !== 'linked' ? dataAge() : null;
   const via = http ? `${l.label} · over HTTP (WebSocket blocked on this network)` : l.label;
+  // v5.1 (task 0486): one status pill — the link, and Claude usage only when
+  // it's high (tap: reconnect when you're not live, else Insights) — and the
+  // three tools in one capsule.
   return (
     <header className="v5-topbar fixed inset-x-0 top-0 z-30 flex items-center gap-3 px-4 sm:px-6" data-topbar style={{ paddingTop: 'calc(env(safe-area-inset-top) + 10px)' }}>
       <div className="max-sm:hidden">
         <Clock now={now} />
       </div>
-      <div className="ml-auto flex flex-none items-center gap-1.5">
-        {worst && lvl !== 'ok' && (
-          <motion.button
-            {...tap}
-            onClick={() => place('insights')}
-            className={`v5-chip flex h-9 items-center gap-1.5 rounded-full px-3 text-[0.78rem] font-semibold ${lvl === 'crit' ? 'text-crit' : 'text-warn'}`}
-            title={`${worst.label}: ${Math.round(worst.pct)}% used`}
-            data-usage-pill
-          >
-            <Icon name="gauge" size={15} />
-            <span className="v-num">{Math.round(worst.pct)}%</span>
-          </motion.button>
-        )}
+      <div className="flex flex-none items-center gap-1.5 sm:ml-auto">
         <motion.button
           {...tap}
-          onClick={() => link !== 'linked' && reconnectNow()}
-          title={age != null ? `Last data ${age}s ago` : via}
-          aria-label={via}
-          className="v5-chip flex h-9 items-center gap-1.5 rounded-full px-3 text-[0.78rem] font-semibold text-ink"
+          onClick={() => (link !== 'linked' ? reconnectNow() : place('insights'))}
+          title={[age != null ? `Last data ${age}s ago` : via, hot ? `${worst.label}: ${Math.round(worst.pct)}% used` : ''].filter(Boolean).join(' · ')}
+          aria-label={[via, hot ? `Claude usage ${Math.round(worst.pct)}%` : ''].filter(Boolean).join(', ')}
+          className="v5-chip flex h-9 items-center gap-2 rounded-full px-3 text-[0.78rem] font-semibold text-ink"
           data-link={link}
+          data-status-pill
         >
-          <span className={`h-1.5 w-1.5 rounded-full ${l.dot} ${link === 'linked' ? '' : 'v-breathe'}`} />
-          <span className="hidden sm:inline">{l.label}</span>
+          <span className={`h-2 w-2 rounded-full ${l.dot} ${link === 'linked' ? '' : 'v-breathe'}`} />
+          <span className={hot ? 'hidden md:inline' : 'max-[380px]:hidden'}>{l.label}</span>
           {http && <span className="text-[0.62rem] tracking-[0.08em] text-ink3">HTTP</span>}
+          {hot && (
+            <span className={`flex items-center gap-1 ${lvl === 'crit' ? 'text-crit' : 'text-warn'}`} data-usage-pill>
+              <Icon name="gauge" size={14} />
+              <span className="v-num">{Math.round(worst.pct)}%</span>
+            </span>
+          )}
         </motion.button>
-        <Btn icon="search" label="Search — ⌘K" onClick={() => openSheet('search')} data-top-search />
-        <Btn icon="launch" label="Launch an agent" onClick={() => openSheet('launch')} data-top-launch />
-        <Btn icon="settings" label="Settings" onClick={() => goSettings()} data-open-settings />
+      </div>
+      <div className="ml-auto flex flex-none items-center gap-1.5 sm:ml-0">
+        <div className="v5-chip flex items-center rounded-full" data-top-group>
+          <Btn icon="search" label="Search — ⌘K" onClick={() => openSheet('search')} data-top-search />
+          <Btn icon="launch" label="Launch an agent — ⌘L" onClick={() => openSheet('launch')} data-top-launch />
+          <Btn icon="settings" label="Settings — ⌘," onClick={() => goSettings()} data-open-settings />
+        </div>
       </div>
     </header>
   );
@@ -105,14 +109,14 @@ export function place(key) {
 }
 export const goSettings = () => place('settings');
 
-// v1's six places, in the order Apple would put them (task 0484): Home
-// first, then what you use most. Every tab is labelled, as in an iOS tab bar.
+// Five tabs, as Apple caps an iPhone tab bar (task 0486): Home first, then
+// what you use most. Insights is a page of Home now — its figures open it,
+// as do Fleet's usage row, the status pill and ⌘I. Every tab is labelled.
 const ITEMS = [
   { key: 'home', label: 'Home', icon: 'sparkles' },
   { key: 'mia', label: 'Mia', icon: 'mia' },
   { key: 'fleet', label: 'Fleet', icon: 'agents' },
   { key: 'library', label: 'Library', icon: 'library' },
-  { key: 'insights', label: 'Insights', icon: 'overview' },
   { key: 'hq', label: 'HQ', icon: 'hq' },
 ];
 
@@ -149,7 +153,7 @@ export function Dock({ mode = 'full', active = 'home', wide = false }) {
                     aria-current={on ? 'page' : undefined}
                     data-tab={it.key}
                     className={`relative flex items-center justify-center rounded-full font-semibold transition-colors ${
-                      slim ? 'h-9 w-10' : wide ? 'h-11 gap-2 px-4 text-[0.84rem]' : 'h-[52px] w-[50px] flex-col gap-[3px] max-[379px]:w-[46px]'
+                      slim ? 'h-9 w-11' : wide ? 'h-11 gap-2 px-5 text-[0.84rem]' : 'h-[50px] w-[58px] flex-col gap-[3px] max-[379px]:w-[52px]'
                     } ${on ? 'v5-tab-on' : 'text-ink2 hover:text-ink'}`}
                   >
                     {on && <motion.span layoutId="v5-dock-pill" transition={spring.snappy} className="v5-dock-pill absolute inset-0 rounded-full" />}
@@ -168,17 +172,18 @@ export function Dock({ mode = 'full', active = 'home', wide = false }) {
                   </motion.button>
                 );
               })}
-              <span className="mx-1 h-6 w-px flex-none bg-hair2" />
-              <motion.button
-                {...tap}
-                onClick={() => startVoice()}
-                aria-label={talkOn ? 'Back to the conversation' : 'Talk to Mia'}
-                data-tab-talk
-                className={`grid flex-none place-items-center rounded-full ${slim ? 'h-9 w-9' : wide ? 'h-11 w-11' : 'h-12 w-12'} ${talkOn ? 'bg-accent text-accent-ink' : 'bg-ink text-page'}`}
-              >
-                <Icon name="mic" size={slim ? 17 : 20} strokeWidth={2} />
-              </motion.button>
             </nav>
+            {/* the mic: its own glass circle beside the bar (iOS 26's tab-bar accessory) */}
+            <motion.button
+              {...tap}
+              onClick={() => startVoice()}
+              aria-label={talkOn ? 'Back to the conversation' : 'Talk to Mia'}
+              title="Talk to Mia"
+              data-tab-talk
+              className={`v5-dock pointer-events-auto ml-2 grid flex-none place-items-center rounded-full ${slim ? 'h-11 w-11' : wide ? 'h-[58px] w-[58px]' : 'h-[62px] w-[62px]'} ${talkOn ? 'v5-mic-on' : 'text-ink'}`}
+            >
+              <Icon name="mic" size={slim ? 18 : 22} strokeWidth={2} />
+            </motion.button>
           </LayoutGroup>
         </motion.div>
       )}

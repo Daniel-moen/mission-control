@@ -14,7 +14,7 @@ function framed(name, Page) {
       return createElement(
         'div',
         { className: 'v5-win-slot', 'data-win-slot': name },
-        createElement('div', { className: 'v5-win', 'data-win': name }, createElement(Page, props)),
+        createElement('div', { className: 'v5-win', 'data-win': name }, createElement(Page, { ...props, v5: true })),
       );
     };
   }
@@ -28,7 +28,7 @@ export function initPages() {
     mia: win('mia', () => import('../v2/views/Mia.jsx')),
     agents: win('agents', () => import('../v2/views/Agents.jsx')),
     agent: win('agent', () => import('../v2/views/Agent.jsx')),
-    library: win('library', () => import('../v2/views/Library.jsx')),
+    library: win('library', () => import('./Library.jsx')),
     doc: win('doc', () => import('../v2/views/Doc.jsx')),
     insights: win('insights', () => import('../v2/views/Insights.jsx')),
     settings: win('settings', () => import('../v2/views/Settings.jsx')),

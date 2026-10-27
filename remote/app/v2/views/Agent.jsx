@@ -80,7 +80,7 @@ function Stat({ label, children, sub, className = '' }) {
   );
 }
 
-export default function Agent({ params }) {
+export default function Agent({ params, v5 = false }) {
   const id = params.id;
   const a = useMC((s) => s.agents.find((x) => x.id === id) || null);
   const now = useMC((s) => s.now);
@@ -259,19 +259,38 @@ export default function Agent({ params }) {
             <Dot status={st} size={7} />
             {statusLabel(st)}
           </span>
-          {a.controllable && <IconBtn icon="terminal" label="Console" tone="ghost" onClick={() => openOverlay('console', { id })} />}
-          <motion.button
-            {...tap}
-            onClick={() =>
-              fire(() => {
-                kill(id);
-                back();
-              })
-            }
-            className={`h-9 rounded-full px-3.5 text-[0.82rem] font-bold ${armed ? 'bg-crit text-white' : 'bg-crit/12 text-crit'}`}
-          >
-            {armed ? 'Tap to kill' : 'Kill'}
-          </motion.button>
+          {v5 ? (
+            // v5.1 (task 0486): Console and Stop live in one ⋯ menu — a red Kill
+            // in the title bar was the loudest thing on the page
+            <IconBtn
+              icon="more"
+              label="More"
+              tone="ghost"
+              data-agent={id}
+              data-menu-here
+              data-agent-more
+              onClick={(e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                e.currentTarget.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.right - 250, clientY: r.bottom + 6 }));
+              }}
+            />
+          ) : (
+            <>
+              {a.controllable && <IconBtn icon="terminal" label="Console" tone="ghost" onClick={() => openOverlay('console', { id })} />}
+              <motion.button
+                {...tap}
+                onClick={() =>
+                  fire(() => {
+                    kill(id);
+                    back();
+                  })
+                }
+                className={`h-9 rounded-full px-3.5 text-[0.82rem] font-bold ${armed ? 'bg-crit text-white' : 'bg-crit/12 text-crit'}`}
+              >
+                {armed ? 'Tap to kill' : 'Kill'}
+              </motion.button>
+            </>
+          )}
         </>
       }
     >

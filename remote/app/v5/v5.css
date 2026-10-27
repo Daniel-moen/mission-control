@@ -309,9 +309,10 @@ html.v5 #app {
   box-shadow: inset 0 1px 0 var(--g-hi), var(--g-shadow);
   -webkit-backdrop-filter: blur(30px) saturate(1.7);
   backdrop-filter: blur(30px) saturate(1.7);
-  /* the v2 pages inside: no status-bar inset, no tab bar to clear */
+  /* the v2 pages inside: no status-bar inset; the tab bar floats over the
+     window's lower edge, so content pads past it (v5.1, task 0486) */
   --page-safe-top: 0px;
-  --tabbar-space: 18px;
+  --tabbar-space: var(--win-pad-bottom, 18px);
 }
 @media (max-width: 699px) {
   .v5-win {
@@ -799,4 +800,97 @@ html.v5 .md .mia-mark {
 .v5-win[data-win='doc'] article.md {
   font-size: 1.0625rem;
   line-height: 1.6;
+}
+
+
+/* ---- v5.1 (task 0486) ------------------------------------------------------------ */
+/* the mic beside the tab bar, lit while a conversation is on */
+.v5-mic-on {
+  background: var(--color-accent) !important;
+  color: var(--color-accent-ink);
+}
+/* the top bar's three tools share one capsule */
+[data-top-group] {
+  padding: 0 2px;
+}
+/* pull to refresh */
+.v5-ptr {
+  will-change: transform, opacity;
+}
+.v5-spin {
+  animation: v5-spin 0.8s linear infinite;
+}
+@keyframes v5-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* context menus: the page dims and softens behind the lifted row */
+.v5-ctx-scrim {
+  background: rgba(0, 0, 0, 0.28);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+  backdrop-filter: blur(10px) saturate(1.2);
+}
+html[data-theme='light'] .v5-ctx-scrim {
+  background: rgba(40, 36, 30, 0.14);
+}
+html[data-glass='lite'] .v5-ctx-scrim {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background: rgba(0, 0, 0, 0.45);
+}
+.v5-ctx-preview {
+  border-radius: 20px;
+  background: var(--g-strong);
+  border: 1px solid var(--g-line);
+  box-shadow: inset 0 1px 0 var(--g-hi), 0 30px 60px -20px rgba(0, 0, 0, 0.6);
+  -webkit-backdrop-filter: blur(26px) saturate(1.8);
+  backdrop-filter: blur(26px) saturate(1.8);
+}
+.v5-menu {
+  border-radius: 18px;
+}
+.v5-menu-sep {
+  margin-top: 6px;
+  position: relative;
+}
+.v5-menu-sep::before {
+  content: '';
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: -4px;
+  height: 1px;
+  background: var(--v-hair2);
+}
+/* rows you can long-press don't select text or raise the iOS callout */
+[data-doc],
+[data-agent],
+[data-task] {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* HQ: say only what's true and useful — no "Not monitored" on every card,
+   no "0 of 0 live services up" */
+.v5-win[data-win='hq'] [data-health='none'],
+.v5-win[data-win='hq'] [data-watched='0'] {
+  display: none;
+}
+/* swipe actions behind a row */
+.v5-swipe-act {
+  color: #fff;
+}
+/* Mia's Talk: glass, not a white button competing with the conversation */
+.v5-win [data-mia-talk] {
+  background: var(--v-fill2);
+  color: var(--color-ink);
+  box-shadow: inset 0 1px 0 var(--g-in-hi);
+}
+/* the Filter pull-down's footer stays put over the list it scrolls */
+.v5-filter-foot {
+  background: var(--g-strong);
+  border-top: 1px solid var(--v-hair);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  backdrop-filter: blur(20px) saturate(1.6);
 }

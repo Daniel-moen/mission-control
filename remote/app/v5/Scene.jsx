@@ -9,6 +9,7 @@ import { usePrefs } from '../v2/lib/prefs.js';
 import { useNav } from '../v2/lib/nav.js';
 import { useQuality } from '../v3/shared/quality.js';
 import { createScene, MAX } from '../v4/shared/lens.js';
+import { installScrollSync, scrollGate } from '../v2/lens/scrollsync.js';
 
 // v5 (task 0483): v4's Lens scene (0448/0458 — the refracting glass shader,
 // v4/shared/lens.js) under v1's structure. The photograph fills the screen;
@@ -116,6 +117,7 @@ export default function Scene() {
     const dyn = new Float32Array(MAX * 4); // per pane: velocity x/y (px per 60 Hz frame), opacity, growth
     const glow = { t: 0 };
     let live = new Set();
+    installScrollSync();
     s.setFrame((t, dt) => {
       const fr = Math.min(4, Math.max(0.25, dt / 16.7));
       const H = innerHeight;
@@ -123,14 +125,20 @@ export default function Scene() {
       const els = document.querySelectorAll(PANES);
       const now = new Set();
       let n = 0;
+      let scrolled = 0;
       for (let i = 0; i < els.length && n < MAX; i++) {
         const el = els[i];
         if (el.__lensNo === undefined) el.__lensNo = !!el.closest(NO) || !!el.parentElement?.closest(PANES);
         if (el.__lensNo) continue;
         const r = el.getBoundingClientRect();
         if (r.bottom < -30 || r.top > H + 30 || r.right < -30 || r.left > W + 30 || r.width < 8 || r.height < 8) continue;
-        const op = opacityOf(el);
-        if (op < 0.02) continue;
+        // a pane inside a moving scroller shows its CSS glass (scrollsync.js)
+        const f = scrollGate(el, t, dt);
+        const op = opacityOf(el) * f;
+        if (op < 0.02) {
+          if (f < 0.02) scrolled++;
+          continue;
+        }
         dyn[n * 4 + 2] = op;
         rects[n * 4] = r.left;
         rects[n * 4 + 1] = r.top;
@@ -158,9 +166,11 @@ export default function Scene() {
         dyn[n * 4] = v.vx;
         dyn[n * 4 + 1] = v.vy;
         dyn[n * 4 + 3] = v.vs;
-        now.add(el);
+        // its CSS glass steps aside once the shader's is most of the way back
+        if (f >= 0.5) now.add(el);
         n++;
       }
+      window.__lensScrolled = scrolled;
       for (const el of live) if (!now.has(el)) (el.classList.remove('lens-live'), delete el.__lensV);
       for (const el of now) if (!live.has(el)) el.classList.add('lens-live');
       live = now;

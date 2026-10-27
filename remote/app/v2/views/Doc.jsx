@@ -24,7 +24,7 @@ import DownloadSheet from './Download.jsx';
 const KIND_TONE = { plan: 'bg-accent/15 text-accent', research: 'bg-mgr/15 text-mgr', note: 'bg-fill2 text-ink2', page: 'bg-s4/15 text-s4' };
 const toTags = (s) => (s || '').split(',').map((t) => t.trim()).filter(Boolean);
 
-function Details({ open, onClose, docId, meta, kind }) {
+function Details({ open, onClose, docId, meta, kind, onDownload = null }) {
   const [subject, setSubject] = useState('');
   const [tags, setTags] = useState('');
   const [dir, setDir] = useState('');
@@ -59,6 +59,17 @@ function Details({ open, onClose, docId, meta, kind }) {
         <L>Folder</L>
         <input value={dir} onChange={(e) => setDir(e.target.value)} onBlur={commit} placeholder="~/path/to/project" aria-label="Folder" className="v-field h-11 w-full px-4 font-mono text-[0.84rem]" />
         <p className="mt-2 px-1 font-mono text-[0.7rem] text-ink3">~/.mission-control/library/{docId}</p>
+        {onDownload && (
+          <motion.button
+            {...tap}
+            onClick={() => (commit(), onClose(), onDownload())}
+            className="mt-6 flex h-11 w-full items-center justify-center gap-2 rounded-full bg-fill text-[0.9rem] font-semibold text-ink"
+            data-doc-download
+          >
+            <Icon name="download" size={16} />
+            Download or share…
+          </motion.button>
+        )}
         <motion.button
           {...tap}
           onClick={() =>
@@ -80,7 +91,7 @@ function Details({ open, onClose, docId, meta, kind }) {
   );
 }
 
-export default function Doc({ params }) {
+export default function Doc({ params, v5 = false }) {
   const docId = params.id;
   const { meta, doc, html, setArticle } = useDocBody(docId);
   const now = useMC((s) => s.now);
@@ -133,7 +144,7 @@ export default function Doc({ params }) {
     </>
   ) : (
     <>
-      {!page && <IconBtn icon="download" label="Download" tone="ghost" onClick={() => setDownload(true)} disabled={!meta} />}
+      {!page && !v5 && <IconBtn icon="download" label="Download" tone="ghost" onClick={() => setDownload(true)} disabled={!meta} />}
       {!page && <IconBtn icon="edit" label="Edit" tone="ghost" onClick={startEdit} disabled={!doc} />}
       {!page && <IconBtn icon="more" label="Details" tone="ghost" onClick={() => setDetails(true)} data-doc-details />}
       {kind === 'plan' && (wide ? <Button size="sm" icon="launch" onClick={build}>Build</Button> : <IconBtn icon="launch" label="Build" tone="ghost" onClick={build} />)}
@@ -156,14 +167,24 @@ export default function Doc({ params }) {
   return (
     <>
       <Page title={title} large={false} actions={actions} maxW={1400} scrollProps={{ 'data-reader': 'doc', 'data-doc-id': docId }}>
-        <div className="mb-5 mt-2 flex flex-wrap items-center gap-2 text-[0.8rem] text-ink3" data-doc-head>
-          <span className={`flex h-7 items-center gap-1.5 rounded-full px-2.5 font-semibold ${KIND_TONE[kind] || KIND_TONE.note}`}>{kindLabel(kind)}</span>
-          {meta && <span className="font-semibold text-ink2">{docStatusLabel(meta.status)}</span>}
-          {meta?.subject && <span>· {meta.subject}</span>}
-          {meta?.folder && <span>· {meta.folder}</span>}
-          {meta && <span>· {ago(meta.updatedAt, now)}</span>}
-          {meta?.words ? <span className="v-num">· {meta.words.toLocaleString()} words</span> : null}
-        </div>
+        {v5 ? (
+          // v5.1 (task 0486): one line that never wraps into a stray "· 382 words"
+          <div className="mb-5 mt-2 flex min-w-0 items-center gap-2 text-[0.8rem] text-ink3" data-doc-head>
+            <span className={`flex h-7 flex-none items-center rounded-full px-2.5 font-semibold ${KIND_TONE[kind] || KIND_TONE.note}`}>{kindLabel(kind)}</span>
+            <span className="min-w-0 truncate">
+              {[meta && docStatusLabel(meta.status), meta?.subject, meta && ago(meta.updatedAt, now), wide && meta?.words ? `${meta.words.toLocaleString()} words` : null].filter(Boolean).join(' · ')}
+            </span>
+          </div>
+        ) : (
+          <div className="mb-5 mt-2 flex flex-wrap items-center gap-2 text-[0.8rem] text-ink3" data-doc-head>
+            <span className={`flex h-7 items-center gap-1.5 rounded-full px-2.5 font-semibold ${KIND_TONE[kind] || KIND_TONE.note}`}>{kindLabel(kind)}</span>
+            {meta && <span className="font-semibold text-ink2">{docStatusLabel(meta.status)}</span>}
+            {meta?.subject && <span>· {meta.subject}</span>}
+            {meta?.folder && <span>· {meta.folder}</span>}
+            {meta && <span>· {ago(meta.updatedAt, now)}</span>}
+            {meta?.words ? <span className="v-num">· {meta.words.toLocaleString()} words</span> : null}
+          </div>
+        )}
         {meta?.status === 'active' && (
           <div className="mb-6 flex items-center gap-3 rounded-[18px] bg-accent/10 px-4 py-3">
             <span className="relative flex h-2.5 w-2.5 flex-none">
@@ -206,7 +227,7 @@ export default function Doc({ params }) {
           )}
         </AnimatePresence>
       </Page>
-      {active && <Details open={details} onClose={() => setDetails(false)} docId={docId} meta={meta} kind={kind} />}
+      {active && <Details open={details} onClose={() => setDetails(false)} docId={docId} meta={meta} kind={kind} onDownload={v5 && meta ? () => setDownload(true) : null} />}
       {active && <DownloadSheet open={download} onClose={() => setDownload(false)} docId={docId} meta={meta} title={title} />}
     </>
   );

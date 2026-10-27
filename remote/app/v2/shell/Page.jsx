@@ -3,6 +3,7 @@ import { motion, useMotionValue, useTransform } from 'motion/react';
 import { usePage } from './Stack.jsx';
 import { Icon } from '../ui/kit.jsx';
 import { tap } from '../lib/motion.js';
+import { navOpts } from '../lib/nav.js';
 
 // A page: a nav bar that stays out of the way, a large title that scrolls
 // with the content and hands over to the bar's small title as it leaves
@@ -48,7 +49,7 @@ export default forwardRef(function Page(
     scrollProps.onScroll?.(e);
   };
 
-  const showBack = depth > 0;
+  const showBack = depth > 0 && !(depth === 1 && navOpts.placeRoots?.has(route?.name));
   const solid = bar === 'solid' || !scroll;
 
   const navBar = (

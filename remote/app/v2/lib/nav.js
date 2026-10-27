@@ -15,7 +15,9 @@ import { create } from 'zustand';
 export const TABS = ['home', 'mia', 'agents', 'library'];
 // v5 (task 0483) gives a task its own page (#task/<id>); v2 opens it on the
 // board. Set once, before anything renders.
-export const navOpts = { taskPage: false };
+export const navOpts = { taskPage: false, placeRoots: null };
+// v5.1 (task 0486): pages that are a tab of their own although they open over
+// Home (HQ) — their Page shows no Back, as a tab's root doesn't.
 const ROOT = { home: 'home', mia: 'mia', agents: 'agents', library: 'library' };
 // Where a page lives when it's opened cold (a deep link at launch).
 const OWNER = { agent: 'agents', doc: 'library', insights: 'home', hq: 'home', settings: 'home', task: 'mia' };

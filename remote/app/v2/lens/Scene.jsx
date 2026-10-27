@@ -3,6 +3,7 @@ import { useLensMode, clockLayout } from './mode.js';
 import { animate, motionValue } from 'motion/react';
 import { useNav } from '../lib/nav.js';
 import { usePrefs } from '../lib/prefs.js';
+import { installScrollSync, scrollGate } from './scrollsync.js';
 import { createScene, photoCanvas, fallbackCanvas, typeCanvas, MAX } from './scene.js';
 import { useBackdrop } from './backdrop.js';
 import { useTilt, tiltX, tiltY, lightX, lightY, touching } from './tilt.js';
@@ -96,6 +97,7 @@ export default function Scene() {
     const alpha = new Float32Array(MAX);
     const glow = { t: 0 };
     let live = new Set();
+    installScrollSync();
     s.setFrame((_now, _dt, set) => {
       const H = innerHeight;
       const W = innerWidth;
@@ -108,7 +110,9 @@ export default function Scene() {
         if (el.__lensNo) continue;
         const r = el.getBoundingClientRect();
         if (r.bottom < -30 || r.top > H + 30 || r.right < -30 || r.left > W + 30 || r.width < 8 || r.height < 8) continue;
-        const op = opacityOf(el);
+        // a pane inside a moving scroller shows its CSS glass (scrollsync.js)
+        const f = scrollGate(el, _now, _dt);
+        const op = opacityOf(el) * f;
         if (op < 0.02) continue;
         alpha[n] = op;
         rects[n * 4] = r.left;
@@ -120,7 +124,7 @@ export default function Scene() {
         meta[n * 4 + 1] = +(el.dataset.frost || 0);
         meta[n * 4 + 2] = el.dataset.amber ? 1 : 0;
         meta[n * 4 + 3] = +(el.dataset.depth || 0.6);
-        now.add(el);
+        if (f >= 0.5) now.add(el);
         n++;
       }
       // .lens-live only changes on the frames a pane joins or leaves.

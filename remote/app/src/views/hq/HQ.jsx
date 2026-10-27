@@ -214,7 +214,7 @@ function Board({ view, companies, onOpen, onOpenTask, scrollRef }) {
     >
       <ControlStrip registry={view.registry} />
       <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 px-1 text-[12px] text-ink3" data-summary>
-        <span>
+        <span data-watched={sum.watched}>
           <span className="tnum text-ink">{sum.up}</span> of {sum.watched} live services up
         </span>
         {sum.down > 0 && (
@@ -244,7 +244,7 @@ function Board({ view, companies, onOpen, onOpenTask, scrollRef }) {
   );
 }
 
-export default function HQ({ onClose, onOpenDoc, onOpenTask, companyId = null, onCompany, section = 'companies', onSection, channelKey = null, onChannel }) {
+export default function HQ({ onClose, onOpenDoc, onOpenTask, companyId = null, onCompany, section = 'companies', onSection, channelKey = null, onChannel, companiesLabel = null }) {
   useHQSync();
   const view = useHQView();
   const error = useHQ((s) => s.error);
@@ -285,7 +285,7 @@ export default function HQ({ onClose, onOpenDoc, onOpenTask, companyId = null, o
           value={section}
           onChange={onSection}
           options={[
-            { value: 'companies', label: wideHead ? 'Companies' : 'HQ', icon: 'hq' },
+            { value: 'companies', label: companiesLabel || (wideHead ? 'Companies' : 'HQ'), icon: 'hq' },
             { value: 'channels', label: 'Channels', icon: 'video' },
           ]}
         />
