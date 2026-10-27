@@ -69,8 +69,8 @@ function Appearance() {
   const theme = usePrefs((s) => s.theme);
   const motion = usePrefs((s) => s.motion);
   const glass = usePrefs((s) => s.glass);
-  // v5 (task 0483) and v5.2 (task 0491) run this page too, and say so
-  const ui = ['v5', 'v52'].includes(document.documentElement.dataset.ui) ? document.documentElement.dataset.ui : 'v2';
+  // v5 (task 0483), v5.2 (task 0491) and v5.3 (task 0502) run this page too, and say so
+  const ui = ['v5', 'v52', 'v53'].includes(document.documentElement.dataset.ui) ? document.documentElement.dataset.ui : 'v2';
   return (
     <Group title="Appearance" footer="The classic interface is the panel as it was; this device remembers the choice. Every device chooses for itself.">
       <Row icon="eye" label="Theme">
@@ -82,12 +82,13 @@ function Appearance() {
       <Row icon="eye" label="Glass" hint={glass === 'lite' ? 'Lite: frosted, no live refraction — easiest on the battery.' : glass === 'full' ? 'Full: live refracting glass, always.' : 'Auto: full glass; lite on Reduce Motion or low power.'}>
         <Segmented size="sm" value={glass} onChange={setGlass} options={[{ value: 'auto', label: 'Auto' }, { value: 'full', label: 'Full' }, { value: 'lite', label: 'Lite' }]} data-glass-pref />
       </Row>
-      <Row icon="undo" label="Interface" hint={ui === 'v52' ? 'v5.2: chat first, everything else one swipe away — switch any time.' : ui === 'v5' ? 'v5: the classic layout in Lens glass — switch any time.' : 'New (Lens) — switch back any time.'} last>
+      <Row icon="undo" label="Interface" hint={ui === 'v53' ? 'v5.3: chat first, Liquid Glass, a tab bar at the foot — switch any time.' : ui === 'v52' ? 'v5.2: chat first, everything else one swipe away — switch any time.' : ui === 'v5' ? 'v5: the classic layout in Lens glass — switch any time.' : 'New (Lens) — switch back any time.'} last>
         <Segmented
           size="sm"
           value={ui}
           onChange={(v) => v !== ui && switchUi(v)}
-          options={ui === 'v52' ? [{ value: 'v52', label: 'v5.2' }, { value: 'v5', label: 'v5' }, { value: 'v1', label: 'Classic' }] : ui === 'v5' ? [{ value: 'v5', label: 'v5' }, { value: 'v2', label: 'v2' }, { value: 'v1', label: 'Classic' }] : [{ value: 'v2', label: 'New' }, { value: 'v1', label: 'Classic' }]}
+          options={ui === 'v53' ? [{ value: 'v53', label: 'v5.3' }, { value: 'v52', label: 'v5.2' }, { value: 'v1', label: 'Classic' }] : ui === 'v52' ?
+ [{ value: 'v52', label: 'v5.2' }, { value: 'v5', label: 'v5' }, { value: 'v1', label: 'Classic' }] : ui === 'v5' ? [{ value: 'v5', label: 'v5' }, { value: 'v2', label: 'v2' }, { value: 'v1', label: 'Classic' }] : [{ value: 'v2', label: 'New' }, { value: 'v1', label: 'Classic' }]}
           data-ui-switch
         />
       </Row>

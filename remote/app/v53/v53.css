@@ -1,0 +1,722 @@
+/* ============================================================
+   Mission Control v5.3 (task 0502) — LIQUID GLASS, GROWN UP
+   v5's stylesheet (tokens, the three planes of glass, the v2 pages in
+   Lens windows) plus v5.3's shell:
+     • the stage — Mia's chat, one big pane of shader glass
+     • the accessory — the composer, its own row of glass over the photo
+     • the tab bar — a floating capsule, the lens, the search circle
+     • the pane — every other place, beside or over the chat
+   Restraint over decoration: a muted palette, one weight hierarchy
+   (600 for names, 500 for labels, 400 for prose), tighter type, small
+   radii inside the glass and capsules only where Apple uses them (the
+   bar, the field, round buttons). Colour only where it means something.
+   ============================================================ */
+@import '../v5/v5.css';
+
+/* ---- tokens: v5's, muted -------------------------------------------------------- */
+html.v53,
+html.v53[data-theme='dark'] {
+  --t-ink: #f2f2f3;
+  --t-ink2: #b9b9c0;
+  --t-ink3: #8b8b95;
+  --t-accent: #86b89d; /* sage, not mint */
+  --t-accent-bright: #a2cbb4;
+  --t-accent-ink: #0d1c14;
+  --t-warn: #d4a356;
+  --t-crit: #e0847a;
+  --t-mgr: #a99ccf;
+  --v-fill: rgba(255, 255, 255, 0.07);
+  --v-fill2: rgba(255, 255, 255, 0.11);
+  --v-hair: rgba(255, 255, 255, 0.085);
+  --g-in: rgba(255, 255, 255, 0.05);
+  --g-in-line: rgba(255, 255, 255, 0.085);
+  --g-in-hi: rgba(255, 255, 255, 0.07);
+  --g-chrome: rgba(22, 22, 26, 0.42);
+  --g-line: rgba(255, 255, 255, 0.12);
+  --g-hi: rgba(255, 255, 255, 0.2);
+  --radius-card: 16px;
+  --radius-tile: 18px;
+}
+html.v53[data-theme='light'] {
+  --t-ink: #16161a;
+  --t-ink2: #45454e;
+  --t-ink3: #6c6c76;
+  --t-accent: #3f7a5d;
+  --t-accent-bright: #356a50;
+  --t-accent-ink: #ffffff;
+  --t-warn: #a5741f;
+  --t-crit: #c24b43;
+  --t-mgr: #6b58b8;
+  --g-chrome: rgba(255, 255, 255, 0.48);
+  --radius-card: 16px;
+  --radius-tile: 18px;
+}
+html.v53 body {
+  font-size: 15px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- the stage ------------------------------------------------------------------ */
+.v53-stage {
+  position: absolute;
+  overflow: hidden;
+  border-radius: 24px;
+  transform-origin: 50% 0;
+  will-change: transform;
+}
+.v53-stage[data-lens] {
+  background: var(--g-win);
+  border: 1px solid var(--g-line);
+  box-shadow: inset 0 1px 0 var(--g-hi), var(--g-shadow);
+  -webkit-backdrop-filter: blur(30px) saturate(1.6);
+  backdrop-filter: blur(30px) saturate(1.6);
+}
+html[data-glass='lite'] .v53-stage[data-lens] {
+  background: var(--g-win-lite);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.v53-stage-inner {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  --stage-head: 64px;
+}
+.v53-head {
+  position: absolute;
+  inset: 0 0 auto 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 60px;
+  padding: 0 12px 0 14px;
+  pointer-events: none;
+}
+.v53-foot {
+  position: absolute;
+  inset: auto 0 0 0;
+  z-index: 20;
+  padding: 0 16px 12px;
+}
+/* the thread fades out under the header and the suggestions, rather than being cut */
+.v53-thread {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, transparent calc(var(--stage-head) - 22px), #000 calc(var(--stage-head) + 10px), #000 calc(100% - var(--stage-foot, 56px) - 6px), transparent calc(100% - var(--stage-foot, 56px) + 18px));
+  mask-image: linear-gradient(to bottom, transparent 0, transparent calc(var(--stage-head) - 22px), #000 calc(var(--stage-head) + 10px), #000 calc(100% - var(--stage-foot, 56px) - 6px), transparent calc(100% - var(--stage-foot, 56px) + 18px));
+}
+@media (max-width: 599px) {
+  .v53-head {
+    padding: 0 8px 0 12px;
+  }
+  .v53-foot {
+    padding: 0 12px 10px;
+  }
+}
+/* the header's trailing group: one quiet capsule on the chat's glass */
+.v53-cluster {
+  background: var(--v-fill);
+  box-shadow: inset 0 1px 0 var(--g-in-hi), inset 0 0 0 1px var(--g-in-line);
+}
+html[data-glass='lite'] .v53-cluster {
+  background: var(--v-fill2);
+}
+.v53-menu {
+  border-radius: 14px !important;
+}
+
+/* ---- messages ----------------------------------------------------------------------- */
+.v53-prose {
+  font-size: 0.98rem;
+  line-height: 1.55;
+  letter-spacing: -0.003em;
+  color: var(--color-ink);
+}
+.v53-msg-head {
+  letter-spacing: 0.01em;
+}
+.v53-bubble {
+  border-radius: 18px 18px 6px 18px;
+  background: var(--v-fill2);
+  border: 1px solid var(--g-in-line);
+  box-shadow: inset 0 1px 0 var(--g-in-hi);
+}
+[data-theme='light'] .v53-bubble {
+  background: rgba(255, 255, 255, 0.62);
+}
+.v53-bubble.pending {
+  background: var(--v-fill);
+}
+.v53-bubble.fail {
+  background: color-mix(in oklab, var(--color-crit) 10%, transparent);
+}
+.v53-pressing {
+  transform: scale(0.985);
+  transition: transform 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+}
+.v53-day {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-ink3);
+}
+/* cards in the chat: a lighter plane on the chat's glass, hairline, small radius */
+.v53-card,
+.v53-stage [data-lens] {
+  border-radius: 14px;
+  background: var(--g-in);
+  border: 1px solid var(--g-in-line);
+  box-shadow: inset 0 1px 0 var(--g-in-hi);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.v53-card.open {
+  background: var(--v-fill);
+}
+.v53-card .rounded-\[12px\] {
+  border-radius: 9px;
+}
+.v53-card-text {
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+/* the eyebrow: small caps-ish label, a dot carries the meaning */
+.v53-eyebrow {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--color-ink3);
+}
+.v53-tone-dot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--color-ink3);
+  flex: none;
+}
+.tone-warn .v53-tone-dot,
+.v53-suggest.warn .v53-tone-dot {
+  background: var(--color-warn);
+}
+.tone-note .v53-tone-dot {
+  background: var(--color-accent);
+}
+/* a question's answers: quiet buttons, not candy pills */
+.v53-stage [data-question-card] button {
+  border-radius: 10px;
+  font-size: 0.86rem;
+  font-weight: 500;
+}
+.v53-thinking {
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: transparent;
+  background: linear-gradient(90deg, var(--color-ink3) 0%, var(--color-ink3) 35%, var(--color-ink) 50%, var(--color-ink3) 65%, var(--color-ink3) 100%) 0 0 / 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: v53-shimmer 2.4s linear infinite;
+}
+@keyframes v53-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0% 0;
+  }
+}
+
+/* ---- suggestions (at the chat's foot) ------------------------------------------------- */
+.v53-chips {
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+}
+.v53-chips::-webkit-scrollbar {
+  display: none;
+}
+.v53-suggest {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 11px;
+  border-radius: 9px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--color-ink2);
+  background: var(--v-fill);
+  box-shadow: inset 0 0 0 1px var(--g-in-line);
+  transition: background-color 0.2s, color 0.2s;
+}
+.v53-suggest:hover {
+  color: var(--color-ink);
+  background: var(--v-fill2);
+}
+
+/* ---- the accessory: the composer, glass over the photo ------------------------------- */
+.v53-acc {
+  position: absolute;
+  z-index: 25;
+}
+.v53-round,
+.v53-field,
+.v53-bar,
+.v53-search,
+.v53-lens {
+  background: var(--g-chrome);
+  border: 1px solid var(--g-line);
+  box-shadow: inset 0 1px 0 var(--g-hi), inset 0 -1px 0 rgba(255, 255, 255, 0.04), 0 14px 34px -18px rgba(0, 0, 0, 0.6);
+  -webkit-backdrop-filter: blur(22px) saturate(1.8);
+  backdrop-filter: blur(22px) saturate(1.8);
+}
+html[data-glass='lite'] .v53-round,
+html[data-glass='lite'] .v53-field,
+html[data-glass='lite'] .v53-bar,
+html[data-glass='lite'] .v53-search {
+  background: var(--g-chrome-lite);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.v53-field {
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.v53-field:focus-within {
+  border-color: var(--v-hair2);
+}
+html[data-lensmode='gl'] .v53-field.lens-live:focus-within {
+  box-shadow: inset 0 0 0 1px var(--v-hair2) !important;
+}
+.v53-field.rec {
+  border-color: color-mix(in oklab, var(--color-crit) 50%, transparent);
+}
+.v53-field textarea:focus-visible,
+.v53-palette input,
+.v53-palette input:focus,
+.v53-palette input:focus-visible {
+  outline: none;
+  box-shadow: none;
+  border: 0;
+}
+.v53-send {
+  background: var(--color-ink);
+  color: var(--v-page);
+  box-shadow: 0 8px 20px -10px rgba(0, 0, 0, 0.6);
+}
+
+/* ---- the tab bar ---------------------------------------------------------------------- */
+.v53-bar {
+  position: absolute;
+  z-index: 40;
+  border-radius: 999px;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.v53-tabs {
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+.v53-tab {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  height: 50px;
+  border-radius: 999px;
+  color: var(--color-ink2);
+  transition: color 0.2s;
+  -webkit-tap-highlight-color: transparent;
+}
+.v53-tab.on {
+  color: var(--color-ink);
+}
+.v53-tab-label {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  line-height: 1;
+}
+.v53-tab.on .v53-tab-label {
+  font-weight: 600;
+}
+.v53-tab:focus-visible {
+  outline: 2px solid var(--v-hair2);
+  outline-offset: -2px;
+}
+/* where you are: a soft pill inside the capsule */
+.v53-pill {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  border-radius: 999px;
+  background: var(--v-fill2);
+  box-shadow: inset 0 1px 0 var(--g-in-hi);
+  pointer-events: none;
+}
+[data-theme='light'] .v53-pill {
+  background: rgba(20, 20, 30, 0.075);
+}
+.v53-tab-mini {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--color-ink);
+}
+.v53-badge-dot {
+  position: absolute;
+  top: -1px;
+  right: -4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-ink2);
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.35);
+}
+.v53-badge-dot.warn {
+  background: var(--color-warn);
+}
+.v53-badge {
+  position: absolute;
+  top: -5px;
+  left: 13px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 99px;
+  font-style: normal;
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 15px;
+  text-align: center;
+  color: var(--v-page);
+  background: var(--color-ink2);
+}
+/* the lens: a drop of clear glass that lifts out of the bar under the finger.
+   With the shader on it really refracts (a pane of its own, low frost); CSS
+   glass otherwise. Its copy of the tabs is magnified and lit. */
+.v53-lens {
+  position: absolute;
+  z-index: 41;
+  border-radius: 999px;
+  overflow: hidden;
+  pointer-events: none;
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4), inset 0 -1px 0 rgba(255, 255, 255, 0.12), 0 16px 34px -14px rgba(0, 0, 0, 0.55);
+  -webkit-backdrop-filter: blur(4px) saturate(1.6) brightness(1.08);
+  backdrop-filter: blur(4px) saturate(1.6) brightness(1.08);
+}
+[data-theme='light'] .v53-lens {
+  background: rgba(255, 255, 255, 0.3);
+}
+.v53-lens .v53-tab {
+  color: var(--color-ink);
+}
+.v53-search {
+  position: absolute;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--color-ink);
+}
+
+/* ---- the pane --------------------------------------------------------------------------- */
+.v53-pane {
+  position: absolute;
+  z-index: 20;
+  will-change: transform;
+  --win-top: 0px;
+  --win-x: 0px;
+  --win-bottom: 0px;
+}
+.v53-pane .v5-win {
+  border-radius: 24px;
+}
+.v53-pane.sheet .v5-win {
+  border-radius: 28px;
+}
+/* over the chat or flying: CSS glass that blurs what's under it */
+.v53-pane[data-lens-off] .v5-win {
+  background: var(--g-strong);
+  -webkit-backdrop-filter: blur(34px) saturate(1.7);
+  backdrop-filter: blur(34px) saturate(1.7);
+  box-shadow: inset 0 1px 0 var(--g-hi), 0 30px 80px -30px rgba(0, 0, 0, 0.75);
+}
+html[data-glass='lite'] .v53-pane .v5-win {
+  background: var(--g-win-lite);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.v53-grabber {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  z-index: 40;
+  width: 36px;
+  height: 4px;
+  margin-left: -18px;
+  border-radius: 99px;
+  background: var(--color-ink3);
+  pointer-events: none;
+}
+
+/* ---- the pages, calmer ------------------------------------------------------------------ */
+html.v53 .v-title {
+  font-size: 1.75rem;
+  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: -0.012em;
+}
+@media (min-width: 700px) {
+  html.v53 .v-title {
+    font-size: 2rem;
+  }
+}
+html.v53 .v5-win .v-card,
+html.v53 [role='dialog'] .v-card {
+  border-radius: 14px;
+}
+html.v53 .v-menu {
+  border-radius: 14px;
+}
+
+/* ---- Mia's mark ---------------------------------------------------------------------------
+   v5.2's orb was a glossy marble with a glow. v5.3's is a bead of smoked
+   glass with one soft light inside — it breathes when idle, a thin arc
+   turns while she thinks, the ring listens while you talk. */
+.v53-orb {
+  --lvl: 0;
+  position: relative;
+  display: inline-grid;
+  flex: none;
+  width: var(--orb);
+  height: var(--orb);
+  border-radius: 50%;
+  padding: 0;
+  border: 0;
+  background: none;
+  isolation: isolate;
+}
+.v53-orb > span {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+}
+.v53-orb-core {
+  background: radial-gradient(circle at 50% 62%, color-mix(in oklab, var(--color-accent) 70%, white) 0%, color-mix(in oklab, var(--color-accent) 55%, transparent) 28%, rgba(30, 32, 34, 0.9) 70%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16), inset 0 calc(var(--orb) * -0.1) calc(var(--orb) * 0.25) rgba(0, 0, 0, 0.4);
+  transform: scale(calc(1 + var(--lvl) * 0.16));
+  transition: transform 0.08s linear;
+  animation: v53-breathe 5.5s ease-in-out infinite;
+}
+[data-theme='light'] .v53-orb-core {
+  background: radial-gradient(circle at 50% 62%, color-mix(in oklab, var(--color-accent) 60%, white) 0%, color-mix(in oklab, var(--color-accent) 40%, transparent) 30%, rgba(238, 238, 236, 0.95) 72%);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1), inset 0 calc(var(--orb) * -0.08) calc(var(--orb) * 0.2) rgba(0, 0, 0, 0.08);
+}
+.v53-orb-swirl {
+  background: conic-gradient(from 0deg, transparent 0 72%, rgba(255, 255, 255, 0.55) 86%, transparent 96%);
+  -webkit-mask: radial-gradient(circle, transparent calc(50% - 1.5px), #000 calc(50% - 1px));
+  mask: radial-gradient(circle, transparent calc(50% - 1.5px), #000 calc(50% - 1px));
+  opacity: 0;
+  transition: opacity 0.4s;
+  animation: v53-spin 2.2s linear infinite;
+}
+.v53-orb-gloss {
+  background: radial-gradient(ellipse 60% 40% at 50% 14%, rgba(255, 255, 255, 0.45), transparent 70%);
+}
+.v53-orb[data-orb='thinking'] .v53-orb-swirl {
+  opacity: 1;
+}
+.v53-orb[data-orb='off'] .v53-orb-core {
+  filter: grayscale(1) brightness(0.8);
+  animation: none;
+}
+.v53-orb[data-orb='talk'] .v53-orb-core {
+  animation: none;
+}
+.v53-orb.still > span {
+  animation: none !important;
+}
+button.v53-orb {
+  cursor: pointer;
+}
+button.v53-orb:active .v53-orb-core {
+  transform: scale(0.94);
+}
+.v53-orb-wave {
+  inset: -34% !important;
+  pointer-events: none;
+}
+.v53-orb-wave i {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 1.5px;
+  height: calc(var(--orb) * 0.14);
+  margin-left: -0.75px;
+  border-radius: 2px;
+  background: var(--color-ink2);
+  opacity: 0.7;
+  transform-origin: 50% 0;
+  transform: rotate(var(--a)) translateY(calc(var(--orb) * 0.6)) scaleY(calc(0.35 + var(--lvl) * 2.2));
+}
+@keyframes v53-breathe {
+  0%,
+  100% {
+    filter: brightness(0.92);
+  }
+  50% {
+    filter: brightness(1.12);
+  }
+}
+@keyframes v53-spin {
+  to {
+    rotate: 360deg;
+  }
+}
+.v53-talk .v53-orb {
+  pointer-events: none;
+}
+
+/* ---- progress rings: thinner, quieter ---------------------------------------------------- */
+.v53-ring circle {
+  stroke-width: 2.25;
+}
+.v53-ring.spin {
+  animation: v53-spin 2.8s linear infinite;
+}
+html[data-glass='lite'] .v53-ring.spin {
+  animation-duration: 6s;
+}
+
+/* ---- the moving light, in CSS (lite glass only — with the shader it's in the scene) ---------- */
+.v53-ambient {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0.4;
+  mix-blend-mode: soft-light;
+}
+[data-theme='light'] .v53-ambient {
+  mix-blend-mode: multiply;
+  opacity: 0.18;
+}
+.v53-blob {
+  position: absolute;
+  width: 72vmax;
+  height: 72vmax;
+  border-radius: 50%;
+  filter: blur(50px);
+}
+.v53-blob.a {
+  left: -24vmax;
+  top: -28vmax;
+  background: radial-gradient(circle, rgba(70, 150, 118, 0.85), transparent 62%);
+  animation: v53-drift-a 40s ease-in-out infinite alternate;
+}
+.v53-blob.b {
+  right: -28vmax;
+  top: 6vmax;
+  background: radial-gradient(circle, rgba(120, 90, 160, 0.75), transparent 62%);
+  animation: v53-drift-b 48s ease-in-out infinite alternate;
+}
+.v53-blob.c {
+  left: 6vmax;
+  bottom: -38vmax;
+  background: radial-gradient(circle, rgba(150, 118, 84, 0.75), transparent 62%);
+  animation: v53-drift-c 56s ease-in-out infinite alternate;
+}
+.v53-ambient[data-warm='1'] .v53-blob.c {
+  background: radial-gradient(circle, rgba(210, 140, 50, 0.8), transparent 62%);
+}
+.v53-ambient.still .v53-blob {
+  animation-play-state: paused;
+}
+@keyframes v53-drift-a {
+  to {
+    transform: translate(16vmax, 12vmax);
+  }
+}
+@keyframes v53-drift-b {
+  to {
+    transform: translate(-14vmax, 16vmax);
+  }
+}
+@keyframes v53-drift-c {
+  to {
+    transform: translate(12vmax, -14vmax);
+  }
+}
+
+/* ---- the palette ------------------------------------------------------------------------------- */
+.v53-palette {
+  border-radius: 18px;
+}
+
+/* ---- v2/v5 pieces in v5.3's frame ---------------------------------------------------------------- */
+/* the talk pill sits under the chat's header, out of the composer's way */
+html.v53 .fixed.z-\[55\] {
+  top: calc(env(safe-area-inset-top) + 70px) !important;
+  bottom: auto !important;
+}
+
+/* ---- Home and the pages' loud bits, quietened ----------------------------------------------- */
+/* the call to action: a glass button; amber only as a thin edge when it's for you */
+html.v53 [data-home-cta] {
+  height: 2.5rem;
+  border-radius: 12px;
+  padding: 0 1rem;
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--color-ink);
+  background: var(--v-fill2);
+  box-shadow: inset 0 1px 0 var(--g-in-hi), inset 0 0 0 1px var(--g-in-line);
+}
+html.v53 [data-home-cta].v5-btn-warn {
+  box-shadow: inset 0 1px 0 var(--g-in-hi), inset 0 0 0 1px color-mix(in oklab, var(--color-warn) 45%, transparent);
+}
+html.v53 [data-home-cta].v5-btn-warn svg {
+  color: var(--color-warn);
+}
+/* answers: tidy buttons, the first one filled */
+html.v53 [data-answer] [data-option] {
+  height: 2rem;
+  border-radius: 10px;
+  padding: 0 0.85rem;
+  font-size: 0.84rem;
+  font-weight: 500;
+}
+html.v53 .v5-win .lens-amber-rim,
+html.v53 .lens-amber-rim {
+  border-color: color-mix(in oklab, var(--color-warn) 28%, transparent) !important;
+}
+html.v53 [data-today] h2 {
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+html.v53 [data-figure] > span:first-child {
+  font-size: 1.2rem;
+  font-weight: 600;
+}
+
+/* narrow: the pane at rest covers the chat — the chat's content steps out so
+   the shader can draw the pane over it (Pane.jsx) */
+[data-v53-shell][data-covered='1'][data-layout='narrow'] .v53-stage-inner,
+[data-v53-shell][data-covered='1'][data-layout='narrow'] .v53-stage > [aria-hidden] {
+  visibility: hidden;
+}
