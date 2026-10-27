@@ -32,8 +32,10 @@ import Combine
 ///                  {type:"panelResult", id, ok, action, arg, detail}   how a `mia panel` command landed
 ///                  {type:"upload", id, key, name, mime, size, sha256, caption?, batch?, batchId?}
 ///                                                  a file for Mia; fetch GET /upload/<id> (token + X-MC-Key)
-///                  {type:"tts", id, text}          speak an announcement in Mia's voice (task 0287): run
+///                  {type:"tts", id, text}          speak in Mia's voice (announcements 0287, talk-mode
+///                                                  sentences 0447): warm Kokoro worker (TtsWorker), else
 ///                                                  ~/voice-lab/server/mia-tts (Chatterbox, Kokoro fallback)
+///                  {type:"tts", id, warm:true}     talk mode opened: load the voice now, no reply
 final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     @Published private(set) var connected = false
     @Published private(set) var viewerCount = 0
@@ -549,49 +551,74 @@ final class RemoteBridge: NSObject, ObservableObject, URLSessionWebSocketDelegat
         }
     }
 
-    /// Mia's voice for a panel announcement (task 0287). The audio is made
-    /// here, never on the relay: `mia-tts` asks the resident Chatterbox
-    /// service (launchd com.mia.tts, 127.0.0.1:8788) and falls back to Kokoro
-    /// af_heart locally — never OpenAI. Runs off the main thread; the relay
-    /// waits up to ~30 s and the panel uses the device voice on failure.
+    /// Mia's voice on the panel: announcements (task 0287) and talk-mode
+    /// replies, which the panel asks for one sentence at a time (task 0447).
+    /// The audio is made here, never on the relay — never OpenAI. First the
+    /// warm Kokoro af_heart worker (TtsWorker, ~0.4 s a sentence); if that
+    /// can't, the one-shot `mia-tts` CLI (Chatterbox service if it's up, else
+    /// Kokoro loaded from scratch, ~3 s). Requests run one at a time in the
+    /// order they arrived, off the main thread; the relay waits up to ~30 s
+    /// and the panel uses the device voice on failure.
+    /// `{type:"tts", id, warm:true}` (talk mode opened) only loads the model.
     private func speak(_ obj: [String: Any]) {
         guard let id = obj["id"] as? String, !id.isEmpty else { return }
+        let worker = TtsWorker.shared
+        if obj["warm"] as? Bool == true {
+            worker.warm()
+            return
+        }
         let text = ((obj["text"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let cli = ProcessInfo.processInfo.environment["MIA_TTS_CLI"]
             ?? (NSHomeDirectory() as NSString).appendingPathComponent("voice-lab/server/mia-tts")
-        guard !text.isEmpty, FileManager.default.isExecutableFile(atPath: cli) else {
+        guard !text.isEmpty, worker.installed || FileManager.default.isExecutableFile(atPath: cli) else {
             sendJSON(["type": "ttsDone", "id": id, "ok": false, "detail": text.isEmpty ? "no text" : "mia-tts is not installed"])
             return
         }
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        worker.queue.async { [weak self] in
             let out = (NSTemporaryDirectory() as NSString).appendingPathComponent("mc-tts-\(UUID().uuidString).m4a")
             defer { try? FileManager.default.removeItem(atPath: out) }
             let started = Date()
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: cli)
-            p.arguments = ["--format", "m4a", text, out]
-            let err = Pipe()
-            p.standardError = err
-            p.standardOutput = FileHandle.nullDevice
             var frame: [String: Any] = ["type": "ttsDone", "id": id, "ok": false]
-            do {
-                try p.run()
-                let log = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                p.waitUntilExit()
-                if p.terminationStatus == 0, let data = FileManager.default.contents(atPath: out), !data.isEmpty {
-                    let engine = log.range(of: #"engine=(\w+)"#, options: .regularExpression)
-                        .map { String(log[$0].dropFirst("engine=".count)) } ?? "mac"
-                    frame = ["type": "ttsDone", "id": id, "ok": true, "mime": "audio/mp4", "engine": engine,
-                             "ms": Int(Date().timeIntervalSince(started) * 1000), "audio": data.base64EncodedString()]
-                } else {
-                    let last = log.split(separator: "\n").last.map(String.init) ?? "exit \(p.terminationStatus)"
-                    frame["detail"] = "mia-tts failed: \(last)"
-                }
-            } catch {
-                frame["detail"] = "mia-tts could not start: \(error.localizedDescription)"
+            if let made = worker.synth(text, out: out), let data = FileManager.default.contents(atPath: out) {
+                frame = ["type": "ttsDone", "id": id, "ok": true, "mime": "audio/mp4", "engine": made.engine,
+                         "ms": Int(Date().timeIntervalSince(started) * 1000), "audio": data.base64EncodedString()]
+            } else {
+                frame = Self.speakWithCli(cli, text: text, out: out, id: id, started: started)
             }
             DispatchQueue.main.async { self?.sendJSON(frame) }
         }
+    }
+
+    /// The one-shot `mia-tts` CLI → a ttsDone frame (blocking).
+    private static func speakWithCli(_ cli: String, text: String, out: String, id: String, started: Date) -> [String: Any] {
+        var frame: [String: Any] = ["type": "ttsDone", "id": id, "ok": false]
+        guard FileManager.default.isExecutableFile(atPath: cli) else {
+            frame["detail"] = "mia-tts is not installed"
+            return frame
+        }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: cli)
+        p.arguments = ["--format", "m4a", text, out]
+        let err = Pipe()
+        p.standardError = err
+        p.standardOutput = FileHandle.nullDevice
+        do {
+            try p.run()
+            let log = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            p.waitUntilExit()
+            if p.terminationStatus == 0, let data = FileManager.default.contents(atPath: out), !data.isEmpty {
+                let engine = log.range(of: #"engine=(\w+)"#, options: .regularExpression)
+                    .map { String(log[$0].dropFirst("engine=".count)) } ?? "mac"
+                frame = ["type": "ttsDone", "id": id, "ok": true, "mime": "audio/mp4", "engine": engine,
+                         "ms": Int(Date().timeIntervalSince(started) * 1000), "audio": data.base64EncodedString()]
+            } else {
+                let last = log.split(separator: "\n").last.map(String.init) ?? "exit \(p.terminationStatus)"
+                frame["detail"] = "mia-tts failed: \(last)"
+            }
+        } catch {
+            frame["detail"] = "mia-tts could not start: \(error.localizedDescription)"
+        }
+        return frame
     }
 
     /// A Web Push request for the relay to fan out to subscribed phones. Not

@@ -3,7 +3,7 @@
 //
 //   node test/spoken-test.mjs
 
-import { speakable, firstSentences, SPOKEN_MAX, ttsParts } from '../app/src/lib/spoken.js';
+import { speakable, firstSentences, SPOKEN_MAX, talkParts, TALK_PIECE_MAX } from '../app/src/lib/spoken.js';
 
 let passed = 0;
 let failed = 0;
@@ -36,15 +36,24 @@ ok(u.cut && u.text.endsWith('…') && u.text.length <= SPOKEN_MAX + 1 && !/,…$
 const eg = 'Pick a model, e.g. Fable 5.1 or Opus 5.5, in the top corner of the Mia view. ' + 'x '.repeat(120);
 ok(firstSentences(eg).text.startsWith('Pick a model, e.g. Fable 5.1 or Opus 5.5, in the top corner'), '"e.g." and version numbers don\'t end a sentence');
 
-console.log('ttsParts (talk mode, task 0290)');
+console.log('talkParts (talk mode, sentence by sentence, task 0447)');
 {
+  const three = 'Task 447 is running now and should be done in about twenty minutes. I checked the relay logs, e.g. the tts ones, and v2.1 looks fine. I will ping you when it is finished.';
+  const p = talkParts(three);
+  ok(p.length === 4 && p[0] === 'Task 447 is running now' && p[1] === 'and should be done in about twenty minutes.', `a long first sentence is split at its first clause so the first sound comes fast (${JSON.stringify(p.slice(0, 2))})`);
+  ok(p[2] === 'I checked the relay logs, e.g. the tts ones, and v2.1 looks fine.', '"e.g." and "v2.1" don\'t end a sentence; later sentences stay whole');
+  ok(JSON.stringify(talkParts('Your build finished and every check passed on the first run. More.')) === JSON.stringify(['Your build finished and every check passed on the first run.', 'More.']), 'a first sentence up to 60 characters stays whole');
+  ok(talkParts(`${'x'.repeat(70)} today. Next one here.`)[0] === `${'x'.repeat(70)} today.`, 'no clause break → the first sentence stays whole');
+  ok(JSON.stringify(talkParts('Sure. Task 447 is running now and should be done soon.')) === JSON.stringify(['Sure. Task 447 is running now and should be done soon.']), 'a tiny sentence is joined to the next (no half-second piece then a wait)');
   const long = 'Your build finished and every check passed on the first run. ' + 'I filed the three reports in the Library and flagged the one that needs you. '.repeat(8);
-  const p = ttsParts(long);
-  ok(p[0] === 'Your build finished and every check passed on the first run.', 'the first sentence is its own piece');
-  ok(p.length >= 3 && p.every((x) => x.length <= 380), `the rest in /tts-sized pieces (${p.map((x) => x.length).join(', ')})`);
-  ok(p.join(' ').replace(/\s+/g, ' ') === speakable(long), 'nothing dropped or repeated');
-  ok(JSON.stringify(ttsParts('Done. Short.')) === JSON.stringify(['Done. Short.']), 'a short reply is one piece');
-  ok(ttsParts('').length === 0, 'nothing to say → no pieces');
+  const q = talkParts(long);
+  ok(q.length === 9 && q.every((x) => x.length <= TALK_PIECE_MAX), `one piece per sentence (${q.length})`);
+  ok(q.join(' ') === speakable(long), 'nothing dropped or repeated');
+  const run = `We looked at ${'the relay, the panel, the Mac app, '.repeat(12)}and nothing else.`;
+  const r = talkParts(run);
+  ok(r.length > 1 && r.every((x) => x.length <= TALK_PIECE_MAX) && r.join(' ') === speakable(run), `one very long sentence is cut at commas (${r.map((x) => x.length).join(', ')})`);
+  ok(JSON.stringify(talkParts('**Done.** See [the report](https://x.y/z).')) === JSON.stringify(['Done. See the report.']), 'markdown stripped, short reply is one piece');
+  ok(talkParts('').length === 0, 'nothing to say → no pieces');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

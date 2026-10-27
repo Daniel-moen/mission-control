@@ -539,11 +539,27 @@ panel POSTs the sentence to the relay's `/tts` (remote/tts.js); the relay sends
 the host `{type:"tts", id, text}` and serves back the audio from its
 `{type:"ttsDone", id, ok, mime, audio(base64), engine}` answer (consumed by the
 relay, never fanned out; only to a Mac that lists `tts` in its snapshot caps).
-RemoteBridge runs `~/voice-lab/server/mia-tts`: Chatterbox Turbo (MLX 8-bit,
-temp 0.9, light style pass: pauses, an occasional `[chuckle]` on good news
-only) from the resident launchd service `com.mia.tts` on 127.0.0.1:8788, and
-Kokoro `af_heart` locally if that is down. The panel plays the m4a on an
+Since task 0447 RemoteBridge first asks a warm Kokoro `af_heart` worker it
+keeps running (`TtsWorker.swift` → `~/voice-lab/server/mia-tts-worker`, one
+JSON line per request, strictly in order, ~0.3–1 s a sentence; it exits after
+30 idle minutes and restarts on demand, ~2.5 s). Only if that fails does it
+run the one-shot `~/voice-lab/server/mia-tts` (Chatterbox Turbo from the
+launchd service `com.mia.tts` on 127.0.0.1:8788 if it's up, else Kokoro
+loaded from scratch, ~3 s). So announcements and talk mode share one voice,
+Kokoro (Heart). The panel plays the m4a on an
 `<audio>` element blessed by the first tap, fetched while the chime plays.
+
+Talk mode (Basic, task 0290/0447) reads Mia's whole reply sentence by
+sentence (`spoken.js` `talkParts`: one sentence per piece, tiny ones joined to
+the next, a first sentence over 60 characters split at its first clause so the
+first sound comes fast) through a sentence queue (`lib/sentenceQueue.js`): up
+to 3 pieces are asked for at once, played strictly in order back to back, the
+device voice reads any piece `/tts` can't make, and Daniel talking or tapping
+the orb stops it at once. Opening talk mode and each time Daniel starts
+speaking, the panel POSTs `/tts {warm:true}` (relay → host `{type:"tts", id,
+warm:true}`, 202, nothing counted) so the worker is loaded before the reply.
+Measured (3-sentence reply, `remote/test/talk-latency-bench.mjs`): first
+audio ~4.0 s → ~0.75 s locally (+~0.3 s over Railway), no gaps.
 Guards: each announcement is trimmed to `TTS_MAX_CHARS` (400, whole
 sentences), `TTS_DAILY_CHARS` (50 000) caps a day, the same text within 10 min
 is served from memory. Any failure (Mac offline → 503, old Mac app → 501, Mac
