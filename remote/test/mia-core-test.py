@@ -3,6 +3,7 @@
 # heartbeat runs and restart reconciliation, against a temp MIA_DIR and a fake
 # `claude` (fake-claude.py). Nothing touches ~/.mission-control.
 #   python3 test/mia-core-test.py
+import datetime
 import importlib.machinery
 import importlib.util
 import json
@@ -391,9 +392,12 @@ class CoreTests(unittest.TestCase):
 
     def test_heartbeat_runs(self):
         e = self.e
+        # The daily slot sits 6 h behind the clock, so the baseline tick never
+        # fires it on its own (a fixed "11:00" did, from 11:00 to 14:00 local).
+        at = (datetime.datetime.now() - datetime.timedelta(hours=6)).strftime("%H:%M")
         json.dump({"heartbeats": [
             {"id": "hb_health", "label": "Health", "everyMinutes": 180, "prompt": "Check health. FAKE:text=HEARTBEAT_OK", "enabled": True},
-            {"id": "hb_scout", "label": "Scout", "at": "11:00", "prompt": "Scout. FAKE:text=Disk~is~95%~full", "enabled": True},
+            {"id": "hb_scout", "label": "Scout", "at": at, "prompt": "Scout. FAKE:text=Disk~is~95%~full", "enabled": True},
         ], "reminders": []}, open(os.path.join(e.dir, "schedule.json"), "w"))
         e.config({"heartbeats": {"enabled": True}})
         e.core("tick")   # baseline for everyMinutes: nothing fires yet

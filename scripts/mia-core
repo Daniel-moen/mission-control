@@ -1571,7 +1571,7 @@ def cmd_beat(a):
     core = Core()
     ids = core.fire_beats(load_config(), force=a.id)
     if not ids:
-        die("no such heartbeat in schedule.json / heartbeats.beats: %s" % a.id)
+        die("no such heartbeat in schedule.json / heartbeats.beats, or it is already queued/running: %s" % a.id)
     print("beat %s queued as job %d" % (a.id, ids[0]))
 
 

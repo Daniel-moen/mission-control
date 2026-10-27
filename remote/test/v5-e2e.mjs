@@ -177,6 +177,9 @@ async function newPage(browser, tag, { theme = 'dark', hash = '', reduced = fals
     permissions: ['microphone'],
     ...(video ? { recordVideo: { dir: video, size: vp.viewport } } : {}),
   });
+  // A charged device: the panel drops to lite glass on a low, discharging battery (prefs.js), and the
+  // headless browser reports the Mac's real battery — the run must not depend on it.
+  await ctx.addInitScript(() => { navigator.getBattery = () => Promise.resolve({ charging: true, level: 1, addEventListener() {}, removeEventListener() {} }); });
   const page = await ctx.newPage();
   page.errors = [];
   page.on('pageerror', (e) => page.errors.push(`pageerror: ${e.message}`));

@@ -23,6 +23,15 @@ const QUESTION_AGES = [
   { value: 0, label: 'Never' },
 ];
 
+// Declared out here, not inside Backdrop: a component made per render is a new
+// type each time, so React remounted every thumbnail on Settings' clock tick
+// (and, offline, refetched each photo once a second).
+const Thumb = ({ on, onClick, children, label, ...rest }) => (
+  <button onClick={onClick} aria-label={label} aria-pressed={on} className={`relative aspect-[4/3] overflow-hidden rounded-[14px] ${on ? 'ring-2 ring-ink ring-offset-2 ring-offset-transparent' : 'opacity-80 hover:opacity-100'}`} {...rest}>
+    {children}
+  </button>
+);
+
 // The photograph every page floats on. Shared with v1 (mc.backdrop).
 function Backdrop() {
   const pick = useBackdrop((s) => s.pick);
@@ -30,11 +39,6 @@ function Backdrop() {
   const [url, setUrl] = useState(pick.url || '');
   const dim = typeof pick.dim === 'number' ? pick.dim : 0.2;
   const auto = !pick.file && !pick.url;
-  const Thumb = ({ on, onClick, children, label, ...rest }) => (
-    <button onClick={onClick} aria-label={label} aria-pressed={on} className={`relative aspect-[4/3] overflow-hidden rounded-[14px] ${on ? 'ring-2 ring-ink ring-offset-2 ring-offset-transparent' : 'opacity-80 hover:opacity-100'}`} {...rest}>
-      {children}
-    </button>
-  );
   return (
     <Group title="Backdrop" footer="Auto follows the time of day — dawn, day, dusk, night. Your pick holds on every page, and in the classic interface too.">
       <div className="grid grid-cols-3 gap-2.5 p-3 sm:grid-cols-6" data-backdrops>

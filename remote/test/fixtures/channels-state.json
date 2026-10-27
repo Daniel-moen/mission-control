@@ -1,0 +1,3287 @@
+{
+ "schema": 1,
+ "at": "2026-10-27T10:00:00+02:00",
+ "channels": [
+  {
+   "key": "raw-incident",
+   "name": "Raw Incident",
+   "niche": "Bodycam law explainers: US police stops, force and accountability",
+   "language": "English (US audience)",
+   "voice": "Kokoro af_heart-1.15",
+   "status": "live",
+   "logo": null,
+   "banner": null,
+   "setup": null,
+   "setup_path": "/fixture/raw-incident",
+   "youtube": {
+    "channel_id": "UC_fixture",
+    "url": "https://www.youtube.com/channel/UC_fixture"
+   },
+   "repo": "/fixture/raw-incident",
+   "palette": null,
+   "tagline": "One long video a day at 19:30 SAST, plus two Shorts",
+   "name_options": [],
+   "ideas": [],
+   "notes": [],
+   "slot": "19:30",
+   "active": true,
+   "format": "mixed",
+   "numbers": {
+    "views_7d": 29295,
+    "views_7d_partial": false,
+    "views_28d": 53951,
+    "views_28d_partial": false,
+    "subscribers": null,
+    "subscribers_at": null,
+    "published": 25,
+    "published_long": 12,
+    "published_short": 13,
+    "next_publish": null,
+    "latest": null,
+    "stages": {
+     "idea": 0,
+     "script": 0,
+     "voice": 0,
+     "visuals": 0,
+     "render": 0,
+     "qa": 0,
+     "ready": 0,
+     "uploaded": 0,
+     "scheduled": 0,
+     "public": 25
+    },
+    "videos": 25,
+    "views_48h": 2628,
+    "shorts": {
+     "total": 13,
+     "public": 13,
+     "ready": 0,
+     "in_progress": 0
+    },
+    "long_paused": 0,
+    "cadence": {
+     "planned": false,
+     "plan_text": "1/day in week 1 · 2/day in weeks 2–3 · 3/day from week 4 · up to 5/day above 1M views in 48 h",
+     "started": true,
+     "total": 13,
+     "window_sast": "12:00–04:00",
+     "boosted": false,
+     "start": "2026-10-15",
+     "day": 13,
+     "week": 2,
+     "days": [
+      {
+       "date": "2026-10-14",
+       "posted": 0,
+       "target": null,
+       "day": 0
+      },
+      {
+       "date": "2026-10-15",
+       "posted": 2,
+       "target": null,
+       "day": 1
+      },
+      {
+       "date": "2026-10-16",
+       "posted": 3,
+       "target": null,
+       "day": 2
+      },
+      {
+       "date": "2026-10-17",
+       "posted": 4,
+       "target": null,
+       "day": 3
+      },
+      {
+       "date": "2026-10-18",
+       "posted": 0,
+       "target": null,
+       "day": 4
+      },
+      {
+       "date": "2026-10-19",
+       "posted": 3,
+       "target": null,
+       "day": 5
+      },
+      {
+       "date": "2026-10-20",
+       "posted": 0,
+       "target": null,
+       "day": 6
+      },
+      {
+       "date": "2026-10-21",
+       "posted": 0,
+       "target": null,
+       "day": 7
+      },
+      {
+       "date": "2026-10-22",
+       "posted": 0,
+       "target": null,
+       "day": 8
+      },
+      {
+       "date": "2026-10-23",
+       "posted": 0,
+       "target": null,
+       "day": 9
+      },
+      {
+       "date": "2026-10-24",
+       "posted": 0,
+       "target": null,
+       "day": 10
+      },
+      {
+       "date": "2026-10-25",
+       "posted": 1,
+       "target": null,
+       "day": 11
+      },
+      {
+       "date": "2026-10-26",
+       "posted": 0,
+       "target": null,
+       "day": 12
+      },
+      {
+       "date": "2026-10-27",
+       "posted": 0,
+       "target": null,
+       "day": 13
+      }
+     ],
+     "today_posted": 0,
+     "today_target": null,
+     "last7_posted": 1,
+     "last7_target": null,
+     "last_post": "2026-10-25T21:00:13+02:00"
+    }
+   }
+  },
+  {
+   "key": "explainer-datos-es",
+   "name": "Datazo",
+   "niche": null,
+   "language": "es",
+   "voice": "Kokoro ef_dora",
+   "status": "setting-up",
+   "logo": null,
+   "banner": null,
+   "setup": null,
+   "setup_path": "/fixture/explainer-datos-es",
+   "youtube": null,
+   "repo": "/fixture/explainer-datos-es",
+   "palette": {
+    "mode": "dark",
+    "bg": "#0B0B10",
+    "bg2": "#16161F",
+    "surface": "#22222E",
+    "ink": "#F5F5F7",
+    "muted": "#A8A8B8",
+    "grid": "#2E2E3C",
+    "accent": "#FFC531",
+    "series": [
+     "#11A396",
+     "#C27F1A",
+     "#8780F2",
+     "#E2617F"
+    ]
+   },
+   "tagline": null,
+   "name_options": [],
+   "ideas": [],
+   "notes": [],
+   "folder": "/fixture/explainer-channel",
+   "source": "explainer-channel (0257)",
+   "active": true,
+   "format": "shorts",
+   "numbers": {
+    "views_7d": null,
+    "views_7d_partial": false,
+    "views_28d": null,
+    "views_28d_partial": false,
+    "subscribers": null,
+    "subscribers_at": null,
+    "published": 4,
+    "published_long": 0,
+    "published_short": 4,
+    "next_publish": null,
+    "latest": null,
+    "stages": {
+     "idea": 0,
+     "script": 0,
+     "voice": 0,
+     "visuals": 0,
+     "render": 0,
+     "qa": 8,
+     "ready": 1,
+     "uploaded": 0,
+     "scheduled": 3,
+     "public": 4
+    },
+    "videos": 16,
+    "views_48h": null,
+    "shorts": {
+     "total": 16,
+     "public": 4,
+     "ready": 12,
+     "in_progress": 0
+    },
+    "long_paused": 0,
+    "cadence": {
+     "planned": true,
+     "plan_text": "1/day in week 1 · 2/day in weeks 2–3 · 3/day from week 4 · up to 5/day above 1M views in 48 h",
+     "started": false,
+     "total": 0,
+     "window_sast": "12:00–04:00",
+     "boosted": false
+    }
+   }
+  },
+  {
+   "key": "docs-aviation",
+   "name": "Causal Chain",
+   "niche": "Air accidents and incidents told strictly from the official final report: every time, altitude and finding on screen with its page number.",
+   "language": "en-us",
+   "voice": "Kokoro af_heart",
+   "status": "setting-up",
+   "logo": null,
+   "banner": null,
+   "setup": null,
+   "setup_path": "/fixture/docs-aviation",
+   "youtube": null,
+   "repo": "/fixture/docs-aviation",
+   "palette": {
+    "bg": "#0A1018",
+    "fg": "#EDEFF2",
+    "accent": "#F2A33A",
+    "accent2": "#4FA3C7",
+    "danger": "#D2453B",
+    "paper": "#E9E4D8"
+   },
+   "tagline": "Calm, exact, quietly tense. Investigator, not commentator: open loops built from the timeline, no speculation, no blame beyond the findings, and respect for everyone on board.",
+   "name_options": [
+    "Causal Chain",
+    "Readback",
+    "Released Copy"
+   ],
+   "ideas": [
+    "Both Engines Out Over the Atlantic: What the Air Transat 236 Report Found",
+    "Four Minutes in the Dark: The Air France 447 Final Report, Minute by Minute",
+    "The A380 That Came Back: Qantas 32, by the ATSB",
+    "One Wrong Number in the Laptop: Emirates 407's Take-off at Melbourne",
+    "Fire in the Cargo Hold: What the Helderberg Inquiry Could and Couldn't Prove",
+    "32 Minutes Without Controls: The JAL 123 Report and the Repair That Failed",
+    "Low and Slow at San Francisco: The Asiana 214 Report on Automation Trust",
+    "Steering With the Throttles: United 232 and the NTSB's Hardest Report",
+    "47 Missing Screws: Continental Express 2574 and the Shift Change",
+    "The Warning Nobody Called Out: Korean Air Cargo 8509 at Stansted",
+    "Into the Storm Line: Braniff 352 and the 1968 Report That Changed Weather Rules",
+    "A Cracked Solder Joint at 32,000 Feet: The AirAsia 8501 Report",
+    "The Lever Moved Too Early: BEA 548 at Staines, From the 1973 Inquiry",
+    "Smoke Before Orly: Varig 820 and Why Aircraft Lavatories Changed",
+    "Running Out of Fuel\" Is Not \"Emergency\": Avianca 52 and the Language of Holding",
+    "Lined Up on a Taxiway: Air Canada 759 at San Francisco",
+    "Two Warbirds, One Airshow: The NTSB on the Dallas Mid-air",
+    "The Turn Back to the Runway: What Three NTSB Reports Say About Engine Failure After Take-off",
+    "The Silent Flight Over Athens: The Helios 522 Report and One Switch",
+    "Gear Up, Go Around, Glide: The PIA 8303 Investigation at Karachi"
+   ],
+   "notes": [],
+   "folder": "/fixture/faceless-docs/channels/aviation",
+   "rpm": [
+    6,
+    12
+   ],
+   "source": "faceless-docs (0259)",
+   "active": false,
+   "format": "shorts",
+   "numbers": {
+    "views_7d": null,
+    "views_7d_partial": false,
+    "views_28d": null,
+    "views_28d_partial": false,
+    "subscribers": null,
+    "subscribers_at": null,
+    "published": 0,
+    "published_long": 0,
+    "published_short": 0,
+    "next_publish": null,
+    "latest": null,
+    "stages": {
+     "idea": 0,
+     "script": 1,
+     "voice": 0,
+     "visuals": 0,
+     "render": 0,
+     "qa": 0,
+     "ready": 0,
+     "uploaded": 0,
+     "scheduled": 0,
+     "public": 0
+    },
+    "videos": 1,
+    "views_48h": null,
+    "shorts": {
+     "total": 0,
+     "public": 0,
+     "ready": 0,
+     "in_progress": 0
+    },
+    "long_paused": 1,
+    "cadence": {
+     "planned": true,
+     "plan_text": "1/day in week 1 · 2/day in weeks 2–3 · 3/day from week 4 · up to 5/day above 1M views in 48 h",
+     "started": false,
+     "total": 0,
+     "window_sast": "12:00–04:00",
+     "boosted": false
+    }
+   }
+  },
+  {
+   "key": "docs-bigtech",
+   "name": "Burning Platform",
+   "niche": "The rise-and-fall stories of the tech giants, told from their own filings: the moment each company's platform caught fire, and what it did next.",
+   "language": "en-us",
+   "voice": "Kokoro af_heart",
+   "status": "setting-up",
+   "logo": null,
+   "banner": null,
+   "setup": null,
+   "setup_path": "/fixture/docs-bigtech",
+   "youtube": null,
+   "repo": "/fixture/docs-bigtech",
+   "palette": {
+    "bg": "#0D1117",
+    "fg": "#EDEFF2",
+    "accent": "#F2A33A",
+    "accent2": "#4F8FC0",
+    "danger": "#D9483B"
+   },
+   "tagline": "Calm, precise, quietly dramatic. Documentary narrator with dry wit. Every number traced to a filing; open loops and payoffs; no hype, no mockery of real people.",
+   "name_options": [
+    "Burning Platform",
+    "The Long Quarter",
+    "Paper Moats"
+   ],
+   "ideas": [
+    "Nokia: How the World's Phone King Lost Everything in Seven Years",
+    "BlackBerry: The Phone That Ran Washington, Then Vanished",
+    "Microsoft's Lost Decade: The Company That Owned the PC and Missed the Phone",
+    "Apple, 1997: The Year the Rival Paid the Rescue Bill",
+    "Nvidia: The Thirty-Year Bet That Built the AI Gold Rush",
+    "OpenAI: How a Nonprofit Research Lab Became a Commercial Giant",
+    "Tencent: The Quiet Giant Behind Your Favourite Games",
+    "WhatsApp: Fifty-Five Employees, Nineteen Billion Dollars",
+    "Instagram: The Billion-Dollar Purchase Everyone Called a Mistake",
+    "Yahoo: The Company That Could Have Bought Google",
+    "Samsung: From a Grocery Trader to the World's Phone Maker",
+    "TSMC: The Factory the Whole World Depends On",
+    "Intel: How the Chip King Said No to the iPhone",
+    "The Browser War: How Netscape Lost the Internet to a Free Download",
+    "Google's Default Deal: How Search Became a Monopoly in Court",
+    "Figma vs Adobe: The 20-Billion-Dollar Deal That Died",
+    "From Clippy to Copilot: Microsoft's Thirty-Year Quest for an Assistant",
+    "Blockbuster: The Fifty-Million-Dollar Offer It Turned Down",
+    "The Capacitor Plague: The Bad Formula That Broke Millions of PCs",
+    "Huawei: How Sanctions Forced a Tech Giant to Build Everything Itself"
+   ],
+   "notes": [],
+   "folder": "/fixture/faceless-docs/channels/bigtech",
+   "rpm": [
+    4,
+    12
+   ],
+   "source": "faceless-docs (0259)",
+   "active": false,
+   "format": "shorts",
+   "numbers": {
+    "views_7d": null,
+    "views_7d_partial": false,
+    "views_28d": null,
+    "views_28d_partial": false,
+    "subscribers": null,
+    "subscribers_at": null,
+    "published": 0,
+    "published_long": 0,
+    "published_short": 0,
+    "next_publish": null,
+    "latest": null,
+    "stages": {
+     "idea": 0,
+     "script": 1,
+     "voice": 0,
+     "visuals": 0,
+     "render": 0,
+     "qa": 0,
+     "ready": 0,
+     "uploaded": 0,
+     "scheduled": 0,
+     "public": 0
+    },
+    "videos": 1,
+    "views_48h": null,
+    "shorts": {
+     "total": 0,
+     "public": 0,
+     "ready": 0,
+     "in_progress": 0
+    },
+    "long_paused": 1,
+    "cadence": {
+     "planned": true,
+     "plan_text": "1/day in week 1 · 2/day in weeks 2–3 · 3/day from week 4 · up to 5/day above 1M views in 48 h",
+     "started": false,
+     "total": 0,
+     "window_sast": "12:00–04:00",
+     "boosted": false
+    }
+   }
+  }
+ ],
+ "videos": [
+  {
+   "id": "ri:fixture-01:long",
+   "channel": "raw-incident",
+   "title": "Can Police Force Their Way Into Your Home? The Truth About 'Knock and Talks'",
+   "stage": "public",
+   "kind": "long",
+   "duration": 706,
+   "description": null,
+   "thumbnail": null,
+   "thumbnails": [],
+   "video": null,
+   "qa": {
+    "status": "none",
+    "label": "Not checked",
+    "detail": []
+   },
+   "upload": {
+    "video_id": "fixture",
+    "url": "https://youtu.be/fixture",
+    "visibility": "public",
+    "status": "found on the channel",
+    "derived": true
+   },
+   "scheduled_at": null,
+   "published_at": "2026-10-14T02:27:09+02:00",
+   "language": null,
+   "parent": null,
+   "updated_at": null,
+   "notes": [
+    "On the channel; its local folder was cleaned."
+   ],
+   "next_step": "Watch the numbers",
+   "stats": {
+    "views": 8869,
+    "likes": 67,
+    "comments": 16,
+    "seen_at": "2026-10-26T15:19:51+02:00",
+    "availability": "public"
+   },
+   "series": [
+    [
+     "2026-10-21T10:55:14+02:00",
+     6406
+    ],
+    [
+     "2026-10-22T17:11:58+02:00",
+     7366
+    ],
+    [
+     "2026-10-25T16:04:26+02:00",
+     8594
+    ],
+    [
+     "2026-10-25T16:34:38+02:00",
+     8594
+    ],
+    [
+     "2026-10-26T03:03:01+02:00",
+     8732
+    ],
+    [
+     "2026-10-26T03:33:20+02:00",
+     8732
+    ],
+    [
+     "2026-10-26T14:58:32+02:00",
+     8869
+    ],
+    [
+     "2026-10-26T15:19:51+02:00",
+     8869
+    ]
+   ],
+   "checkpoints": [
+    {
+     "key": "idea",
+     "label": "Idea",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "script",
+     "label": "Script",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "voice",
+     "label": "Voice",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "visuals",
+     "label": "Visuals",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "render",
+     "label": "Render",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "qa",
+     "label": "QA",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "ready",
+     "label": "Ready",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "uploaded",
+     "label": "Uploaded (private)",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "scheduled",
+     "label": "Scheduled",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "public",
+     "label": "Public",
+     "done": true,
+     "current": true,
+     "at": "2026-10-14T02:27:09+02:00",
+     "file": "https://youtu.be/fixture"
+    }
+   ]
+  },
+  {
+   "id": "ri:fixture-02:long",
+   "channel": "raw-incident",
+   "title": "Deputies Fire at a Wrong-Way Driver. His Gun Was a Pellet Gun.",
+   "stage": "public",
+   "kind": "long",
+   "duration": 774,
+   "description": null,
+   "thumbnail": null,
+   "thumbnails": [],
+   "video": null,
+   "qa": {
+    "status": "none",
+    "label": "Not checked",
+    "detail": []
+   },
+   "upload": {
+    "video_id": "fixture",
+    "url": "https://youtu.be/fixture",
+    "visibility": "public",
+    "status": "found on the channel",
+    "derived": true
+   },
+   "scheduled_at": null,
+   "published_at": "2026-10-09T12:10:04+02:00",
+   "language": null,
+   "parent": null,
+   "updated_at": null,
+   "notes": [
+    "On the channel; its local folder was cleaned."
+   ],
+   "next_step": "Watch the numbers",
+   "stats": {
+    "views": 223,
+    "likes": 2,
+    "comments": 2,
+    "seen_at": "2026-10-26T15:19:51+02:00",
+    "availability": "public"
+   },
+   "series": [
+    [
+     "2026-10-21T10:55:14+02:00",
+     222
+    ],
+    [
+     "2026-10-22T17:11:58+02:00",
+     223
+    ],
+    [
+     "2026-10-25T16:04:26+02:00",
+     223
+    ],
+    [
+     "2026-10-25T16:34:38+02:00",
+     223
+    ],
+    [
+     "2026-10-26T03:03:01+02:00",
+     223
+    ],
+    [
+     "2026-10-26T03:33:20+02:00",
+     223
+    ],
+    [
+     "2026-10-26T14:58:32+02:00",
+     223
+    ],
+    [
+     "2026-10-26T15:19:51+02:00",
+     223
+    ]
+   ],
+   "checkpoints": [
+    {
+     "key": "idea",
+     "label": "Idea",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "script",
+     "label": "Script",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "voice",
+     "label": "Voice",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "visuals",
+     "label": "Visuals",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "render",
+     "label": "Render",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "qa",
+     "label": "QA",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "ready",
+     "label": "Ready",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "uploaded",
+     "label": "Uploaded (private)",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "scheduled",
+     "label": "Scheduled",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "public",
+     "label": "Public",
+     "done": true,
+     "current": true,
+     "at": "2026-10-09T12:10:04+02:00",
+     "file": "https://youtu.be/fixture"
+    }
+   ]
+  },
+  {
+   "id": "ri:fixture-03:long",
+   "channel": "raw-incident",
+   "title": "Deputy Clocks Him at 93. He Swears He Was Doing 20.",
+   "stage": "public",
+   "kind": "long",
+   "duration": 786,
+   "description": null,
+   "thumbnail": null,
+   "thumbnails": [],
+   "video": null,
+   "qa": {
+    "status": "none",
+    "label": "Not checked",
+    "detail": []
+   },
+   "upload": {
+    "video_id": "fixture",
+    "url": "https://youtu.be/fixture",
+    "visibility": "public",
+    "status": "found on the channel",
+    "derived": true
+   },
+   "scheduled_at": null,
+   "published_at": "2026-10-08T17:45:42+02:00",
+   "language": null,
+   "parent": null,
+   "updated_at": null,
+   "notes": [
+    "On the channel; its local folder was cleaned."
+   ],
+   "next_step": "Watch the numbers",
+   "stats": {
+    "views": 1241,
+    "likes": 18,
+    "comments": 1,
+    "seen_at": "2026-10-26T15:19:51+02:00",
+    "availability": "public"
+   },
+   "series": [
+    [
+     "2026-10-21T10:55:14+02:00",
+     1063
+    ],
+    [
+     "2026-10-22T17:11:58+02:00",
+     1187
+    ],
+    [
+     "2026-10-25T16:04:26+02:00",
+     1234
+    ],
+    [
+     "2026-10-25T16:34:38+02:00",
+     1234
+    ],
+    [
+     "2026-10-26T03:03:01+02:00",
+     1238
+    ],
+    [
+     "2026-10-26T03:33:20+02:00",
+     1238
+    ],
+    [
+     "2026-10-26T14:58:32+02:00",
+     1241
+    ],
+    [
+     "2026-10-26T15:19:51+02:00",
+     1241
+    ]
+   ],
+   "checkpoints": [
+    {
+     "key": "idea",
+     "label": "Idea",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "script",
+     "label": "Script",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "voice",
+     "label": "Voice",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "visuals",
+     "label": "Visuals",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "render",
+     "label": "Render",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "qa",
+     "label": "QA",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "ready",
+     "label": "Ready",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "uploaded",
+     "label": "Uploaded (private)",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "scheduled",
+     "label": "Scheduled",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "public",
+     "label": "Public",
+     "done": true,
+     "current": true,
+     "at": "2026-10-08T17:45:42+02:00",
+     "file": "https://youtu.be/fixture"
+    }
+   ]
+  },
+  {
+   "id": "ri:fixture-04:long",
+   "channel": "raw-incident",
+   "title": "Cop Pepper-Sprays Man Over a Ticket. The City Paid $397,000.",
+   "stage": "public",
+   "kind": "long",
+   "duration": 969,
+   "description": null,
+   "thumbnail": null,
+   "thumbnails": [],
+   "video": null,
+   "qa": {
+    "status": "none",
+    "label": "Not checked",
+    "detail": []
+   },
+   "upload": {
+    "video_id": "fixture",
+    "url": "https://youtu.be/fixture",
+    "visibility": "public",
+    "status": "found on the channel",
+    "derived": true
+   },
+   "scheduled_at": null,
+   "published_at": "2026-10-14T20:46:12+02:00",
+   "language": null,
+   "parent": null,
+   "updated_at": null,
+   "notes": [
+    "On the channel; its local folder was cleaned."
+   ],
+   "next_step": "Watch the numbers",
+   "stats": {
+    "views": 295,
+    "likes": 7,
+    "comments": null,
+    "seen_at": "2026-10-26T15:19:51+02:00",
+    "availability": "public"
+   },
+   "series": [
+    [
+     "2026-10-21T10:55:14+02:00",
+     224
+    ],
+    [
+     "2026-10-22T17:11:58+02:00",
+     243
+    ],
+    [
+     "2026-10-25T16:04:26+02:00",
+     288
+    ],
+    [
+     "2026-10-25T16:34:38+02:00",
+     288
+    ],
+    [
+     "2026-10-26T03:03:01+02:00",
+     295
+    ],
+    [
+     "2026-10-26T03:33:20+02:00",
+     295
+    ],
+    [
+     "2026-10-26T14:58:32+02:00",
+     295
+    ],
+    [
+     "2026-10-26T15:19:51+02:00",
+     295
+    ]
+   ],
+   "checkpoints": [
+    {
+     "key": "idea",
+     "label": "Idea",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "script",
+     "label": "Script",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "voice",
+     "label": "Voice",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "visuals",
+     "label": "Visuals",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "render",
+     "label": "Render",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "qa",
+     "label": "QA",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "ready",
+     "label": "Ready",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "uploaded",
+     "label": "Uploaded (private)",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "scheduled",
+     "label": "Scheduled",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "public",
+     "label": "Public",
+     "done": true,
+     "current": true,
+     "at": "2026-10-14T20:46:12+02:00",
+     "file": "https://youtu.be/fixture"
+    }
+   ]
+  },
+  {
+   "id": "ri:fixture-05:short",
+   "channel": "raw-incident",
+   "title": "Cop Puts Foot in Door Over a Speeding Ticket #Shorts",
+   "stage": "render",
+   "kind": "short",
+   "duration": 31,
+   "description": null,
+   "thumbnail": null,
+   "thumbnails": [],
+   "video": null,
+   "qa": {
+    "status": "none",
+    "label": "Not checked",
+    "detail": []
+   },
+   "upload": null,
+   "scheduled_at": null,
+   "published_at": null,
+   "language": null,
+   "parent": null,
+   "updated_at": null,
+   "notes": [
+    "On the channel; its local folder was cleaned."
+   ],
+   "next_step": "QA",
+   "stats": null,
+   "series": [],
+   "checkpoints": [
+    {
+     "key": "idea",
+     "label": "Idea",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "script",
+     "label": "Script",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "voice",
+     "label": "Voice",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "visuals",
+     "label": "Visuals",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "render",
+     "label": "Render",
+     "done": false,
+     "current": true,
+     "at": "2026-10-27T09:00:00+02:00",
+     "file": "renders/fixture-short.mp4"
+    },
+    {
+     "key": "qa",
+     "label": "QA",
+     "done": false,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "ready",
+     "label": "Ready",
+     "done": false,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "uploaded",
+     "label": "Uploaded (private)",
+     "done": false,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "scheduled",
+     "label": "Scheduled",
+     "done": false,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "public",
+     "label": "Public",
+     "done": false,
+     "current": false,
+     "at": null,
+     "file": null
+    }
+   ]
+  },
+  {
+   "id": "ri:fixture-06:short",
+   "channel": "raw-incident",
+   "title": "He Refused a Ticket. Then Came the Pepper Spray #Shorts",
+   "stage": "public",
+   "kind": "short",
+   "duration": 33,
+   "description": null,
+   "thumbnail": null,
+   "thumbnails": [],
+   "video": null,
+   "qa": {
+    "status": "none",
+    "label": "Not checked",
+    "detail": []
+   },
+   "upload": {
+    "video_id": "fixture",
+    "url": "https://youtu.be/fixture",
+    "visibility": "public",
+    "status": "found on the channel",
+    "derived": true
+   },
+   "scheduled_at": null,
+   "published_at": "2026-10-15T19:53:23+02:00",
+   "language": null,
+   "parent": null,
+   "updated_at": null,
+   "notes": [
+    "On the channel; its local folder was cleaned."
+   ],
+   "next_step": "Watch the numbers",
+   "stats": {
+    "views": 1245,
+    "likes": 16,
+    "comments": 4,
+    "seen_at": "2026-10-26T15:19:51+02:00",
+    "availability": "public"
+   },
+   "series": [
+    [
+     "2026-10-21T10:55:14+02:00",
+     1243
+    ],
+    [
+     "2026-10-22T17:11:58+02:00",
+     1244
+    ],
+    [
+     "2026-10-25T16:04:26+02:00",
+     1245
+    ],
+    [
+     "2026-10-25T16:34:38+02:00",
+     1245
+    ],
+    [
+     "2026-10-26T03:03:01+02:00",
+     1245
+    ],
+    [
+     "2026-10-26T03:33:20+02:00",
+     1245
+    ],
+    [
+     "2026-10-26T14:58:32+02:00",
+     1245
+    ],
+    [
+     "2026-10-26T15:19:51+02:00",
+     1245
+    ]
+   ],
+   "checkpoints": [
+    {
+     "key": "idea",
+     "label": "Idea",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "script",
+     "label": "Script",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "voice",
+     "label": "Voice",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "visuals",
+     "label": "Visuals",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "render",
+     "label": "Render",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "qa",
+     "label": "QA",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "ready",
+     "label": "Ready",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "uploaded",
+     "label": "Uploaded (private)",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "scheduled",
+     "label": "Scheduled",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "public",
+     "label": "Public",
+     "done": true,
+     "current": true,
+     "at": "2026-10-15T19:53:23+02:00",
+     "file": "https://youtu.be/fixture"
+    }
+   ]
+  },
+  {
+   "id": "ri:fixture-07:short",
+   "channel": "raw-incident",
+   "title": "Driver Refuses His License, Demands a Supervisor #Shorts",
+   "stage": "public",
+   "kind": "short",
+   "duration": 35,
+   "description": null,
+   "thumbnail": null,
+   "thumbnails": [],
+   "video": null,
+   "qa": {
+    "status": "none",
+    "label": "Not checked",
+    "detail": []
+   },
+   "upload": {
+    "video_id": "fixture",
+    "url": "https://youtu.be/fixture",
+    "visibility": "public",
+    "status": "found on the channel",
+    "derived": true
+   },
+   "scheduled_at": null,
+   "published_at": "2026-10-16T15:03:25+02:00",
+   "language": null,
+   "parent": null,
+   "updated_at": null,
+   "notes": [
+    "On the channel; its local folder was cleaned."
+   ],
+   "next_step": "Watch the numbers",
+   "stats": {
+    "views": 4546,
+    "likes": 75,
+    "comments": 11,
+    "seen_at": "2026-10-26T15:19:51+02:00",
+    "availability": "public"
+   },
+   "series": [
+    [
+     "2026-10-22T17:11:58+02:00",
+     4546
+    ],
+    [
+     "2026-10-25T16:04:26+02:00",
+     4546
+    ],
+    [
+     "2026-10-25T16:34:38+02:00",
+     4546
+    ],
+    [
+     "2026-10-26T03:03:01+02:00",
+     4546
+    ],
+    [
+     "2026-10-26T03:31:41+02:00",
+     4546
+    ],
+    [
+     "2026-10-26T03:33:20+02:00",
+     4546
+    ],
+    [
+     "2026-10-26T14:58:32+02:00",
+     4546
+    ],
+    [
+     "2026-10-26T15:19:51+02:00",
+     4546
+    ]
+   ],
+   "checkpoints": [
+    {
+     "key": "idea",
+     "label": "Idea",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "script",
+     "label": "Script",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "voice",
+     "label": "Voice",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "visuals",
+     "label": "Visuals",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "render",
+     "label": "Render",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "qa",
+     "label": "QA",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "ready",
+     "label": "Ready",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "uploaded",
+     "label": "Uploaded (private)",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "scheduled",
+     "label": "Scheduled",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "public",
+     "label": "Public",
+     "done": true,
+     "current": true,
+     "at": "2026-10-16T15:03:25+02:00",
+     "file": "https://youtu.be/fixture"
+    }
+   ]
+  },
+  {
+   "id": "ri:fixture-08:short",
+   "channel": "raw-incident",
+   "title": "He Said 20. The Deputy Said 93. #Shorts",
+   "stage": "public",
+   "kind": "short",
+   "duration": 40,
+   "description": null,
+   "thumbnail": null,
+   "thumbnails": [],
+   "video": null,
+   "qa": {
+    "status": "none",
+    "label": "Not checked",
+    "detail": []
+   },
+   "upload": {
+    "video_id": "fixture",
+    "url": "https://youtu.be/fixture",
+    "visibility": "public",
+    "status": "found on the channel",
+    "derived": true
+   },
+   "scheduled_at": null,
+   "published_at": "2026-10-16T15:03:01+02:00",
+   "language": null,
+   "parent": null,
+   "updated_at": null,
+   "notes": [
+    "On the channel; its local folder was cleaned."
+   ],
+   "next_step": "Watch the numbers",
+   "stats": {
+    "views": 1435,
+    "likes": 23,
+    "comments": null,
+    "seen_at": "2026-10-26T15:19:51+02:00",
+    "availability": "public"
+   },
+   "series": [
+    [
+     "2026-10-21T10:55:14+02:00",
+     1422
+    ],
+    [
+     "2026-10-22T17:11:58+02:00",
+     1431
+    ],
+    [
+     "2026-10-25T16:04:26+02:00",
+     1435
+    ],
+    [
+     "2026-10-25T16:34:38+02:00",
+     1435
+    ],
+    [
+     "2026-10-26T03:03:01+02:00",
+     1435
+    ],
+    [
+     "2026-10-26T03:33:20+02:00",
+     1435
+    ],
+    [
+     "2026-10-26T14:58:32+02:00",
+     1435
+    ],
+    [
+     "2026-10-26T15:19:51+02:00",
+     1435
+    ]
+   ],
+   "checkpoints": [
+    {
+     "key": "idea",
+     "label": "Idea",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "script",
+     "label": "Script",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "voice",
+     "label": "Voice",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "visuals",
+     "label": "Visuals",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "render",
+     "label": "Render",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "qa",
+     "label": "QA",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "ready",
+     "label": "Ready",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "uploaded",
+     "label": "Uploaded (private)",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "scheduled",
+     "label": "Scheduled",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "public",
+     "label": "Public",
+     "done": true,
+     "current": true,
+     "at": "2026-10-16T15:03:01+02:00",
+     "file": "https://youtu.be/fixture"
+    }
+   ]
+  },
+  {
+   "id": "ri:fixture-09:short",
+   "channel": "raw-incident",
+   "title": "Wrong-Way U-Haul Driver Aims at Deputies #Shorts",
+   "stage": "public",
+   "kind": "short",
+   "duration": 29,
+   "description": null,
+   "thumbnail": null,
+   "thumbnails": [],
+   "video": null,
+   "qa": {
+    "status": "none",
+    "label": "Not checked",
+    "detail": []
+   },
+   "upload": {
+    "video_id": "fixture",
+    "url": "https://youtu.be/fixture",
+    "visibility": "public",
+    "status": "found on the channel",
+    "derived": true
+   },
+   "scheduled_at": null,
+   "published_at": "2026-10-16T15:02:33+02:00",
+   "language": null,
+   "parent": null,
+   "updated_at": null,
+   "notes": [
+    "On the channel; its local folder was cleaned."
+   ],
+   "next_step": "Watch the numbers",
+   "stats": {
+    "views": 87,
+    "likes": 1,
+    "comments": null,
+    "seen_at": "2026-10-26T15:19:51+02:00",
+    "availability": "public"
+   },
+   "series": [
+    [
+     "2026-10-17T12:34:34+02:00",
+     29
+    ],
+    [
+     "2026-10-17T15:45:20+02:00",
+     34
+    ],
+    [
+     "2026-10-22T17:11:58+02:00",
+     86
+    ],
+    [
+     "2026-10-25T16:34:38+02:00",
+     87
+    ],
+    [
+     "2026-10-26T03:03:01+02:00",
+     87
+    ],
+    [
+     "2026-10-26T03:33:20+02:00",
+     87
+    ],
+    [
+     "2026-10-26T14:58:32+02:00",
+     87
+    ],
+    [
+     "2026-10-26T15:19:51+02:00",
+     87
+    ]
+   ],
+   "checkpoints": [
+    {
+     "key": "idea",
+     "label": "Idea",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "script",
+     "label": "Script",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "voice",
+     "label": "Voice",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "visuals",
+     "label": "Visuals",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "render",
+     "label": "Render",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "qa",
+     "label": "QA",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "ready",
+     "label": "Ready",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "uploaded",
+     "label": "Uploaded (private)",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "scheduled",
+     "label": "Scheduled",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "public",
+     "label": "Public",
+     "done": true,
+     "current": true,
+     "at": "2026-10-16T15:02:33+02:00",
+     "file": "https://youtu.be/fixture"
+    }
+   ]
+  },
+  {
+   "id": "es:fixture-10:short",
+   "channel": "explainer-datos-es",
+   "title": "ESTA ABEJA PICA Y FIRMA SU FINAL",
+   "stage": "public",
+   "kind": "short",
+   "duration": null,
+   "description": null,
+   "thumbnail": null,
+   "thumbnails": [],
+   "video": null,
+   "qa": {
+    "status": "pass",
+    "label": "Contact sheet made",
+    "detail": [
+     "Contact sheet ready to review"
+    ]
+   },
+   "upload": null,
+   "scheduled_at": null,
+   "published_at": null,
+   "language": null,
+   "parent": null,
+   "updated_at": "2026-10-17T20:07:05+02:00",
+   "notes": [],
+   "next_step": "live; watch the numbers",
+   "status_file": {
+    "id": "ZXhwbGFpbmVyOnByb2plY3RzL2RhdG9zLWVzL3Nob3J0cy8wMS1hYmVqYS1waWNhL3N0YXR1cy5qc29u",
+    "name": "status.json"
+   },
+   "has_status": true,
+   "checkpoints": [
+    {
+     "key": "idea",
+     "label": "Idea",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "script",
+     "label": "Script",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "voice",
+     "label": "Voice",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "visuals",
+     "label": "Visuals",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "render",
+     "label": "Render",
+     "done": true,
+     "current": false,
+     "at": "2026-10-17T16:12:42+02:00",
+     "file": "abeja-pica.mp4"
+    },
+    {
+     "key": "qa",
+     "label": "QA",
+     "done": true,
+     "current": false,
+     "at": "2026-10-17T16:12:48+02:00",
+     "file": "abeja-pica.contact.jpg"
+    },
+    {
+     "key": "ready",
+     "label": "Ready",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "uploaded",
+     "label": "Uploaded (private)",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "scheduled",
+     "label": "Scheduled",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "public",
+     "label": "Public",
+     "done": true,
+     "current": true,
+     "at": null,
+     "file": null
+    }
+   ],
+   "series": []
+  },
+  {
+   "id": "es:fixture-11:short",
+   "channel": "explainer-datos-es",
+   "title": "EL HOYO MÁS PROFUNDO MIDE SOLO 23 CM",
+   "stage": "public",
+   "kind": "short",
+   "duration": null,
+   "description": null,
+   "thumbnail": null,
+   "thumbnails": [],
+   "video": null,
+   "qa": {
+    "status": "pass",
+    "label": "Contact sheet made",
+    "detail": [
+     "Contact sheet ready to review"
+    ]
+   },
+   "upload": null,
+   "scheduled_at": null,
+   "published_at": null,
+   "language": null,
+   "parent": null,
+   "updated_at": "2026-10-18T17:01:56+02:00",
+   "notes": [],
+   "next_step": "live; watch the numbers",
+   "status_file": {
+    "id": "ZXhwbGFpbmVyOnByb2plY3RzL2RhdG9zLWVzL3Nob3J0cy8wMi1ob3lvLW1hcy1wcm9mdW5kby9zdGF0dXMuanNvbg",
+    "name": "status.json"
+   },
+   "has_status": true,
+   "checkpoints": [
+    {
+     "key": "idea",
+     "label": "Idea",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "script",
+     "label": "Script",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "voice",
+     "label": "Voice",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "visuals",
+     "label": "Visuals",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "render",
+     "label": "Render",
+     "done": true,
+     "current": false,
+     "at": "2026-10-17T16:15:27+02:00",
+     "file": "hoyo-mas-profundo.mp4"
+    },
+    {
+     "key": "qa",
+     "label": "QA",
+     "done": true,
+     "current": false,
+     "at": "2026-10-17T16:15:33+02:00",
+     "file": "hoyo-mas-profundo.contact.jpg"
+    },
+    {
+     "key": "ready",
+     "label": "Ready",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "uploaded",
+     "label": "Uploaded (private)",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "scheduled",
+     "label": "Scheduled",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "public",
+     "label": "Public",
+     "done": true,
+     "current": true,
+     "at": null,
+     "file": null
+    }
+   ],
+   "series": []
+  },
+  {
+   "id": "es:fixture-12:short",
+   "channel": "explainer-datos-es",
+   "title": "UN SOLO BOCADO MÁS GRANDE QUE ELLA",
+   "stage": "public",
+   "kind": "short",
+   "duration": null,
+   "description": null,
+   "thumbnail": null,
+   "thumbnails": [],
+   "video": null,
+   "qa": {
+    "status": "pass",
+    "label": "Contact sheet made",
+    "detail": [
+     "Contact sheet ready to review"
+    ]
+   },
+   "upload": null,
+   "scheduled_at": null,
+   "published_at": null,
+   "language": null,
+   "parent": null,
+   "updated_at": "2026-10-19T17:10:00+02:00",
+   "notes": [],
+   "next_step": "live; watch the numbers",
+   "status_file": {
+    "id": "ZXhwbGFpbmVyOnByb2plY3RzL2RhdG9zLWVzL3Nob3J0cy8wMy1iYWxsZW5hLWJvY2Fkby9zdGF0dXMuanNvbg",
+    "name": "status.json"
+   },
+   "has_status": true,
+   "checkpoints": [
+    {
+     "key": "idea",
+     "label": "Idea",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "script",
+     "label": "Script",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "voice",
+     "label": "Voice",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "visuals",
+     "label": "Visuals",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "render",
+     "label": "Render",
+     "done": true,
+     "current": false,
+     "at": "2026-10-17T16:14:57+02:00",
+     "file": "ballena-bocado.mp4"
+    },
+    {
+     "key": "qa",
+     "label": "QA",
+     "done": true,
+     "current": false,
+     "at": "2026-10-17T16:15:03+02:00",
+     "file": "ballena-bocado.contact.jpg"
+    },
+    {
+     "key": "ready",
+     "label": "Ready",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "uploaded",
+     "label": "Uploaded (private)",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "scheduled",
+     "label": "Scheduled",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "public",
+     "label": "Public",
+     "done": true,
+     "current": true,
+     "at": null,
+     "file": null
+    }
+   ],
+   "series": []
+  },
+  {
+   "id": "av:fixture-13:long",
+   "channel": "docs-aviation",
+   "title": "Both Engines Out Over the Atlantic: The Air Transat 236 Report",
+   "stage": "script",
+   "kind": "long",
+   "duration": 720,
+   "description": null,
+   "thumbnail": null,
+   "thumbnails": [],
+   "video": null,
+   "qa": {
+    "status": "none",
+    "label": "Not checked",
+    "detail": []
+   },
+   "upload": null,
+   "scheduled_at": null,
+   "published_at": null,
+   "language": "en-us",
+   "parent": null,
+   "updated_at": "2026-10-17T14:06:36+02:00",
+   "notes": [
+    "Long-form is paused: this channel is Shorts-only now (17 Oct)."
+   ],
+   "next_step": "Record the voice",
+   "duration_is_target": true,
+   "package": {
+    "id": "ZG9jczpjaGFubmVscy9hdmlhdGlvbi92aWRlb3MvMDEtYWlyLXRyYW5zYXQtMjM2LWF6b3Jlcy1nbGlkZS9wYWNrYWdlLm1k",
+    "name": "package.md"
+   },
+   "long_paused": true,
+   "checkpoints": [
+    {
+     "key": "idea",
+     "label": "Idea",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "script",
+     "label": "Script",
+     "done": true,
+     "current": true,
+     "at": "2026-10-17T14:04:56+02:00",
+     "file": "script.md"
+    },
+    {
+     "key": "voice",
+     "label": "Voice",
+     "done": false,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "visuals",
+     "label": "Visuals",
+     "done": false,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "render",
+     "label": "Render",
+     "done": false,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "qa",
+     "label": "QA",
+     "done": false,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "ready",
+     "label": "Ready",
+     "done": false,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "uploaded",
+     "label": "Uploaded (private)",
+     "done": false,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "scheduled",
+     "label": "Scheduled",
+     "done": false,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "public",
+     "label": "Public",
+     "done": false,
+     "current": false,
+     "at": null,
+     "file": null
+    }
+   ],
+   "series": []
+  },
+  {
+   "id": "bt:fixture-14:long",
+   "channel": "docs-bigtech",
+   "title": "Nokia: The Phone King That Lost Everything in Seven Years",
+   "stage": "script",
+   "kind": "long",
+   "duration": 720,
+   "description": null,
+   "thumbnail": null,
+   "thumbnails": [],
+   "video": null,
+   "qa": {
+    "status": "none",
+    "label": "Not checked",
+    "detail": []
+   },
+   "upload": null,
+   "scheduled_at": null,
+   "published_at": null,
+   "language": "en-us",
+   "parent": null,
+   "updated_at": "2026-10-17T14:11:19+02:00",
+   "notes": [
+    "Long-form is paused: this channel is Shorts-only now (17 Oct)."
+   ],
+   "next_step": "Record the voice",
+   "duration_is_target": true,
+   "package": {
+    "id": "ZG9jczpjaGFubmVscy9iaWd0ZWNoL3ZpZGVvcy8wMS1ub2tpYS1idXJuaW5nLXBsYXRmb3JtL3BhY2thZ2UubWQ",
+    "name": "package.md"
+   },
+   "long_paused": true,
+   "checkpoints": [
+    {
+     "key": "idea",
+     "label": "Idea",
+     "done": true,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "script",
+     "label": "Script",
+     "done": true,
+     "current": true,
+     "at": "2026-10-17T14:08:13+02:00",
+     "file": "script.md"
+    },
+    {
+     "key": "voice",
+     "label": "Voice",
+     "done": false,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "visuals",
+     "label": "Visuals",
+     "done": false,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "render",
+     "label": "Render",
+     "done": false,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "qa",
+     "label": "QA",
+     "done": false,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "ready",
+     "label": "Ready",
+     "done": false,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "uploaded",
+     "label": "Uploaded (private)",
+     "done": false,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "scheduled",
+     "label": "Scheduled",
+     "done": false,
+     "current": false,
+     "at": null,
+     "file": null
+    },
+    {
+     "key": "public",
+     "label": "Public",
+     "done": false,
+     "current": false,
+     "at": null,
+     "file": null
+    }
+   ],
+   "series": []
+  }
+ ],
+ "stages": [
+  {
+   "key": "idea",
+   "label": "Idea"
+  },
+  {
+   "key": "script",
+   "label": "Script"
+  },
+  {
+   "key": "voice",
+   "label": "Voice"
+  },
+  {
+   "key": "visuals",
+   "label": "Visuals"
+  },
+  {
+   "key": "render",
+   "label": "Render"
+  },
+  {
+   "key": "qa",
+   "label": "QA"
+  },
+  {
+   "key": "ready",
+   "label": "Ready"
+  },
+  {
+   "key": "uploaded",
+   "label": "Uploaded (private)"
+  },
+  {
+   "key": "scheduled",
+   "label": "Scheduled"
+  },
+  {
+   "key": "public",
+   "label": "Public"
+  }
+ ],
+ "needs": [
+  {
+   "kind": "create",
+   "channels": [
+    "explainer-datos-es",
+    "explainer-datos-pt",
+    "stories-wild-hearts-facts"
+   ],
+   "title": "Create 3 YouTube channels",
+   "detail": "Setup sheets ready: Datazo, Sabia Não?, Wild Hearts Facts."
+  },
+  {
+   "kind": "review",
+   "channel": "explainer-datos-es",
+   "video": null,
+   "title": "Watch “LOS SECRETOS OCULTOS DE LOS CUERVOS”",
+   "detail": "Rendered and checked; waiting for your review."
+  },
+  {
+   "kind": "review",
+   "channel": "explainer-datos-es",
+   "video": null,
+   "title": "Watch “TUS DEDOS SE ARRUGAN A PROPÓSITO”",
+   "detail": "Rendered and checked; waiting for your review."
+  },
+  {
+   "kind": "review",
+   "channel": "explainer-datos-es",
+   "video": null,
+   "title": "Watch “LA PALABRA DINOSAURIO TIENE INVENTOR”",
+   "detail": "Rendered and checked; waiting for your review."
+  }
+ ],
+ "calendar": [
+  {
+   "at": "2026-10-14T02:27:09+02:00",
+   "kind": "published",
+   "channel": "raw-incident",
+   "video": null,
+   "title": "Can Police Force Their Way Into Your Home? The Truth About 'Knock and Talks'",
+   "short": false,
+   "thumbnail": null,
+   "views": 8869
+  },
+  {
+   "at": "2026-10-14T19:31:07+02:00",
+   "kind": "published",
+   "channel": "raw-incident",
+   "video": null,
+   "title": "Can Police Arrest You for Waiting on a Supervisor?",
+   "short": false,
+   "thumbnail": null,
+   "views": 968
+  },
+  {
+   "at": "2026-10-14T20:46:12+02:00",
+   "kind": "published",
+   "channel": "raw-incident",
+   "video": null,
+   "title": "Cop Pepper-Sprays Man Over a Ticket. The City Paid $397,000.",
+   "short": false,
+   "thumbnail": null,
+   "views": 295
+  },
+  {
+   "at": "2026-10-15T19:53:23+02:00",
+   "kind": "published",
+   "channel": "raw-incident",
+   "video": null,
+   "title": "He Refused a Ticket. Then Came the Pepper Spray #Shorts",
+   "short": true,
+   "thumbnail": null,
+   "views": 1245
+  },
+  {
+   "at": "2026-10-15T20:14:42+02:00",
+   "kind": "published",
+   "channel": "raw-incident",
+   "video": null,
+   "title": "Cop Puts Foot in Door Over a Speeding Ticket #Shorts",
+   "short": true,
+   "thumbnail": null,
+   "views": 1462
+  },
+  {
+   "at": "2026-10-16T15:02:33+02:00",
+   "kind": "published",
+   "channel": "raw-incident",
+   "video": null,
+   "title": "Wrong-Way U-Haul Driver Aims at Deputies #Shorts",
+   "short": true,
+   "thumbnail": null,
+   "views": 87
+  },
+  {
+   "at": "2026-10-16T15:03:01+02:00",
+   "kind": "published",
+   "channel": "raw-incident",
+   "video": null,
+   "title": "He Said 20. The Deputy Said 93. #Shorts",
+   "short": true,
+   "thumbnail": null,
+   "views": 1435
+  },
+  {
+   "at": "2026-10-16T15:03:25+02:00",
+   "kind": "published",
+   "channel": "raw-incident",
+   "video": null,
+   "title": "Driver Refuses His License, Demands a Supervisor #Shorts",
+   "short": true,
+   "thumbnail": null,
+   "views": 4546
+  },
+  {
+   "at": "2026-10-16T19:30:42+02:00",
+   "kind": "published",
+   "channel": "raw-incident",
+   "video": null,
+   "title": "LAPD Sends a K-9 Into a Greenhouse. Was It Legal?",
+   "short": false,
+   "thumbnail": null,
+   "views": 9
+  },
+  {
+   "at": "2026-10-17T12:28:28+02:00",
+   "kind": "published",
+   "channel": "raw-incident",
+   "video": null,
+   "title": "LAPD Sends a K-9 Into a Nursery. Legal? #Shorts",
+   "short": true,
+   "thumbnail": null,
+   "views": 1604
+  },
+  {
+   "at": "2026-10-17T12:28:31+02:00",
+   "kind": "published",
+   "channel": "raw-incident",
+   "video": null,
+   "title": "\"He Pushed Me Down.\" Can You Fight Back? #Shorts",
+   "short": true,
+   "thumbnail": null,
+   "views": 4
+  },
+  {
+   "at": "2026-10-17T12:28:33+02:00",
+   "kind": "published",
+   "channel": "raw-incident",
+   "video": null,
+   "title": "He Ran From LAPD. Did They Have to Arrest Him? #Shorts",
+   "short": true,
+   "thumbnail": null,
+   "views": 1789
+  },
+  {
+   "at": "2026-10-17T12:28:35+02:00",
+   "kind": "published",
+   "channel": "raw-incident",
+   "video": null,
+   "title": "Cop Punches Woman on the Ground. Was It Legal? #Shorts",
+   "short": true,
+   "thumbnail": null,
+   "views": 10
+  },
+  {
+   "at": "2026-10-17T12:29:26+02:00",
+   "kind": "published",
+   "channel": "raw-incident",
+   "video": null,
+   "title": "Cop Punches Woman on the Ground. Was It Legal?",
+   "short": false,
+   "thumbnail": null,
+   "views": 19
+  },
+  {
+   "at": "2026-10-17T13:28:47+02:00",
+   "kind": "published",
+   "channel": "raw-incident",
+   "video": null,
+   "title": "Deputy Shoots Man Holding a Sword. Was It Legal?",
+   "short": false,
+   "thumbnail": null,
+   "views": 19
+  },
+  {
+   "at": "2026-10-19T00:31:11+02:00",
+   "kind": "published",
+   "channel": "raw-incident",
+   "video": null,
+   "title": "Deputy vs. a Man With a Sword: Can He Shoot? #Shorts",
+   "short": true,
+   "thumbnail": null,
+   "views": 11
+  },
+  {
+   "at": "2026-10-19T00:31:39+02:00",
+   "kind": "published",
+   "channel": "raw-incident",
+   "video": null,
+   "title": "Can a Deputy Stop a Punch Before It's Thrown? #Shorts",
+   "short": true,
+   "thumbnail": null,
+   "views": 1254
+  },
+  {
+   "at": "2026-10-19T15:18:20+02:00",
+   "kind": "published",
+   "channel": "raw-incident",
+   "video": null,
+   "title": "Arrested for a fake passport. Sovereign Citizen breakdown.",
+   "short": false,
+   "thumbnail": null,
+   "views": 26158
+  },
+  {
+   "at": "2026-10-19T16:51:23+02:00",
+   "kind": "published",
+   "channel": "raw-incident",
+   "video": null,
+   "title": "When Does a Traffic Stop Become an Arrest? #Shorts",
+   "short": true,
+   "thumbnail": null,
+   "views": 1290
+  },
+  {
+   "at": "2026-10-21T15:07:51+02:00",
+   "kind": "published",
+   "channel": "raw-incident",
+   "video": null,
+   "title": "Expired Tags Stop. Then Deputies Open the Trunk.",
+   "short": false,
+   "thumbnail": null,
+   "views": 205
+  },
+  {
+   "at": "2026-10-23T15:38:11+02:00",
+   "kind": "published",
+   "channel": "raw-incident",
+   "video": null,
+   "title": "Sovereign Citizen Says He's \"Traveling, Not Driving.\" Deputy Disagrees.",
+   "short": false,
+   "thumbnail": null,
+   "views": 14
+  },
+  {
+   "at": "2026-10-25T15:59:11+02:00",
+   "kind": "published",
+   "channel": "raw-incident",
+   "video": null,
+   "title": "State Police Fire After a 90-Second Standoff. Was It Legal?",
+   "short": false,
+   "thumbnail": null,
+   "views": 7
+  },
+  {
+   "at": "2026-10-25T21:00:13+02:00",
+   "kind": "published",
+   "channel": "raw-incident",
+   "video": null,
+   "title": "Sovereign Citizen Hands Deputy a Fake Passport #Shorts",
+   "short": true,
+   "thumbnail": null,
+   "views": 1187
+  },
+  {
+   "at": "2026-10-27T16:00:00+02:00",
+   "kind": "reminder",
+   "channel": "raw-incident",
+   "title": "Raw Incident next long-video slot (48h after xOaWCiXzLUs 25 Oct). Queue: Bay busted-s2e1 K",
+   "detail": "Raw Incident next long-video slot (48h after xOaWCiXzLUs 25 Oct). Queue: Bay busted-s2e1 Kg5AOy2ecnM (verify voice/rules), Spokane (not uploaded). Daniel lets Mia pick."
+  },
+  {
+   "at": "2026-10-28T09:00:00+02:00",
+   "kind": "reminder",
+   "channel": "raw-incident",
+   "title": "Philadelphia DA Irizarry bodycam request: any reply yet (only auto-reply as of 25 Oct)? If",
+   "detail": "Philadelphia DA Irizarry bodycam request: any reply yet (only auto-reply as of 25 Oct)? If none, suggest Daniel phones Jane Roh 215-686-8711."
+  },
+  {
+   "at": "2026-10-27T19:30:00+02:00",
+   "kind": "slot",
+   "channel": "raw-incident",
+   "title": "Open 19:30 slot",
+   "detail": "Nothing ready yet: daily routine starts ~15:00"
+  },
+  {
+   "at": "2026-10-28T19:30:00+02:00",
+   "kind": "slot",
+   "channel": "raw-incident",
+   "title": "Open 19:30 slot",
+   "detail": "Nothing ready yet: daily routine starts ~15:00"
+  },
+  {
+   "at": "2026-10-29T19:30:00+02:00",
+   "kind": "slot",
+   "channel": "raw-incident",
+   "title": "Open 19:30 slot",
+   "detail": "Nothing ready yet: daily routine starts ~15:00"
+  },
+  {
+   "at": "2026-10-30T19:30:00+02:00",
+   "kind": "slot",
+   "channel": "raw-incident",
+   "title": "Open 19:30 slot",
+   "detail": "Nothing ready yet: daily routine starts ~15:00"
+  },
+  {
+   "at": "2026-10-31T19:30:00+02:00",
+   "kind": "slot",
+   "channel": "raw-incident",
+   "title": "Open 19:30 slot",
+   "detail": "Nothing ready yet: daily routine starts ~15:00"
+  },
+  {
+   "at": "2026-11-01T19:30:00+02:00",
+   "kind": "slot",
+   "channel": "raw-incident",
+   "title": "Open 19:30 slot",
+   "detail": "Nothing ready yet: daily routine starts ~15:00"
+  },
+  {
+   "at": "2026-11-02T19:30:00+02:00",
+   "kind": "slot",
+   "channel": "raw-incident",
+   "title": "Open 19:30 slot",
+   "detail": "Nothing ready yet: daily routine starts ~15:00"
+  }
+ ],
+ "stats": [
+  {
+   "channel": "raw-incident",
+   "name": "Raw Incident",
+   "status": "live",
+   "daily": [
+    [
+     "2026-09-30",
+     0
+    ],
+    [
+     "2026-10-01",
+     0
+    ],
+    [
+     "2026-10-02",
+     0
+    ],
+    [
+     "2026-10-03",
+     0
+    ],
+    [
+     "2026-10-04",
+     0
+    ],
+    [
+     "2026-10-05",
+     0
+    ],
+    [
+     "2026-10-06",
+     0
+    ],
+    [
+     "2026-10-07",
+     0
+    ],
+    [
+     "2026-10-08",
+     24
+    ],
+    [
+     "2026-10-09",
+     117
+    ],
+    [
+     "2026-10-10",
+     141
+    ],
+    [
+     "2026-10-11",
+     141
+    ],
+    [
+     "2026-10-12",
+     141
+    ],
+    [
+     "2026-10-13",
+     141
+    ],
+    [
+     "2026-10-14",
+     1595
+    ],
+    [
+     "2026-10-15",
+     1134
+    ],
+    [
+     "2026-10-16",
+     3704
+    ],
+    [
+     "2026-10-17",
+     4232
+    ],
+    [
+     "2026-10-18",
+     2383
+    ],
+    [
+     "2026-10-19",
+     5378
+    ],
+    [
+     "2026-10-20",
+     9911
+    ],
+    [
+     "2026-10-21",
+     8531
+    ],
+    [
+     "2026-10-22",
+     6140
+    ],
+    [
+     "2026-10-23",
+     2973
+    ],
+    [
+     "2026-10-24",
+     2977
+    ],
+    [
+     "2026-10-25",
+     3049
+    ],
+    [
+     "2026-10-26",
+     1238
+    ],
+    [
+     "2026-10-27",
+     0
+    ]
+   ],
+   "top": [
+    {
+     "id": "ri:fixture-01:long",
+     "title": "Can Police Force Their Way Into Your Home? The Truth About 'Knock and Talks'",
+     "kind": "long",
+     "views": 8869,
+     "likes": 67,
+     "comments": 16,
+     "published_at": "2026-10-14T02:27:09+02:00",
+     "thumbnail": null,
+     "series": [
+      [
+       "2026-10-21T10:55:14+02:00",
+       6406
+      ],
+      [
+       "2026-10-22T17:11:58+02:00",
+       7366
+      ],
+      [
+       "2026-10-25T16:04:26+02:00",
+       8594
+      ],
+      [
+       "2026-10-25T16:34:38+02:00",
+       8594
+      ],
+      [
+       "2026-10-26T03:03:01+02:00",
+       8732
+      ],
+      [
+       "2026-10-26T03:33:20+02:00",
+       8732
+      ],
+      [
+       "2026-10-26T14:58:32+02:00",
+       8869
+      ],
+      [
+       "2026-10-26T15:19:51+02:00",
+       8869
+      ]
+     ]
+    },
+    {
+     "id": "ri:fixture-07:short",
+     "title": "Driver Refuses His License, Demands a Supervisor #Shorts",
+     "kind": "short",
+     "views": 4546,
+     "likes": 75,
+     "comments": 11,
+     "published_at": "2026-10-16T15:03:25+02:00",
+     "thumbnail": null,
+     "series": [
+      [
+       "2026-10-22T17:11:58+02:00",
+       4546
+      ],
+      [
+       "2026-10-25T16:04:26+02:00",
+       4546
+      ],
+      [
+       "2026-10-25T16:34:38+02:00",
+       4546
+      ],
+      [
+       "2026-10-26T03:03:01+02:00",
+       4546
+      ],
+      [
+       "2026-10-26T03:31:41+02:00",
+       4546
+      ],
+      [
+       "2026-10-26T03:33:20+02:00",
+       4546
+      ],
+      [
+       "2026-10-26T14:58:32+02:00",
+       4546
+      ],
+      [
+       "2026-10-26T15:19:51+02:00",
+       4546
+      ]
+     ]
+    },
+    {
+     "id": "ri:fixture-05:short",
+     "title": "Cop Puts Foot in Door Over a Speeding Ticket #Shorts",
+     "kind": "short",
+     "views": 1462,
+     "likes": 29,
+     "comments": 4,
+     "published_at": "2026-10-15T20:14:42+02:00",
+     "thumbnail": null,
+     "series": [
+      [
+       "2026-10-22T17:11:58+02:00",
+       1460
+      ],
+      [
+       "2026-10-25T16:04:26+02:00",
+       1461
+      ],
+      [
+       "2026-10-25T16:34:38+02:00",
+       1461
+      ],
+      [
+       "2026-10-26T03:03:01+02:00",
+       1461
+      ],
+      [
+       "2026-10-26T03:31:41+02:00",
+       1461
+      ],
+      [
+       "2026-10-26T03:33:20+02:00",
+       1461
+      ],
+      [
+       "2026-10-26T14:58:32+02:00",
+       1462
+      ],
+      [
+       "2026-10-26T15:19:51+02:00",
+       1462
+      ]
+     ]
+    },
+    {
+     "id": "ri:fixture-08:short",
+     "title": "He Said 20. The Deputy Said 93. #Shorts",
+     "kind": "short",
+     "views": 1435,
+     "likes": 23,
+     "comments": null,
+     "published_at": "2026-10-16T15:03:01+02:00",
+     "thumbnail": null,
+     "series": [
+      [
+       "2026-10-21T10:55:14+02:00",
+       1422
+      ],
+      [
+       "2026-10-22T17:11:58+02:00",
+       1431
+      ],
+      [
+       "2026-10-25T16:04:26+02:00",
+       1435
+      ],
+      [
+       "2026-10-25T16:34:38+02:00",
+       1435
+      ],
+      [
+       "2026-10-26T03:03:01+02:00",
+       1435
+      ],
+      [
+       "2026-10-26T03:33:20+02:00",
+       1435
+      ],
+      [
+       "2026-10-26T14:58:32+02:00",
+       1435
+      ],
+      [
+       "2026-10-26T15:19:51+02:00",
+       1435
+      ]
+     ]
+    }
+   ],
+   "split": {
+    "long": {
+     "count": 12,
+     "views": 38027,
+     "avg": 3169,
+     "likes": 413
+    },
+    "short": {
+     "count": 13,
+     "views": 15924,
+     "avg": 1225,
+     "likes": 219
+    }
+   },
+   "changes": [],
+   "active": true,
+   "shorts": {
+    "per_short": [
+     {
+      "id": "ri:fixture-06:short",
+      "title": "He Refused a Ticket. Then Came the Pepper Spray #Shorts",
+      "views": 1245,
+      "likes": 16,
+      "published_at": "2026-10-15T19:53:23+02:00",
+      "first24": 1209,
+      "thumbnail": null
+     },
+     {
+      "id": "ri:fixture-05:short",
+      "title": "Cop Puts Foot in Door Over a Speeding Ticket #Shorts",
+      "views": 1462,
+      "likes": 29,
+      "published_at": "2026-10-15T20:14:42+02:00",
+      "first24": 1310,
+      "thumbnail": null
+     },
+     {
+      "id": "ri:fixture-09:short",
+      "title": "Wrong-Way U-Haul Driver Aims at Deputies #Shorts",
+      "views": 87,
+      "likes": 1,
+      "published_at": "2026-10-16T15:02:33+02:00",
+      "first24": 33,
+      "thumbnail": null
+     },
+     {
+      "id": "ri:fixture-08:short",
+      "title": "He Said 20. The Deputy Said 93. #Shorts",
+      "views": 1435,
+      "likes": 23,
+      "published_at": "2026-10-16T15:03:01+02:00",
+      "first24": 1200,
+      "thumbnail": null
+     },
+     {
+      "id": "ri:fixture-07:short",
+      "title": "Driver Refuses His License, Demands a Supervisor #Shorts",
+      "views": 4546,
+      "likes": 75,
+      "published_at": "2026-10-16T15:03:25+02:00",
+      "first24": 2637,
+      "thumbnail": null
+     },
+     {
+      "id": "ri:yt:cHTLC62aGz4",
+      "title": "LAPD Sends a K-9 Into a Nursery. Legal? #Shorts",
+      "views": 1604,
+      "likes": 17,
+      "published_at": "2026-10-17T12:28:28+02:00",
+      "first24": 772,
+      "thumbnail": null
+     },
+     {
+      "id": "ri:yt:ckq2HTSxdeM",
+      "title": "\"He Pushed Me Down.\" Can You Fight Back? #Shorts",
+      "views": 4,
+      "likes": null,
+      "published_at": "2026-10-17T12:28:31+02:00",
+      "first24": 0,
+      "thumbnail": null
+     },
+     {
+      "id": "ri:yt:ADXkPYpoOok",
+      "title": "He Ran From LAPD. Did They Have to Arrest Him? #Shorts",
+      "views": 1789,
+      "likes": 20,
+      "published_at": "2026-10-17T12:28:33+02:00",
+      "first24": 601,
+      "thumbnail": null
+     },
+     {
+      "id": "ri:yt:IEHXeH434_o",
+      "title": "Cop Punches Woman on the Ground. Was It Legal? #Shorts",
+      "views": 10,
+      "likes": null,
+      "published_at": "2026-10-17T12:28:35+02:00",
+      "first24": 2,
+      "thumbnail": null
+     },
+     {
+      "id": "ri:yt:uOneUzohtfc",
+      "title": "Deputy vs. a Man With a Sword: Can He Shoot? #Shorts",
+      "views": 11,
+      "likes": null,
+      "published_at": "2026-10-19T00:31:11+02:00",
+      "first24": 2,
+      "thumbnail": null
+     },
+     {
+      "id": "ri:yt:ros9vccJc5s",
+      "title": "Can a Deputy Stop a Punch Before It's Thrown? #Shorts",
+      "views": 1254,
+      "likes": 16,
+      "published_at": "2026-10-19T00:31:39+02:00",
+      "first24": 502,
+      "thumbnail": null
+     },
+     {
+      "id": "ri:yt:5ib29uKATwQ",
+      "title": "When Does a Traffic Stop Become an Arrest? #Shorts",
+      "views": 1290,
+      "likes": 19,
+      "published_at": "2026-10-19T16:51:23+02:00",
+      "first24": 658,
+      "thumbnail": null
+     },
+     {
+      "id": "ri:yt:wZyTnbCLskw",
+      "title": "Sovereign Citizen Hands Deputy a Fake Passport #Shorts",
+      "views": 1187,
+      "likes": 3,
+      "published_at": "2026-10-25T21:00:13+02:00",
+      "first24": 1187,
+      "thumbnail": null
+     }
+    ],
+    "top5": [
+     {
+      "id": "ri:fixture-07:short",
+      "title": "Driver Refuses His License, Demands a Supervisor #Shorts",
+      "views": 4546,
+      "likes": 75,
+      "published_at": "2026-10-16T15:03:25+02:00",
+      "first24": 2637,
+      "thumbnail": null
+     },
+     {
+      "id": "ri:yt:ADXkPYpoOok",
+      "title": "He Ran From LAPD. Did They Have to Arrest Him? #Shorts",
+      "views": 1789,
+      "likes": 20,
+      "published_at": "2026-10-17T12:28:33+02:00",
+      "first24": 601,
+      "thumbnail": null
+     },
+     {
+      "id": "ri:yt:cHTLC62aGz4",
+      "title": "LAPD Sends a K-9 Into a Nursery. Legal? #Shorts",
+      "views": 1604,
+      "likes": 17,
+      "published_at": "2026-10-17T12:28:28+02:00",
+      "first24": 772,
+      "thumbnail": null
+     },
+     {
+      "id": "ri:fixture-05:short",
+      "title": "Cop Puts Foot in Door Over a Speeding Ticket #Shorts",
+      "views": 1462,
+      "likes": 29,
+      "published_at": "2026-10-15T20:14:42+02:00",
+      "first24": 1310,
+      "thumbnail": null
+     },
+     {
+      "id": "ri:fixture-08:short",
+      "title": "He Said 20. The Deputy Said 93. #Shorts",
+      "views": 1435,
+      "likes": 23,
+      "published_at": "2026-10-16T15:03:01+02:00",
+      "first24": 1200,
+      "thumbnail": null
+     }
+    ],
+    "first24_recent_avg": 470,
+    "first24_median": 658,
+    "first24_count": 13,
+    "median_7d": 1187,
+    "shorts_7d": 1,
+    "subs": []
+   }
+  },
+  {
+   "channel": "explainer-datos-es",
+   "name": "Datazo",
+   "status": "setting-up",
+   "empty": true,
+   "active": true,
+   "top": []
+  },
+  {
+   "channel": "docs-bigtech",
+   "name": "Burning Platform",
+   "status": "setting-up",
+   "empty": true,
+   "active": false,
+   "top": []
+  },
+  {
+   "channel": "docs-aviation",
+   "name": "Causal Chain",
+   "status": "setting-up",
+   "empty": true,
+   "active": false,
+   "top": []
+  }
+ ],
+ "across": {
+  "total": {
+   "views_7d": 29295,
+   "views_28d": 53951,
+   "subscribers": 0,
+   "published": 32,
+   "lifetime": 53951
+  },
+  "double_down": null,
+  "rule": "Highest median views per Short over the last 7 days (2+ Shorts)"
+ },
+ "lineup_pending": [],
+ "stats_status": {
+  "last_snapshot": "2026-10-26T15:19:51+02:00",
+  "snapshots": 19
+ },
+ "actions": [],
+ "errors": []
+}

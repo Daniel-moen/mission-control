@@ -1,6 +1,7 @@
-// Channels end to end (task 0260): the real relay, the fake host as the Mac's link (Mia's thread), the real
-// Channels HQ sync from ~/channels-hq (reads the channel repos read-only; its action log goes to a temp file and
-// it never reminds the real Mia), and the built panel in headless Chromium.
+// Channels end to end (task 0260): the real relay, the fake host as the Mac's link (Mia's thread), a stand-in
+// for Channels HQ's relay sync (~/channels-hq hq/sync.py: pull the taps into actions.jsonl, push the state) that
+// serves a fixed fixture (test/fixtures/channels-state.json, task 0481) so the run never depends on the real
+// channels, and the built panel in headless Chromium.
 //
 //   cd remote && npm run build && PLAYWRIGHT=<playwright pkg> node test/yt-channels-panel-e2e.mjs
 //   SHOTS=<dir> keeps screenshots (iPad landscape + phone) and a webm of the animations.
@@ -13,7 +14,7 @@
 //   • Publish now needs the confirmation sheet; Reject needs a note
 //   • analytics tab; no sideways scroll, zero console errors
 
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -25,19 +26,15 @@ const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT || 'playwright');
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
-const HQ = process.env.CHANNELS_HQ || path.join(os.homedir(), 'channels-hq');
+const FIXTURE = JSON.parse(fs.readFileSync(path.join(DIR, 'fixtures', 'channels-state.json'), 'utf8'));
 const PORT = 8875;
-const HQPORT = 8876;
 const TOKEN = 'test';
 const BASE = `http://localhost:${PORT}`;
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'mc-channels-e2e-'));
 const MIA_DIR = path.join(TMP, 'mia');
 const ACTIONS = path.join(TMP, 'actions.jsonl');
-const HQDATA = path.join(TMP, 'hqdata');
 const SHOTS = process.env.SHOTS || path.join(TMP, 'shots');
 fs.mkdirSync(SHOTS, { recursive: true });
-fs.mkdirSync(HQDATA, { recursive: true });
-if (fs.existsSync(path.join(HQ, 'data', 'stats.jsonl'))) fs.copyFileSync(path.join(HQ, 'data', 'stats.jsonl'), path.join(HQDATA, 'stats.jsonl'));
 
 let passed = 0;
 let failed = 0;
@@ -64,12 +61,49 @@ async function until(fn, ms = 8000, label = '') {
 const RELAY_ENV = { MC_TOKEN: TOKEN, PORT: String(PORT), MIA_DIR, JARVIS_STORE: path.join(TMP, 'j.json'), PUSH_STORE: path.join(TMP, 'push.json'),
   REALTIME_STORE: path.join(TMP, 'rt.json'), CHANNELS_STORE: path.join(TMP, 'channels.json'), CHANNELS_MEDIA: path.join(TMP, 'media'),
   DOC_ASSETS: path.join(TMP, 'da'), DOC_PAGES: path.join(TMP, 'dp'), OPENAI_API_KEY: '', RAILWAY_VOLUME_MOUNT_PATH: '' };
-const HQ_ENV = { HQ_PORT: String(HQPORT), HQ_NO_STATS: '1', HQ_RELAY_SYNC: '1', MC_RELAY_URL: BASE, MC_TOKEN: TOKEN,
-  HQ_ACTIONS: ACTIONS, HQ_NO_MIA: '1', HQ_DATA: HQDATA };
 const chats = async () => {
   const j = await (await fetch(`${BASE}/api/v1/mia`, { headers: { Authorization: `Bearer ${TOKEN}` } })).json();
   return (j.mia?.messages || []).filter((m) => m.from === 'daniel').map((m) => m.text);
 };
+const relay = async (method, p, body) => {
+  const r = await fetch(`${BASE}${p}`, { method, headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' }, body: body && JSON.stringify(body) });
+  if (!r.ok) throw new Error(`relay ${method} ${p}: HTTP ${r.status}`);
+  return r.json();
+};
+
+// The Mac side, as hq/sync.py's cycle does it: queued taps → actions.jsonl (append-only, latest line per id
+// wins, like hq/actions.py), then the state with the recent actions and the ids it took.
+const appendAction = (line) => fs.appendFileSync(ACTIONS, `${JSON.stringify(line)}\n`);
+function recentActions() {
+  const out = new Map();
+  for (const x of actionLog()) {
+    if (out.has(x.id)) {
+      const prev = out.get(x.id);
+      Object.assign(prev, { status: x.status ?? prev.status, updated_at: x.at });
+      if (x.note && (x.status === 'done' || x.status === 'failed')) prev.result = x.note;
+    } else if (x.action) out.set(x.id, { ...x });
+  }
+  return [...out.values()].slice(-80);
+}
+const pushState = (applied = []) => relay('PUT', '/api/v1/channels/state', { state: { ...FIXTURE, at: new Date().toISOString(), actions: recentActions() }, applied });
+async function macCycle() {
+  const pulled = await relay('GET', '/api/v1/channels/actions');
+  const applied = [];
+  for (const a of pulled.actions || []) {
+    if (!recentActions().some((r) => r.id === a.id)) {
+      const s = (k) => String(a[k] || '').trim();
+      appendAction({ id: a.id, at: a.at, action: a.action, channel: s('channel'), video: s('video'), note: s('note'), slot: s('slot'), title: s('title'), label: s('label'), told: a.told === true, source: s('source') || 'panel', status: 'queued' });
+    }
+    applied.push(a.id);
+  }
+  await pushState(applied.filter(Boolean));
+}
+let macTimer = null;
+const actionDone = async (id, note) => {
+  appendAction({ id, at: new Date().toISOString(), status: 'done', note });
+  await pushState();
+};
+
 const actionLog = () => (fs.existsSync(ACTIONS) ? fs.readFileSync(ACTIONS, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
 
 async function newPage(browser, viewport, { video } = {}) {
@@ -106,13 +140,13 @@ try {
   boot('node', ['server.js'], 'relay', RELAY_ENV);
   await until(async () => (await fetch(`${BASE}/health`)).ok, 8000, 'relay up');
   boot('node', ['test/fake-host.mjs'], 'host', RELAY_ENV);
-  boot(path.join(HQ, '.venv', 'bin', 'python'), ['-m', 'hq.server'], 'channels-hq', HQ_ENV, HQ);
+  await macCycle();
+  macTimer = setInterval(() => macCycle().catch((e) => console.error('mac cycle:', e.message)), 1500);
   await until(async () => {
     const j = await (await fetch(`${BASE}/api/v1/channels`, { headers: { Authorization: `Bearer ${TOKEN}` } })).json();
     return j.state?.channels?.length;
-  }, 60000, 'Channels HQ pushed its state');
-  ok(true, 'Channels HQ on the Mac side pushed its state to the relay');
-  await sleep(4000); // first media prepush
+  }, 10000, 'the Mac pushed its state');
+  ok(true, 'the Mac side (Channels HQ sync) pushed its state to the relay');
 
   browser = await chromium.launch();
   const land = { width: 1180, height: 820 };
@@ -161,7 +195,7 @@ try {
   ok(!!line && line.includes(vid), 'Mia gets a "Channels: Approve …" line naming the video');
   const logged = await until(async () => actionLog().find((a) => a.action === 'approve' && a.video === vid), 40000, 'the Mac filed it');
   ok(logged && logged.status === 'queued' && logged.told === true, 'the Mac filed it in actions.jsonl (told, so no extra reminder)');
-  execFileSync(path.join(HQ, '.venv', 'bin', 'python'), ['-m', 'hq.actions', 'done', logged.id, 'approved'], { cwd: HQ, env: { ...process.env, HQ_ACTIONS: ACTIONS } });
+  await actionDone(logged.id, 'approved');
   await until(async () => (await page.locator('[data-video-sheet] [data-status="done"]').count()) > 0, 60000, 'panel shows done');
   ok(true, 'Mia marks it done → the panel shows Done');
 
@@ -241,6 +275,7 @@ try {
   console.error(e);
 } finally {
   await browser?.close().catch(() => {});
+  clearInterval(macTimer);
   for (const p of procs) p.kill();
   // The killed processes may still be writing for a moment.
   if (!process.env.SHOTS) { await sleep(400); try { fs.rmSync(TMP, { recursive: true, force: true, maxRetries: 3 }); } catch {} }
