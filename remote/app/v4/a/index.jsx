@@ -5,7 +5,7 @@ import { useMC, miaSend, agentName } from '../../src/lib/store.js';
 import Boot from '../boot.jsx';
 import { useThings, KIND_LABEL } from '../shared/model.js';
 import { useRoute, openRoute, closeRoute } from '../shared/route.js';
-import { Backdrop, NeedBody, AgentBody, DocBody, Thread, Composer, TasksBody, PulseBody, Spark, Dot, useWin, spring, soft, splitName, phaseLabel } from '../shared/parts.jsx';
+import { Backdrop, LensClock, NeedBody, AgentBody, DocBody, Thread, Composer, TasksBody, PulseBody, Spark, Dot, useWin, spring, soft, splitName, phaseLabel } from '../shared/parts.jsx';
 import { useVoice, talk } from '../../v3/shared/voice.jsx';
 import { greeting } from '../../v3/shared/live.js';
 
@@ -435,6 +435,7 @@ function Stage() {
       </header>
       {/* the stage recedes while a card (or the conversation) is pulled out */}
       <motion.div className="st-layer" animate={open || r.kind === 'mia' ? { scale: 0.93, opacity: 0.45, filter: 'blur(4px)' } : { scale: 1, opacity: 1, filter: 'blur(0px)' }} transition={spring}>
+      <LensClock className="st-clock" />
       <Voice L={L} said={said} v={v} onOpenThread={() => openRoute('mia')} />
       <div ref={table} className="st-table" data-stage>
         <AnimatePresence mode="popLayout">

@@ -1670,3 +1670,438 @@ html.v4[data-theme='light'] .at-room-glass {
 .nw-scroll {
   transform-origin: 50% 0%;
 }
+
+/* ============================================================
+   LENS (task 0448) — the v4 directions in Lens's skin.
+   Every direction floats on Lens's scene (shared/Lens.jsx: the
+   photo full-bleed, the time huge on it, WebGL glass). Panes the
+   shader draws are .lens-live (their CSS steps aside); every other
+   pane — and the no-WebGL path — is CSS glass with a real backdrop
+   blur + saturation; lite (reduced motion / low power) is the same
+   tint with no backdrop-filter. Tokens are Lens's (v2.css, 0445).
+   ============================================================ */
+html.v4[data-theme='dark'] {
+  --bg: #08080a;
+  --glass: rgba(20, 20, 24, 0.5);
+  --glass2: rgba(20, 20, 24, 0.58);
+  --glass-lite: rgba(22, 22, 26, 0.74);
+  --glass2-lite: rgba(18, 18, 22, 0.9);
+  --line: rgba(255, 255, 255, 0.13);
+  --rim: rgba(255, 255, 255, 0.1);
+  --shadow: 0 22px 44px -24px rgba(0, 0, 0, 0.75);
+  --tint: rgba(255, 255, 255, 0.1);
+  --ink2: rgba(245, 242, 236, 0.72);
+  --ink3: rgba(245, 242, 236, 0.5);
+  --on-photo: 0 1px 2px rgba(0, 0, 0, 0.35), 0 2px 18px rgba(0, 0, 0, 0.45);
+  --scrim: rgba(4, 4, 8, 0.16);
+}
+html.v4[data-theme='light'] {
+  --bg: #dfe8ef;
+  --glass: rgba(255, 255, 255, 0.55);
+  --glass2: rgba(255, 255, 255, 0.62);
+  --glass-lite: rgba(255, 255, 255, 0.84);
+  --glass2-lite: rgba(255, 255, 255, 0.94);
+  --line: rgba(255, 255, 255, 0.78);
+  --rim: rgba(255, 255, 255, 0.95);
+  --shadow: 0 18px 40px -24px rgba(30, 40, 50, 0.35);
+  --tint: rgba(255, 255, 255, 0.55);
+  --ink2: rgba(23, 20, 15, 0.7);
+  --ink3: rgba(23, 20, 15, 0.5);
+  --on-photo: 0 0 2px rgba(255, 255, 255, 0.6), 0 1px 18px rgba(255, 255, 255, 0.75);
+  --scrim: rgba(255, 255, 255, 0.12);
+}
+
+/* the scene, under everything in the direction */
+.lens-scene {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+}
+.lens-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.lens-lite-photo,
+.lens-lite-blur {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: opacity 0.4s;
+}
+.lens-lite-blur {
+  transform: scale(1.15);
+}
+.lens-lite-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(6, 6, 8, 0.4);
+  transition: background 0.4s;
+}
+.lens-lite-scrim.open {
+  background: linear-gradient(to bottom, rgba(6, 6, 8, 0.12), rgba(6, 6, 8, 0.3));
+}
+.lens-lite-scrim.light {
+  background: rgba(250, 250, 250, 0.45);
+}
+.lens-lite-scrim.light.open {
+  background: rgba(250, 250, 250, 0.08);
+}
+
+/* panes: Lens glass */
+.st-card,
+.nw-card,
+.at-room-glass,
+html.v4 [data-lens] {
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(26px) saturate(1.7);
+  backdrop-filter: blur(26px) saturate(1.7);
+  border: 1px solid var(--line);
+  box-shadow: inset 0 1px 0 var(--rim), var(--shadow);
+}
+html.v4[data-theme='dark'] .at-room-glass,
+html.v4[data-theme='light'] .at-room-glass {
+  background: var(--glass);
+}
+.st-card-need,
+.nw-hot,
+.at-room-needs .at-room-glass {
+  border-color: color-mix(in oklab, var(--amber) 60%, transparent);
+  box-shadow: inset 0 1px 0 var(--rim), var(--shadow), 0 0 34px -8px color-mix(in oklab, var(--amber) 55%, transparent);
+}
+.st-pinned {
+  border-color: var(--ink3);
+}
+/* drawn by the shader: the DOM pane is clear */
+html[data-lensmode='gl'] .lens-live {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+/* inside a pane, small surfaces are a light tint, not glass on glass */
+.at-tile,
+.at-chip,
+.v4-opt:not(.v4-opt-main) {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* sheets, windows and floating chrome: CSS glass with a real blur */
+.st-open,
+.st-thread,
+.at-window,
+.nw-sheet,
+.v4-composer,
+.nw-ask,
+.at-back,
+.at-mini,
+.v4-switch-chip,
+.v4-switch-menu,
+.v4-toast,
+.st-suggest button,
+.nw-band-title span,
+.v4-mic-big {
+  -webkit-backdrop-filter: blur(30px) saturate(1.7) !important;
+  backdrop-filter: blur(30px) saturate(1.7) !important;
+  border-color: var(--line);
+}
+.st-open,
+.st-thread,
+.at-window,
+.nw-sheet {
+  background: var(--glass2);
+  box-shadow: inset 0 1px 0 var(--rim), inset 0 0 0 1px var(--line), var(--shadow);
+}
+.st-scrim,
+.nw-scrim {
+  background: var(--scrim) !important;
+}
+
+/* lite: the same tints, no live blur anywhere */
+html[data-glass='lite'] .st-card,
+html[data-glass='lite'] .nw-card,
+html[data-glass='lite'] .at-room-glass,
+html[data-glass='lite'].v4 [data-lens] {
+  background: var(--glass-lite);
+}
+html[data-glass='lite'] .st-open,
+html[data-glass='lite'] .st-thread,
+html[data-glass='lite'] .at-window,
+html[data-glass='lite'] .nw-sheet,
+html[data-glass='lite'] .v4-switch-menu,
+html[data-glass='lite'] .nw-ask,
+html[data-glass='lite'] .at-mini,
+html[data-glass='lite'] .at-back {
+  background: var(--glass2-lite) !important;
+}
+html[data-glass='lite'].v4 * {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* the clock: giant and thin, on the photo */
+.lens-clock {
+  pointer-events: none;
+  user-select: none;
+  color: #fff;
+  font-family: -apple-system, 'SF Pro Display', 'Inter Variable', system-ui, sans-serif;
+  --clock: clamp(5.5rem, 22vw, 15rem);
+  white-space: nowrap;
+}
+html.v4[data-theme='light'] .lens-clock {
+  color: #141210;
+}
+.lens-clock-time {
+  font-size: var(--clock);
+  font-weight: 200;
+  letter-spacing: -0.04em;
+  line-height: 0.86;
+  opacity: 0.92;
+}
+.lens-clock-date {
+  font-size: max(15px, calc(var(--clock) * 0.1));
+  font-weight: 500;
+  margin-top: 0.55em;
+  opacity: 0.82;
+}
+.lens-base {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  vertical-align: baseline;
+}
+html[data-lensmode='gl'] .lens-clock {
+  color: transparent !important;
+  text-shadow: none !important;
+}
+html[data-lensmode='css'] .lens-clock {
+  text-shadow: var(--on-photo);
+}
+
+/* text that sits on the photo: a soft local scrim, never a page-wide veil */
+html.v4[data-theme='dark'] {
+  --halo: rgba(4, 4, 8, 0.42);
+}
+html.v4[data-theme='light'] {
+  --halo: rgba(255, 255, 255, 0.6);
+}
+.st-top,
+.st-voice,
+.st-more,
+.st-empty {
+  text-shadow: var(--on-photo);
+}
+.st-voice::before {
+  content: '';
+  position: absolute;
+  inset: -40px -70px -40px -90px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(closest-side, var(--halo), transparent);
+}
+
+/* Stage: the clock on the photo, Mia's words under it */
+.st-clock {
+  position: absolute;
+  z-index: 2;
+}
+.st-land .st-clock {
+  left: calc(env(safe-area-inset-left) + 40px);
+  top: 54px;
+  --clock: min(9.6rem, 19vh);
+}
+.st-land .st-voice {
+  top: calc(54px + min(9.6rem, 19vh) * 1.32);
+}
+.st-land .st-words,
+.st-port .st-words {
+  font-size: clamp(1.5rem, 1.6vw + 0.7rem, 2.2rem);
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.st-port .st-clock {
+  left: 40px;
+  top: 64px;
+  --clock: 7.5rem;
+}
+.st-port .st-voice {
+  top: 250px;
+}
+.st-port .st-table {
+  top: 46%;
+}
+.st-phone .st-clock {
+  left: 20px;
+  top: calc(env(safe-area-inset-top) + 52px);
+  --clock: 5.4rem;
+}
+.st-phone .st-voice {
+  top: calc(env(safe-area-inset-top) + 196px);
+}
+.st-phone .st-words {
+  font-size: 1.32rem;
+  -webkit-line-clamp: 5;
+}
+
+/* Atlas: the clock and the greeting above the map */
+.at-top {
+  left: calc(env(safe-area-inset-left) + 40px);
+  right: calc(env(safe-area-inset-right) + 40px);
+  top: calc(env(safe-area-inset-top) + 34px);
+  flex-direction: row;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+}
+.at-clock {
+  --clock: min(8.4rem, 17vh);
+}
+.at-hello {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: right;
+  max-width: 44%;
+  padding-bottom: 6px;
+  text-shadow: var(--on-photo);
+}
+.at-phone .at-top {
+  left: 18px;
+  right: 18px;
+  top: calc(env(safe-area-inset-top) + 58px);
+  gap: 12px;
+}
+.at-phone .at-clock {
+  --clock: 4.6rem;
+}
+.at-phone .at-hello b {
+  font-size: 1rem;
+}
+.at-phone .at-hello span {
+  font-size: 0.78rem;
+}
+.at-far,
+.at-room-title {
+  text-shadow: none;
+}
+
+/* Now: the clock heads the stack */
+.nw-head {
+  text-shadow: var(--on-photo);
+}
+.nw-clock {
+  --clock: 6rem;
+  margin: 4px 0 18px -4px;
+}
+.nw-land .nw-head {
+  top: calc(env(safe-area-inset-top) + 56px);
+}
+.nw-land .nw-clock {
+  --clock: min(9.6rem, 19vh);
+  margin-bottom: 26px;
+}
+.nw-land .nw-title {
+  font-size: clamp(2.2rem, 2.4vw + 0.8rem, 2.8rem);
+}
+.nw-phone .nw-clock {
+  --clock: 5.4rem;
+  margin-bottom: 14px;
+}
+.nw-phone .nw-title {
+  font-size: 1.8rem;
+}
+
+/* phone fit + local halos behind header text on the photo */
+.st-phone .st-clock {
+  top: calc(env(safe-area-inset-top) + 64px);
+}
+.st-phone .st-voice {
+  top: calc(env(safe-area-inset-top) + 206px);
+}
+.at-phone .at-top {
+  top: calc(env(safe-area-inset-top) + 50px);
+}
+.at-phone .at-clock {
+  --clock: 4rem;
+}
+.at-phone .at-hello {
+  max-width: 52%;
+}
+.nw-head,
+.at-hello {
+  position: relative;
+}
+.nw-land .nw-head {
+  position: fixed;
+}
+.nw-head::before,
+.at-hello::before,
+.st-top::before {
+  content: '';
+  position: absolute;
+  inset: -30px -50px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(closest-side, var(--halo), transparent);
+}
+.st-top::before {
+  inset: -24px -40px;
+}
+.nw-sub,
+.at-hello span,
+.st-swipe-hint,
+.st-mine {
+  color: color-mix(in srgb, var(--ink) 82%, transparent);
+}
+html.v4[data-theme='light'] :is(.nw-sub, .at-hello span, .st-top, .st-swipe-hint, .st-mine) {
+  text-shadow: 0 0 2px #fff, 0 0 10px rgba(255, 255, 255, 0.95), 0 0 22px rgba(255, 255, 255, 0.7);
+}
+html.v4[data-theme='dark'] :is(.nw-sub, .at-hello span, .st-top, .st-swipe-hint, .st-mine) {
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.6), 0 0 12px rgba(0, 0, 0, 0.7);
+}
+.st-phone .st-top {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+html.v4[data-theme='dark'] {
+  --glass2: rgba(20, 20, 24, 0.46);
+}
+html.v4[data-theme='light'] {
+  --halo: rgba(255, 255, 255, 0.74);
+  --on-photo: 0 0 2px rgba(255, 255, 255, 0.8), 0 0 14px rgba(255, 255, 255, 0.85);
+}
+.lens-lite-scrim.light.open {
+  background: rgba(250, 250, 250, 0.2);
+}
+/* small labels on the photo sit on a pill of glass */
+.st-swipe-hint,
+.st-more {
+  display: inline-block;
+  width: auto;
+  padding: 4px 11px;
+  border-radius: 999px;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(18px) saturate(1.6);
+  backdrop-filter: blur(18px) saturate(1.6);
+  box-shadow: inset 0 0 0 1px var(--line);
+  text-shadow: none !important;
+}
+.st-more {
+  justify-self: start;
+  align-self: start;
+  margin: 6px 0 0 4px;
+}
+html[data-glass='lite'] :is(.st-swipe-hint, .st-more) {
+  background: var(--glass-lite);
+}

@@ -9,6 +9,7 @@
 //   OUT=<dir>   default ~/.mission-control/mia/briefs/0446-shots
 //   ONLY=v4a,v4c   SKIP_SHOTS=1 SKIP_VIDEO=1 SKIP_PERF=1   KEEP=1 (print URLs, stay up)
 //   PROBE='/v4b#agents' DEV=phone THEME=dark,light   one screenshot per hash, to /tmp
+//   LENS_SHOTS=1   (0448) entry + one inner screen, iPad + iPhone, dark + light, + lite
 
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -91,7 +92,7 @@ const DIRS = (process.env.ONLY || 'v4a,v4b,v4c').split(',');
 const NAMES = { v4a: 'stage', v4b: 'atlas', v4c: 'now' };
 const errors = [];
 
-async function open(browser, ui, dev, { video = null, theme = 'dark', hash = '', scale } = {}) {
+async function open(browser, ui, dev, { video = null, theme = 'dark', hash = '', scale, q = '' } = {}) {
   const d = DEVICES[dev];
   const engine = browser.browserType().name();
   const ctx = await browser.newContext({
@@ -106,7 +107,7 @@ async function open(browser, ui, dev, { video = null, theme = 'dark', hash = '',
   const page = await ctx.newPage();
   page.on('pageerror', (e) => errors.push(`${ui}/${dev}: ${e.message}`));
   page.on('console', (m) => m.type() === 'error' && !/status of (202|404)|Failed to load resource/.test(m.text()) && errors.push(`${ui}/${dev}: ${m.text()}`));
-  await page.goto(`${BASE}/${ui}?token=${TOKEN}&bg=01&theme=${theme}${hash}`);
+  await page.goto(`${BASE}/${ui}?token=${TOKEN}&bg=01&theme=${theme}${q ? `&q=${q}` : ''}${hash}`);
   await page.waitForSelector('[data-screen]', { timeout: 20000 });
   await until(() => page.evaluate(() => !/Reconnecting/.test(document.body.innerText) && document.querySelectorAll('[data-card],[data-room],[data-moment]').length > 2), 15000, 'linked').catch(() => {});
   await sleep(2200);
@@ -371,6 +372,35 @@ async function main() {
         console.log('shot', out);
       }
       await ctx.close();
+    }
+    console.log('errors:', errors.length ? errors : 'none');
+    await chromium.close();
+    return;
+  }
+  // Task 0448 — the Lens skin: entry + one inner screen per direction, iPad
+  // landscape + iPhone, dark + light, then the lite (low power) fallback.
+  if (process.env.LENS_SHOTS) {
+    const INNER = { v4a: `#agent/${AGENT}`, v4b: 'room:agents', v4c: '#need/q_phx' };
+    for (const ui of DIRS) {
+      for (const dev of ['ipad', 'phone']) {
+        for (const theme of ['dark', 'light']) {
+          const { page, ctx } = await open(chromium, ui, dev, { theme });
+          const n = (s) => path.join(OUT, `${NAMES[ui]}-${dev}-${theme}-${s}.png`);
+          await page.screenshot({ path: n('1-entry') });
+          const inner = INNER[ui];
+          if (inner.startsWith('room:')) await tap(page, `[data-room="${inner.slice(5)}"]`);
+          else await hash(page, inner.slice(1));
+          await sleep(2000);
+          await page.screenshot({ path: n('2-inner') });
+          await ctx.close();
+        }
+      }
+      for (const theme of ['dark', 'light']) {
+        const { page, ctx } = await open(chromium, ui, 'ipad', { theme, q: 'low' });
+        await page.screenshot({ path: path.join(OUT, `${NAMES[ui]}-ipad-${theme}-3-lite.png`) });
+        await ctx.close();
+      }
+      console.log(`lens shots ${ui} done`);
     }
     console.log('errors:', errors.length ? errors : 'none');
     await chromium.close();

@@ -6,6 +6,8 @@ import { useScreen, useWatch } from '../../src/lib/hooks.js';
 import { useThread, hhmm, ago, splitName, toMs } from '../../v3/shared/live.js';
 import { talk, useVoice } from '../../v3/shared/voice.jsx';
 import { useDocBody } from '../../v2/views/docBody.js';
+import Scene from './Lens.jsx';
+export { LensClock } from './Lens.jsx';
 
 // v4 (task 0446): the building blocks every direction composes — the live
 // bodies of a question, an agent, a doc, the conversation, the tasks, the
@@ -21,21 +23,11 @@ export function answerNeed(t, j) {
   return reply(t.agent.id, o || '');
 }
 
-// The photo the glass sits on (v1's set), chosen for the time of day like
-// Lens; ?bg=NN picks one. `blur` pre-blurs it once (a static layer) so panes
-// over it can be cheap translucent fills instead of live backdrop blurs.
-export function Backdrop({ blur = false }) {
-  const file = useMemo(() => {
-    const pick = new URLSearchParams(location.search).get('bg');
-    const h = new Date().getHours();
-    return pick ? `${pick.padStart(2, '0')}.jpg` : ['05.jpg', '01.jpg', '03.jpg', '06.jpg', '01.jpg'][h < 6 ? 0 : h < 10 ? 1 : h < 16 ? 2 : h < 20 ? 3 : 4];
-  }, []);
-  return (
-    <div className={`v4-backdrop ${blur ? 'v4-backdrop-blur' : ''}`} aria-hidden="true">
-      <div className="v4-photo" style={{ backgroundImage: `url(/bg/${file})` }} />
-      <div className="v4-veil" />
-    </div>
-  );
+// The scene the glass sits on: Lens's photo, clock and shader glass (task
+// 0448, see Lens.jsx). `blur` is accepted for the old call sites; the scene
+// decides its own focus.
+export function Backdrop() {
+  return <Scene />;
 }
 
 export const Dot = ({ tone = 'g' }) => <i className={`v4-dot v4-dot-${tone}`} />;

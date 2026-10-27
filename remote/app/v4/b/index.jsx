@@ -3,7 +3,7 @@ import { motion, AnimatePresence, animate, motionValue, useMotionValueEvent, use
 import Boot from '../boot.jsx';
 import { useThings } from '../shared/model.js';
 import { useRoute, openRoute, closeRoute } from '../shared/route.js';
-import { Backdrop, NeedBody, AgentBody, DocBody, Thread, Composer, TasksBody, PulseBody, MicButton, Spark, Dot, useWin, spring, splitName, phaseLabel } from '../shared/parts.jsx';
+import { Backdrop, LensClock, NeedBody, AgentBody, DocBody, Thread, Composer, TasksBody, PulseBody, MicButton, Spark, Dot, useWin, spring, splitName, phaseLabel } from '../shared/parts.jsx';
 import { useVoice } from '../../v3/shared/voice.jsx';
 import { useQuality } from '../../v3/shared/quality.js';
 import { greeting } from '../../v3/shared/live.js';
@@ -83,7 +83,7 @@ function layout(vw, vh) {
 
 function useCamera(win) {
   const geo = useMemo(() => layout(win.w, win.h), [win.w, win.h]);
-  const overview = useMemo(() => fit(geo.world, win.w, win.h, win.phone ? { t: 96, r: 14, b: 26, l: 14 } : { t: 96, r: 40, b: 40, l: 40 }), [geo, win]);
+  const overview = useMemo(() => fit(geo.world, win.w, win.h, win.phone ? { t: 150, r: 14, b: 22, l: 14 } : { t: win.w > win.h ? 228 : 250, r: 40, b: 34, l: 40 }), [geo, win]);
   return { geo, overview };
 }
 
@@ -609,10 +609,13 @@ function Atlas() {
       <AnimatePresence>
         {!here && (
           <motion.header className="at-top" initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-            <b>
-              {greeting(d.getHours())}, Daniel.
-            </b>
-            <span>{L.sentence} Pinch or tap a room.</span>
+            <LensClock className="at-clock" />
+            <div className="at-hello">
+              <b>
+                {greeting(d.getHours())}, Daniel.
+              </b>
+              <span>{L.sentence} Pinch or tap a room.</span>
+            </div>
           </motion.header>
         )}
       </AnimatePresence>

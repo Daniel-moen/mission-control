@@ -4,7 +4,7 @@ import { miaAnswer, sendKey } from '../../src/lib/store.js';
 import Boot from '../boot.jsx';
 import { useThings, KIND_LABEL } from '../shared/model.js';
 import { useRoute, openRoute, closeRoute } from '../shared/route.js';
-import { Backdrop, NeedBody, AgentBody, DocBody, Thread, Composer, TasksBody, PulseBody, Spark, Dot, useWin, spring, splitName, phaseLabel, answerNeed } from '../shared/parts.jsx';
+import { Backdrop, LensClock, NeedBody, AgentBody, DocBody, Thread, Composer, TasksBody, PulseBody, Spark, Dot, useWin, spring, splitName, phaseLabel, answerNeed } from '../shared/parts.jsx';
 import { useVoice, talk } from '../../v3/shared/voice.jsx';
 import { greeting, ago } from '../../v3/shared/live.js';
 
@@ -340,7 +340,7 @@ function Now() {
         data-feed
       >
         <header className="nw-head">
-          <div className="nw-time">{d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}</div>
+          <LensClock className="nw-clock" />
           <h1 className="nw-title">{L.sentence}</h1>
           <p className="v4-dim nw-sub">
             {greeting(d.getHours())}, Daniel. Swipe right to do, left for later. Pull down to talk.
