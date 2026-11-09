@@ -46,7 +46,7 @@ for (const s of SCENES) {
   fs.writeFileSync(pngFile, Buffer.from(png.split(',')[1], 'base64'));
   // highest quality that stays near the size target
   let best = null;
-  for (const q of [82, 76, 70, 64, 58, 52, 46, 40]) {
+  for (const q of [94, 88, 82, 76, 70, 64, 58, 52, 46, 40]) {
     const out = path.join(tmp, `${q}.webp`);
     execFileSync('cwebp', ['-quiet', '-q', String(q), '-m', '6', '-sharp_yuv', pngFile, '-o', out]);
     const sz = fs.statSync(out).size;

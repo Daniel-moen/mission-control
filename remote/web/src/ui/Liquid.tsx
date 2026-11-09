@@ -31,6 +31,12 @@ vec3 liquid(vec2 uv, vec2 r, float t, float energy, float photo){
   vec2 L = vec2(.5 + .38*sin(t*.031), .62 + .22*cos(t*.023)); L.x *= r.x/r.y;
   float d = length(q - L);
   c += sand * .35 * exp(-d*d*3.2) * (.7 + .3*energy);
+  // v6.5 (task 0623): over a photo backdrop the light stays a soft, slow wash
+  // (no veins, ripples or sparkles: Daniel rejected the streaky look)
+  if (photo > .5) {
+    c *= mix(1., .35, smoothstep(.35, 1.25, length(uv - vec2(.5,.55)) * 1.4));
+    return c * .3;
+  }
   float cf = pow(abs(sin((f*9. + w2.x*6.) - t*.12)), 18.);
   c += vec3(1., .8, .7) * cf * .05;
   // v6.4: more structure — thin bright caustic veins riding the flow, and a

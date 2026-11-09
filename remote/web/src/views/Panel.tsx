@@ -18,6 +18,7 @@ import { SheetBody } from './Sheets';
 import { Talk } from './Talk';
 import { Liquid } from '@/ui/Liquid';
 import { pickBackdrop } from '@/lib/backdrops';
+import { initViewportGap } from '@/lib/viewport';
 
 const LABEL: Record<Tab, string> = { now: 'Now', tasks: 'Tasks', mia: 'Mia', library: 'Library', fleet: 'Fleet' };
 const ICON: Record<Tab, string> = { now: 'now', tasks: 'tasks', mia: 'mia', library: 'library', fleet: 'fleet' };
@@ -28,6 +29,7 @@ function Scene() {
   const calm = useGlassPrefs((s) => s.calm);
   const gl = useGlassPrefs((s) => s.gl);
   const photoRef = useRef<HTMLDivElement>(null);
+  useEffect(() => initViewportGap(), []);
   useEffect(() => {
     const m = localStorage.getItem('mc6_scene') || 'photo';
     setMode(m);
@@ -40,7 +42,7 @@ function Scene() {
       img.src = url;
     };
     // v6.4 backdrops (/v6/bg6, our own renders) by time of day; mc6_bg pins one
-    // ('city-night' etc., or a v1 photo number like '06' → /bg/06.jpg)
+    // ('midnight' etc., or a v1 photo number like '06' → /bg/06.jpg)
     const pin = localStorage.getItem('mc6_bg');
     if (pin && /^\d\d$/.test(pin)) load(`/bg/${pin}.jpg`);
     else

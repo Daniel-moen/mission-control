@@ -137,9 +137,63 @@ for (const dev of [{ name: 'iphone', viewport: { width: 393, height: 852 } }, { 
     await page.waitForFunction(() => document.documentElement.classList.contains('gl-lens'));
     await page.keyboard.press('Escape');
   });
+  await check(`${dev.name}: while the pane scrolls the glass frosts (no trailing content, in-pane rims fade), and comes back sharp once it settles (task 0623)`, async () => {
+    await page.click('[data-tab="now"]');
+    await sleep(1500);
+    const st = () => page.evaluate(() => window.__mcGlassStats());
+    let s0 = await st();
+    assert.equal(s0.sp, 0, 'in-pane rims shown at rest');
+    assert.equal(s0.sf, 0, 'sharp content at rest');
+    const mid = await page.evaluate(() => new Promise((res) => {
+      const pane = document.querySelector('.pane[aria-hidden="false"]');
+      pane.scrollTop = 0;
+      const t0 = performance.now(); let mid = null, dir = 1;
+      const step = () => {
+        const t = performance.now() - t0;
+        if (pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 2) dir = -1; else if (pane.scrollTop <= 0) dir = 1;
+        pane.scrollTop += 9 * dir; // a fling, driven per frame
+        if (t > 350 && !mid) mid = window.__mcGlassStats();
+        if (t < 600) requestAnimationFrame(step); else res(mid);
+      };
+      requestAnimationFrame(step);
+    }));
+    assert.ok(mid.sf > 0.95 && mid.sp > 0.95, `frosted mid-scroll (sf ${mid.sf}, sp ${mid.sp}) ${JSON.stringify(mid)}`);
+    await sleep(500);
+    s0 = await st();
+    assert.equal(s0.sf, 0, `content refraction back after settling ${JSON.stringify(s0)}`);
+    assert.equal(s0.sp, 0, 'in-pane rims back after settling');
+  });
   await check(`${dev.name}: no console errors`, async () => assert.deepEqual(errors, []));
   await ctx.close();
 }
+await check('standalone PWA with a short layout viewport: the app, backdrop, glass and dock reach the real screen bottom (task 0623)', async () => {
+  // iPhone 16 Pro: screen 402×874; iOS reports innerHeight 874-62 in the bad case
+  const ctx = await browser.newContext({ viewport: { width: 402, height: 812 }, deviceScaleFactor: 3, hasTouch: true });
+  await ctx.addInitScript(() => {
+    Object.defineProperty(navigator, 'standalone', { get: () => true });
+    Object.defineProperty(screen, 'width', { get: () => 402 });
+    Object.defineProperty(screen, 'height', { get: () => 874 });
+  });
+  const page = await ctx.newPage();
+  await page.goto(`${base}/?token=${TOKEN}#now`);
+  await page.waitForFunction(() => document.documentElement.classList.contains('gl-lens'), null, { timeout: 15000 });
+  await sleep(600);
+  const m = await page.evaluate(() => ({
+    gap: document.documentElement.dataset.vgap,
+    app: document.querySelector('.app').getBoundingClientRect().bottom,
+    scene: document.querySelector('.scene').getBoundingClientRect().bottom,
+    glass: document.querySelector('canvas.glass-layer').getBoundingClientRect().bottom,
+    dock: document.querySelector('.dock-wrap').getBoundingClientRect().bottom,
+    H: window.__mcGlassStats().H,
+    scroll: document.scrollingElement.scrollHeight - innerHeight,
+  }));
+  assert.equal(m.gap, '62');
+  for (const k of ["app", "scene", "glass"]) assert.equal(Math.round(m[k]), 874, `${k} reaches the screen bottom ${JSON.stringify(m)}`);
+  assert.equal(Math.round(m.dock), 874 - 12, 'dock sits 12px above the screen bottom (no safe-area emulation here)');
+  assert.equal(Math.round(m.H), 874, 'glass layer draws the full height');
+  assert.ok(m.scroll <= 0, 'document itself does not scroll');
+  await ctx.close();
+});
 await browser.close();
 cleanup();
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}

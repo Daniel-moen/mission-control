@@ -17,6 +17,17 @@
 // DOM is underneath), so content scrolling beneath stays visible.
 // Works in WebKit (no SVG filters needed). Falls back to CSS-only glass when
 // WebGL is missing, the context is lost, or 'calm' is on.
+//
+// v6.5 (task 0623) scroll: on iOS the pane scrolls on the compositor and the
+// main thread only sees scrollTop/rects a frame or more late during momentum,
+// so anything WebGL draws from them trails the page (Daniel, real iPhone: "the
+// Liquid Glass is lagging behind things when I scroll"; empty glass blobs under
+// the search field and the top pills). So while the pane scrolls (rAF-polled
+// scrollTop, scroll events, touchmove) the layer crossfades: floating controls
+// show backdrop-only refraction plus a light frost instead of the content, and
+// in-pane lenses (search, top pills: their rects trail too) fade their rim out,
+// leaving their CSS glass, which moves with the compositor. ~110 ms after the
+// scroll settles the sharp content refraction comes back (Apple does the same).
 
 import { useEffect, useRef } from 'react';
 import { LIQUID_GLSL } from './Liquid';
@@ -35,7 +46,7 @@ uniform vec2 uView; uniform float uDpr; uniform int uN;
 uniform vec4 uS[${MAX}]; uniform vec4 uP[${MAX}]; uniform float uQ[${MAX}];
 uniform vec2 uL; uniform float uT; uniform float uE;
 uniform float uPhoto; uniform vec4 uPA; uniform vec4 uTint; uniform float uTK; uniform sampler2D uImg; uniform vec2 uEdge;
-uniform sampler2D uC; uniform vec4 uCM; uniform float uCW;
+uniform sampler2D uC; uniform vec4 uCM; uniform float uCW; uniform float uSF; uniform float uTop;
 ${LIQUID_GLSL}
 float sdBox(vec2 p, vec2 b, float r){ vec2 q = abs(p) - b + r; return length(max(q, 0.)) + min(max(q.x, q.y), 0.) - r; }
 float smin(float a, float b, float k){ float h = clamp(.5 + .5*(b - a)/k, 0., 1.); return mix(b, a, h) - k*h*(1. - h); }
@@ -87,7 +98,8 @@ void main(){
   vec2 pr = p - n * bend * w * (kk - .035);
   vec2 ps = p - n * bend * w * kk;
   vec2 pb = p - n * bend * w * (kk + .035);
-  float bias = 1.2 + 1.6 * bend;
+  // v6.5 scroll frost (uSF): while the pane scrolls the backdrop softens a little
+  float bias = 1.2 + 1.6 * bend + 2.2 * uSF;
   vec3 col;
   vec3 liq = liquid(vec2(ps.x / uView.x, 1. - ps.y / uView.y), uView, uT, uE, uPhoto);
   if (uPhoto > .5) {
@@ -98,7 +110,11 @@ void main(){
   }
   // the scene tint sits on the backdrop, under the content (as on the page)
   col = tint(col, ps / uView);
-  vec4 cr = contentAt(pr) * Q, cg = contentAt(ps) * Q, cb = contentAt(pb) * Q;
+  // v6.5: during active/momentum scrolling the content is crossfaded out (main-thread
+  // scrollTop trails the compositor on iOS, so the refracted text would lag the page)
+  // the body shows the content at reduced contrast so the dock's labels win over it
+  float cq = Q * (1. - uSF) * (1. - .45 * (1. - bend));
+  vec4 cr = contentAt(pr) * cq, cg = contentAt(ps) * cq, cb = contentAt(pb) * cq;
   col = vec3(over(vec3(col.r), cr).r, over(vec3(col.g), cg).g, over(vec3(col.b), cb).b);
   // the scroll-edge dimming under the dock (matches .edge-bottom)
   if (uEdge.y > 0.) {
@@ -110,8 +126,10 @@ void main(){
   // v6.4 floating controls (Q=1) are clear: the content shows 1:1 and sharp in
   // the middle, under a light tint (more over bright backdrops) so labels read.
   col = mix(col, vec3(1.), .03 + .08 * bend);
-  col = mix(col, vec3(.047, .043, .055), Q * (.13 + .18 * P.w) * (1. - bend));
+  col = mix(col, vec3(.047, .043, .055), Q * (.18 + .18 * P.w) * (1. - bend));
   col *= 1. - .3 * P.w * (1. - Q);
+  // ...and replaced by a light frost (Apple-like) until scrolling settles
+  col = mix(col, vec3(.86, .85, .88), uSF * Q * (.10 + .05 * P.w) * (1. - bend));
   // specular rim, facing the light, plus a weaker catch opposite
   float f1 = max(dot(n, uL), 0.), f2 = max(dot(n, -uL), 0.);
   float line = exp(-depth * depth / 1.1) * (.3 + 1.25 * pow(f1, 3.) + .6 * pow(f2, 3.));
@@ -123,8 +141,10 @@ void main(){
   // pressed: the whole lens lights up a little
   float wash = press * .14;
   float alpha = clamp(a + wash, 0., 1.);
+  // in-pane lenses scrolled up under the status-bar scrim (.edge-top) fade with the content there
+  float under = Q > .5 ? 1. : clamp((p.y - uTop * .5) / max(uTop * .5, 1.), 0., 1.);
   vec3 pre = col * a + vec3(1.) * wash + lit;
-  gl_FragColor = vec4(min(pre, vec3(1.)), max(alpha, min(1., line))) * cov * P.y;
+  gl_FragColor = vec4(min(pre, vec3(1.)), max(alpha, min(1., line))) * cov * P.y * under;
 }`;
 
 interface Live { fl: number; x: number; y: number; w: number; h: number; r: number; o: number; press: number; dim: number }
@@ -177,7 +197,7 @@ export function GlassLayer() {
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return;
     gl.useProgram(prog);
     const U = (n: string) => gl.getUniformLocation(prog, n);
-    const uView = U('uView'), uDpr = U('uDpr'), uN = U('uN'), uS = U('uS'), uP = U('uP'), uL = U('uL'), uT = U('uT'), uE = U('uE'), uPhoto = U('uPhoto'), uPA = U('uPA'), uTint = U('uTint'), uEdge = U('uEdge'), uTK = U('uTK'), uQ = U('uQ'), uC = U('uC'), uCM = U('uCM'), uCW = U('uCW');
+    const uView = U('uView'), uDpr = U('uDpr'), uN = U('uN'), uS = U('uS'), uP = U('uP'), uL = U('uL'), uT = U('uT'), uE = U('uE'), uPhoto = U('uPhoto'), uPA = U('uPA'), uTint = U('uTint'), uEdge = U('uEdge'), uTK = U('uTK'), uQ = U('uQ'), uC = U('uC'), uCM = U('uCM'), uCW = U('uCW'), uSF = U('uSF'), uTop = U('uTop');
     const buf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
     const loc = gl.getAttribLocation(prog, 'a');
@@ -222,6 +242,15 @@ export function GlassLayer() {
     const markDirty = (delay = 0) => { dirty = true; dirtyAt = Math.max(dirtyAt, performance.now() + delay); };
     const onScroll = () => { scrollAt = performance.now(); };
     addEventListener('scroll', onScroll, { capture: true, passive: true });
+    // touchmove reaches the main thread before the first scroll event: start the frost early
+    let touchY = 0;
+    const onTouchStart = (e: TouchEvent) => { touchY = e.touches[0]?.clientY ?? 0; };
+    const onTouchMove = (e: TouchEvent) => { if (Math.abs((e.touches[0]?.clientY ?? touchY) - touchY) > 3) scrollAt = performance.now(); };
+    addEventListener('touchstart', onTouchStart, { capture: true, passive: true });
+    addEventListener('touchmove', onTouchMove, { capture: true, passive: true });
+    // scroll frost: 0 = sharp content refraction, 1 = backdrop-only + frost (while scrolling)
+    let sf = 0, sp = 0, sfAt = 0, lastTop = NaN, valid = false, idle = 0;
+    const SETTLE = 110, OUT_MS = 45, IN_MS = 170;
     const mo = new MutationObserver(() => markDirty(250));
     const app = document.querySelector('.app') || document.body;
     mo.observe(app, { childList: true, subtree: true, characterData: true });
@@ -230,22 +259,26 @@ export function GlassLayer() {
     // displacement); MARGIN of scroll either way before a repaint is needed
     let band = { top: 0, bottom: 0 };
     const MARGIN = () => Math.round(Math.max(240, innerHeight * 0.45));
-    const stats = { paints: 0, ms: 0, last: 0 };
-    (window as any).__mcGlassStats = () => ({ ...stats, k: snap?.k, w: snap?.canvas.width, h: snap?.canvas.height, top: snap?.top, bh: snap?.h });
+    const stats = { paints: 0, ms: 0, last: 0, frames: 0, fms: 0, fmax: 0 };
+    (window as any).__mcGlassStats = () => ({ ...stats, sf, sp, k: snap?.k, w: snap?.canvas.width, h: snap?.canvas.height, top: snap?.top, bh: snap?.h, H, vgap: Math.round(H - innerHeight) });
     const contentTick = (now: number) => {
-      if (band.bottom <= band.top) { gl.uniform4f(uCM, 0, 0, 1, 0); return; }
+      if (band.bottom <= band.top) { valid = true; gl.uniform4f(uCM, 0, 0, 1, 0); return; }
       const pane = activePane();
       if (pane !== lastPane) { lastPane = pane; markDirty(380); }
+      const moving = now - scrollAt < SETTLE || idle < 4;
+      valid = false;
       if (snap && pane && snap.pane === pane) {
         const dy = pane.scrollTop - snap.scroll;
         const m = MARGIN();
         // the band, shifted by the scroll since the paint, must stay inside the painted strip
-        if (band.top + dy < snap.top + 4 || band.bottom + dy > snap.top + snap.h - 4) markDirty();
-        else if (Math.abs(dy) > m * 0.8) markDirty();
-        else if (now - scrollAt > 140 && dy !== 0) markDirty();
+        valid = !(band.top + dy < snap.top + 4 || band.bottom + dy > snap.top + snap.h - 4) && Math.abs(dy) <= m * 0.8;
+        if (!valid) { dirty = true; dirtyAt = Math.min(dirtyAt, now); } // geometry: no debounce (DOM churn mustn't keep the frost on)
+        else if (!moving && dy !== 0) markDirty(); // re-base on the settled position
       }
       if (snap && Math.abs(innerHeight - snap.H) > 1) markDirty();
-      if (dirty && now >= dirtyAt && now - lastPaint > 120) {
+      // no rasterising mid-scroll (the content is frosted out anyway): paint on
+      // settle, before the content fades back in
+      if (dirty && !moving && now >= dirtyAt && (now - lastPaint > 120 || sf > 0.5)) {
         dirty = false;
         lastPaint = now;
         const m = MARGIN();
@@ -253,6 +286,7 @@ export function GlassLayer() {
         stats.paints++;
         stats.last = snap.ms;
         stats.ms += snap.ms;
+        valid = !!(pane && snap.pane === pane);
       }
       if (snap && snap.v !== snapV) {
         snapV = snap.v;
@@ -270,8 +304,10 @@ export function GlassLayer() {
 
     let W = 0, H = 0, dpr = 1;
     const resize = () => {
-      W = innerWidth;
-      H = innerHeight;
+      // the canvas' own CSS box: in a standalone PWA it reaches past innerHeight by
+      // --vgap (the layout viewport there can stop short of the screen bottom)
+      W = cv.clientWidth || innerWidth;
+      H = cv.clientHeight || innerHeight;
       dpr = Math.min(3, devicePixelRatio || 1); // full DPR: the text seen through a lens is as sharp as the page
       cv.width = Math.round(W * dpr);
       cv.height = Math.round(H * dpr);
@@ -279,6 +315,8 @@ export function GlassLayer() {
     };
     resize();
     addEventListener('resize', resize);
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => resize()) : null;
+    ro?.observe(cv);
 
     let lost = false;
     const onLost = (e: Event) => { e.preventDefault(); lost = true; setGlActive(false); };
@@ -286,15 +324,28 @@ export function GlassLayer() {
     setGlActive(true);
 
     const S = new Float32Array(MAX * 4), P = new Float32Array(MAX * 4), Q = new Float32Array(MAX);
-    let raf = 0, last = 0, lastDim = 0, cleared = false, sig = '', still = 0;
+    let raf = 0, last = 0, lastDim = 0, safeTop = -1, cleared = false, sig = '', still = 0;
     const frame = (now: number) => {
       raf = requestAnimationFrame(frame);
-      // every display frame while the content scrolls (the text seen through the
-      // dock must move in lockstep with the page, 120 Hz on ProMotion); 60 fps
-      // while things move (press, pointer, springs); 30 fps when still
-      const scrolling = now - scrollAt < 250;
-      if (lost || document.hidden || (!scrolling && now - last < (still > 20 && now - light.pointerAt > 1500 ? 32 : 15))) return;
+      // rAF-polled scroll position: catches momentum even when scroll events are sparse
+      const ap = activePane();
+      const top = ap ? ap.scrollTop : 0;
+      if (top !== lastTop) { if (lastTop === lastTop) scrollAt = now; lastTop = top; idle = 0; } else idle++;
+      // frost in fast when scrolling starts, out once it has settled and the content texture is valid
+      const dt = Math.min(64, now - (sfAt || now));
+      sfAt = now;
+      const ease = (v: number, to: number) => (to > v ? Math.min(1, v + dt / OUT_MS) : to < v ? Math.max(0, v - dt / IN_MS) : v);
+      // settled = no movement for SETTLE ms AND a few frames (one long frame mid-fling isn't a stop)
+      const scrolling = now - scrollAt < SETTLE || idle < 4;
+      const sfPrev = sf, spPrev = sp;
+      sf = ease(sf, scrolling || !valid ? 1 : 0); // floating controls' content
+      sp = ease(sp, scrolling ? 1 : 0); // in-pane lenses' rims
+      const fading = sf !== sfPrev || sp !== spPrev;
+      // 60 fps while things move (press, pointer, springs, the frost fade); 30 fps when still.
+      // Mid-scroll nothing on the layer depends on scroll, so it needn't chase the display rate.
+      if (lost || document.hidden || (!fading && now - last < (still > 20 && now - light.pointerAt > 1500 ? 32 : 15))) return;
       last = now;
+      const f0 = performance.now();
       if (texV !== scene.v) upload();
       const t = sceneTime(now);
       const pa = photoMap(t, W, H);
@@ -304,7 +355,9 @@ export function GlassLayer() {
       const live: Live[] = [];
       for (const l of lenses) {
         if (live.length >= MAX) break;
-        const o = paneOpacity(l.el);
+        const inPane = !!l.el.closest('.pane');
+        // in-pane lenses' rects trail the compositor while scrolling: fade their rim out
+        const o = paneOpacity(l.el) * (inPane ? 1 - sp : 1);
         if (o <= 0.01 || !l.el.isConnected) continue;
         const r = l.el.getBoundingClientRect();
         if (r.width < 4 || r.bottom < -20 || r.top > H + 20) continue;
@@ -316,7 +369,7 @@ export function GlassLayer() {
           l.el.style.setProperty('--dim', dim.toFixed(2));
           l.el.dataset.dim = dim.toFixed(2);
         }
-        live.push({ fl: l.el.closest('.pane') ? 0 : 1, x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width / 2, h: r.height / 2, r: Math.min(l.radius * sc, r.width / 2, r.height / 2), o, press: l.press, dim: +(l.el.dataset.dim || 0) });
+        live.push({ fl: inPane ? 0 : 1, x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width / 2, h: r.height / 2, r: Math.min(l.radius * sc, r.width / 2, r.height / 2), o, press: l.press, dim: +(l.el.dataset.dim || 0) });
       }
       if (!live.length) {
         if (!cleared) { gl.clear(gl.COLOR_BUFFER_BIT); cleared = true; }
@@ -374,16 +427,26 @@ export function GlassLayer() {
       const tn = scene.mode === 'gradient' ? TINT.gradient : TINT.photo;
       gl.uniform4f(uTint, tn[0], tn[1], tn[2], tn[3]);
       gl.uniform1f(uTK, tintK());
+      if (doDim || safeTop < 0) { const et = document.querySelector('.edge-top'); safeTop = et ? Math.max(0, et.getBoundingClientRect().height - 24) : 0; }
+      gl.uniform1f(uTop, safeTop);
       const eb = document.querySelector('.edge-bottom');
       const er = eb ? eb.getBoundingClientRect() : null;
       gl.uniform2f(uEdge, er ? er.top : 0, er ? er.height : 0);
       contentTick(now);
+      gl.uniform1f(uSF, sf);
       gl.drawArrays(gl.TRIANGLES, 0, boxes.length * 6);
+      const fm = performance.now() - f0;
+      stats.frames++;
+      stats.fms += fm;
+      stats.fmax = Math.max(stats.fmax, fm);
     };
     raf = requestAnimationFrame(frame);
     return () => {
       cancelAnimationFrame(raf);
       removeEventListener('resize', resize);
+      ro?.disconnect();
+      removeEventListener('touchstart', onTouchStart, { capture: true } as any);
+      removeEventListener('touchmove', onTouchMove, { capture: true } as any);
       cv.removeEventListener('webglcontextlost', onLost);
       removeEventListener('scroll', onScroll, { capture: true } as any);
       mo.disconnect();

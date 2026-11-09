@@ -1,6 +1,6 @@
 // v6.4 backdrops: public/bg6 (rendered by tools/backdrops). The time of day
 // picks the tone (dawn 5–8, day 8–17, dusk 17–20, night 20–5) and the date
-// rotates through that tone's images; a pin ('city-night' or 'city-night.webp') wins.
+// rotates through that tone's images; a pin ('midnight' or 'midnight.webp') wins; unknown pins fall through.
 export interface Backdrop { file: string; tone: string }
 
 export function pickBackdrop(list: Backdrop[], d: Date, pin?: string | null): string {

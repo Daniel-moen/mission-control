@@ -7,6 +7,9 @@ export const metadata: Metadata = {
   manifest: '/v6/manifest.json',
   appleWebApp: { capable: true, title: 'Mission Control', statusBarStyle: 'black-translucent' },
   icons: { apple: '/apple-touch-icon.png', icon: '/icon.svg' },
+  // Next only emits mobile-web-app-capable; iOS still keys the full-screen
+  // standalone + black-translucent behaviour off the apple- one (task 0623)
+  other: { 'apple-mobile-web-app-capable': 'yes' },
 };
 export const viewport: Viewport = {
   width: 'device-width',

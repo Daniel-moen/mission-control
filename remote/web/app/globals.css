@@ -24,6 +24,8 @@
   --pad: clamp(16px, 4.2vw, 28px);
   --safe-t: env(safe-area-inset-top, 0px);
   --safe-b: env(safe-area-inset-bottom, 0px);
+  /* standalone PWA: how far the screen reaches below the (short) layout viewport (src/lib/viewport.ts) */
+  --vgap: 0px;
   --dock-h: 64px;
   --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
   --mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
@@ -49,7 +51,7 @@ a { color: inherit; }
 .mono { font-family: var(--mono); }
 
 /* ---- backdrop ------------------------------------------------------------- */
-.scene { position: fixed; inset: 0; overflow: hidden; z-index: 0; background: #0c0b0e; }
+.scene { position: fixed; inset: 0; bottom: calc(0px - var(--vgap)); overflow: hidden; z-index: 0; background: #0c0b0e; }
 .scene-photo {
   position: absolute; inset: -6%;
   background-size: cover; background-position: center;
@@ -140,7 +142,8 @@ a { color: inherit; }
 .well.dark { background: rgba(0, 0, 0, 0.28); box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.06), inset 0 1px 3px rgba(0, 0, 0, 0.3); }
 
 /* ---- layout ---------------------------------------------------------------- */
-.app { position: relative; z-index: 1; height: 100dvh; overflow: hidden; }
+/* fixed, so extending it by --vgap (to the real screen bottom in a standalone PWA) never makes the document scroll */
+.app { position: fixed; top: 0; left: 0; right: 0; z-index: 1; height: calc(100dvh + var(--vgap)); overflow: hidden; }
 .pane {
   position: absolute; inset: 0;
   overflow-y: auto; overflow-x: hidden;
@@ -252,7 +255,7 @@ textarea.input { height: auto; min-height: 96px; padding: 12px 14px; }
 
 /* ---- dock --------------------------------------------------------------- */
 .dock-wrap {
-  position: fixed; left: 0; right: 0; bottom: calc(var(--safe-b) + 12px); z-index: 40;
+  position: fixed; left: 0; right: 0; bottom: calc(var(--safe-b) + 12px - var(--vgap)); z-index: 40;
   display: flex; justify-content: center; gap: 10px; pointer-events: none; padding: 0 12px;
 }
 .dock { --r: 999px; display: flex; padding: 6px; gap: 2px; pointer-events: auto; }
@@ -267,13 +270,13 @@ textarea.input { height: auto; min-height: 96px; padding: 12px 14px; }
 .talk-fab { --r: 999px; width: 64px; height: 64px; display: grid; place-items: center; pointer-events: auto; border-radius: 999px; }
 
 /* ---- sheets --------------------------------------------------------------- */
-.scrim { position: fixed; inset: 0; z-index: 60; background: rgba(6, 5, 8, 0.42); }
-.sheet-host { position: fixed; inset: 0; z-index: 61; display: flex; align-items: flex-end; justify-content: center; pointer-events: none; }
+.scrim { position: fixed; inset: 0; bottom: calc(0px - var(--vgap)); z-index: 60; background: rgba(6, 5, 8, 0.42); }
+.sheet-host { position: fixed; inset: 0; bottom: calc(0px - var(--vgap)); z-index: 61; display: flex; align-items: flex-end; justify-content: center; pointer-events: none; }
 .sheet {
   --r: 34px;
   pointer-events: auto;
   width: 100%; max-width: 760px;
-  height: calc(100dvh - var(--safe-t) - 14px);
+  height: calc(100dvh + var(--vgap) - var(--safe-t) - 14px);
   border-bottom-left-radius: 0; border-bottom-right-radius: 0;
   display: flex; flex-direction: column; overflow: hidden;
 }
@@ -326,7 +329,7 @@ button.card:active { transform: scale(0.985); }
 .toast { --r: 999px; padding: 10px 18px; font-size: 14px; font-weight: 600; }
 
 /* ---- talk -------------------------------------------------------------------- */
-.talk { position: fixed; inset: 0; z-index: 95; display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: calc(var(--safe-t) + 18px) 24px calc(var(--safe-b) + 30px); background: radial-gradient(80% 60% at 50% 40%, rgba(60, 35, 80, 0.55), rgba(8, 7, 10, 0.92)), rgba(8, 7, 10, 0.6); -webkit-backdrop-filter: blur(40px) saturate(160%); backdrop-filter: blur(40px) saturate(160%); }
+.talk { position: fixed; inset: 0; bottom: calc(0px - var(--vgap)); z-index: 95; display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: calc(var(--safe-t) + 18px) 24px calc(var(--safe-b) + 30px); background: radial-gradient(80% 60% at 50% 40%, rgba(60, 35, 80, 0.55), rgba(8, 7, 10, 0.92)), rgba(8, 7, 10, 0.6); -webkit-backdrop-filter: blur(40px) saturate(160%); backdrop-filter: blur(40px) saturate(160%); }
 .orb { position: relative; width: min(64vw, 300px); aspect-ratio: 1; }
 .orb > i { position: absolute; inset: 0; border-radius: 50%; }
 
@@ -405,7 +408,7 @@ button.glass:active { transform: scale(0.985); }
 /* dock: never covers content — a soft fade behind it and room below the last card */
 .pane { padding-bottom: calc(var(--safe-b) + var(--dock-h) + 84px); }
 .dock-fade {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 39; pointer-events: none;
+  position: fixed; left: 0; right: 0; bottom: calc(0px - var(--vgap)); z-index: 39; pointer-events: none;
   height: calc(var(--safe-b) + var(--dock-h) + 56px);
   background: linear-gradient(180deg, rgba(12, 11, 14, 0), rgba(12, 11, 14, 0.62) 55%, rgba(12, 11, 14, 0.82));
 }
@@ -518,7 +521,7 @@ html.gl-lens .glass.lens::before { padding: 0.5px; background: linear-gradient(1
 .glass.lens::after { background: radial-gradient(160px circle at var(--mx, 50%) var(--my, 30%), rgba(255, 255, 255, 0.1), transparent 60%); }
 .glass.lens.pressed::after { background: radial-gradient(180px circle at var(--mx, 50%) var(--my, 50%), rgba(255, 255, 255, 0.32), rgba(255, 255, 255, 0.06) 70%); transition: none; }
 
-.glass-layer { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 39; pointer-events: none; }
+.glass-layer { position: fixed; top: 0; left: 0; width: 100%; height: calc(100% + var(--vgap)); z-index: 39; pointer-events: none; }
 /* v6.4 (Daniel: "it looks blurry, I want it to really refract the text under it"):
    the floating controls are CLEAR glass. No backdrop blur: the lens layer (now
    under the dock, over the page) draws the whole body — the content 1:1 and
@@ -536,11 +539,11 @@ html.gl-lens .dock-wrap .glass.lens span { text-shadow: 0 0 8px rgba(0, 0, 0, 0.
 /* v6.5 (task 0622): a light feathered tint right behind each label, so it stays
    legible over the sharp refracted text (the shadow alone can lose to busy lines). */
 html.gl-lens .dock-wrap .glass.lens .lbl {
-  padding: 0 4px; border-radius: 7px;
-  background: rgba(12, 11, 14, 0.26);
-  box-shadow: 0 0 6px 3px rgba(12, 11, 14, 0.26);
+  padding: 0 5px; border-radius: 8px;
+  background: rgba(12, 11, 14, 0.46);
+  box-shadow: 0 0 8px 5px rgba(12, 11, 14, 0.42);
 }
-html.gl-lens .dock-wrap .glass.lens svg { filter: drop-shadow(0 0 5px rgba(0, 0, 0, 0.5)) drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35)); }
+html.gl-lens .dock-wrap .glass.lens svg { filter: drop-shadow(0 0 6px rgba(0, 0, 0, 0.7)) drop-shadow(0 0 2px rgba(0, 0, 0, 0.55)); }
 
 /* -- dock ------------------------------------------------------------------- */
 .dock { gap: 0; }
@@ -559,14 +562,16 @@ html.gl-lens .dock-wrap .glass.lens svg { filter: drop-shadow(0 0 5px rgba(0, 0,
 .dock-fade { display: none; }
 .edge-top, .edge-bottom { position: fixed; left: 0; right: 0; pointer-events: none; }
 .edge-top {
-  top: 0; z-index: 30; height: calc(var(--safe-t) + 8px);
-  background: linear-gradient(180deg, rgba(12, 11, 14, 0.4), rgba(12, 11, 14, 0));
-  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
-  -webkit-mask-image: linear-gradient(180deg, #000 55%, transparent);
-  mask-image: linear-gradient(180deg, #000 55%, transparent);
+  /* v6.5 (task 0623): a real status-bar scrim — content scrolled up under the
+     clock is dimmed and frosted, so a large title never runs into it */
+  top: 0; z-index: 30; height: calc(var(--safe-t) + 24px);
+  background: linear-gradient(180deg, rgba(12, 11, 14, 0.72), rgba(12, 11, 14, 0.5) var(--safe-t), rgba(12, 11, 14, 0));
+  -webkit-backdrop-filter: blur(14px) saturate(140%); backdrop-filter: blur(14px) saturate(140%);
+  -webkit-mask-image: linear-gradient(180deg, #000 var(--safe-t), transparent);
+  mask-image: linear-gradient(180deg, #000 var(--safe-t), transparent);
 }
 .edge-bottom {
-  bottom: 0; z-index: 38; height: calc(var(--safe-b) + var(--dock-h) + 52px);
+  bottom: calc(0px - var(--vgap)); z-index: 38; height: calc(var(--safe-b) + var(--dock-h) + 52px);
   background: linear-gradient(180deg, rgba(12, 11, 14, 0), rgba(12, 11, 14, 0.2) 45%, rgba(12, 11, 14, 0.34));
   -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
   -webkit-mask-image: linear-gradient(180deg, transparent, #000 40%);
