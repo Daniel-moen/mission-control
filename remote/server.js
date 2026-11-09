@@ -348,6 +348,14 @@ const server = http.createServer((req, res) => {
     if (file.startsWith(DIST)) return serveFile(res, file, { immutable: true, req });
   }
 
+  // Panel v6 (task 0612): Next.js static export at /v6 (remote/web → dist/v6.html
+  // + dist/v6/_next). Hashed chunks cache forever; the page itself never does.
+  if (pathname === '/v6' || pathname === '/v6/') return serveFile(res, path.join(DIST, 'v6.html'));
+  if (pathname.startsWith('/v6/_next/static/')) {
+    const file = path.join(DIST, path.normalize(pathname).replace(/^(\.\.[/\\])+/, ''));
+    if (file.startsWith(DIST)) return serveFile(res, file, { immutable: true });
+  }
+
   // A concrete file at the web root (e.g. /favicon.svg, /manifest).
   if (pathname !== '/' && !pathname.endsWith('/')) {
     const rel = path.normalize(pathname).replace(/^(\.\.[/\\])+/, '');

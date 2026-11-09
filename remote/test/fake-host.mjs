@@ -559,11 +559,74 @@ function openQuestions() {
   return out;
 }
 
+// FAKE_HOST_RICH=1 (task 0612): a busy evening for the v6 panel — tasks in every
+// stage, mia-core executor jobs with a moving tool-call tail and rising cost,
+// and a few open questions. Fake names only.
+const RICH = !!process.env.FAKE_HOST_RICH;
+const TAILS = [
+  ['  Read src/checkout/PaymentForm.tsx', '  Grep pattern: "useStripe"', '  Edit src/checkout/PaymentForm.tsx', '  Bash cd ~/demo/shop && npm test -- payment', '  Write docs/payments.md'],
+  ['  WebSearch best lightweight vector store 2026', '  WebFetch https://example.com/benchmarks', '  Write ~/library/vector-stores.md', '  Read notes/requirements.md'],
+  ['  Bash cd ~/demo/site && next build', '  Read app/page.tsx', '  Edit app/globals.css', '  Bash cd ~/demo/site && npx playwright test'],
+];
+const richStart = Date.now();
+if (RICH) {
+  const t = (id, title, status, minsAgo, extra = {}) => ({
+    id, title, detail: extra.detail || '', dir: '/Users/demo/' + (extra.dir || 'shop'), status, priority: extra.priority || 3,
+    createdAt: iso(minsAgo * 60000 + 60000), updatedAt: iso(Math.max(0, minsAgo - 3) * 60000),
+    questions: extra.questions || [], executor: extra.exec ? { dispatchedAt: iso(minsAgo * 60000), headless: true, jobId: extra.exec, model: extra.model || 'opus', sessionId: `sess-${id}`, finishedAt: status === 'done' ? iso((minsAgo - 12) * 60000) : null } : null,
+    log: [{ at: iso(minsAgo * 60000 + 60000), text: 'Created' }, { at: iso(minsAgo * 60000), text: `Dispatched headless executor (${extra.model || 'opus'}) in /Users/demo/${extra.dir || 'shop'}` }, ...(extra.log || [])],
+    result: null,
+  });
+  mia.tasks.push(
+    t('0101', 'Checkout: card payments with saved cards (Daniel 9 Nov)', 'running', 34, { exec: 501, detail: 'Add saved-card payments to the demo shop checkout. Tests must pass.' }),
+    t('0102', 'Research: lightweight vector stores for the notes app', 'running', 12, { exec: 502, model: 'claude-sonnet-5-5', dir: 'notes' }),
+    t('0103', 'Landing page refresh: hero, pricing table, Playwright checks', 'running', 6, { exec: 503, model: 'claude-fable-5-2', dir: 'site' }),
+    t('0104', 'Weekly invoice summary for the demo studio', 'checking', 25, { exec: 504, model: 'sonnet', dir: 'studio', log: [{ at: iso(120000), text: 'Executor finished — Mia is checking the report' }] }),
+    t('0105', 'Move the newsletter to the new sender domain', 'queued', 2, { dir: 'site', priority: 2 }),
+    t('0106', 'Tidy the photo library: duplicates and blurry shots', 'queued', 1, { dir: 'photos' }),
+    t('0107', 'Fix flaky date test in the booking app', 'done', 95, { exec: 505, log: [{ at: iso(80 * 60000), text: 'Done: 3 tests fixed, CI green' }] }),
+    t('0108', 'Draft a reply plan for the landlord email', 'done', 140, { exec: 506, model: 'haiku', dir: 'home' }),
+    t('0109', 'Compare two NAS options under R12k', 'failed', 200, { exec: 507, model: 'sonnet', dir: 'home' }),
+  );
+  const q = (id, text, options, minsAgo, taskId = null) => {
+    mia.messages.push({ id: `m_q${id}`, at: iso(minsAgo * 60000), from: 'mia', kind: 'question', text, options, taskId, questionId: `q_${id}` });
+    looseQuestions.push({ id: `q_${id}`, text, options, askedAt: iso(minsAgo * 60000), answer: null });
+  };
+  q('r1', 'The landing page has two hero options ready. Ship the photo hero or the type-only one?', ['Photo hero', 'Type only', 'Show me both first'], 4);
+  q('r2', 'Saved cards need a new Stripe webhook. Want me to add it to the demo account now?', ['Yes, add it', 'Not yet'], 18);
+  mia.messages.push(
+    { id: 'm_r3', at: iso(30 * 60000), from: 'daniel', kind: 'chat', text: 'Can you get the checkout payments done tonight?' },
+    { id: 'm_r4', at: iso(29 * 60000), from: 'mia', kind: 'chat', text: 'Yes. Task 0101 is running on Opus with tests; I’ll check the result before telling you it’s done.' },
+    { id: 'm_r5', at: iso(80 * 60000), from: 'system', kind: 'event', taskId: '0107', text: 'Executor for 0107 finished' },
+    { id: 'm_r6', at: iso(2 * 60000), from: 'mia', kind: 'chat', text: 'Research on vector stores is half way: two candidates so far, both run fine on the mini PC.' },
+  );
+  mia.messages.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+}
+function richJobs() {
+  const sec = (Date.now() - richStart) / 1000;
+  const job = (id, taskId, model, status, minsAgo, cost, tail, extra = {}) => ({ id, taskId, beat: null, kind: null, model, status, waitReason: null, sessionId: `sess-${taskId}`, attempts: 1, turn: 1, costUsd: +cost.toFixed(4), outputTokens: Math.round(cost * 9000), error: null, startedAt: iso(minsAgo * 60000), finishedAt: status === 'running' ? null : iso(Math.max(0, minsAgo - 10) * 60000), tail, ...extra });
+  const roll = (arr, k) => arr.slice(0, 1 + (Math.floor(sec / 4 + k) % arr.length));
+  return {
+    online: true, pid: 1615, cap: 4, headless: true, opusTokensToday: 640000 + Math.round(sec * 300),
+    budget: { level: 0.12, source: 'mia usage', detail: '12%', paused: false, pauseAt: 0.8 }, at: iso(),
+    jobs: [
+      job(501, '0101', 'opus', 'running', 34, 2.1 + sec * 0.004, roll(TAILS[0], 0)),
+      job(502, '0102', 'claude-sonnet-5-5', 'running', 12, 0.4 + sec * 0.001, roll(TAILS[1], 1)),
+      job(503, '0103', 'claude-fable-5-2', 'running', 6, 1.2 + sec * 0.006, roll(TAILS[2], 2)),
+      job(504, '0104', 'sonnet', 'finished', 25, 0.62, []),
+      job(505, '0107', 'opus', 'finished', 95, 3.84, []),
+      job(506, '0108', 'haiku', 'finished', 140, 0.07, []),
+      job(507, '0109', 'sonnet', 'failed', 200, 0.51, [], { error: 'usage limit hit' }),
+    ],
+  };
+}
+
 function miaBlock() {
   const open = openQuestions();
   const pendingQuestions = open.filter((o) => !isOldQ(o.card)).map((o) => o.card);
   const oldQuestions = open.filter((o) => isOldQ(o.card)).map((o) => o.card);
   const block = { ...mia, messages: mia.messages.slice(-200), pendingQuestions, oldQuestions, closedQuestions, questionMaxAgeHours };
+  if (RICH) block.jobs = richJobs();
   // FAKE_HOST_LEGACY_MIA=1 impersonates a Mac app before 0027 (no runningModel).
   if (process.env.FAKE_HOST_LEGACY_MIA) {
     delete block.runningModel;
