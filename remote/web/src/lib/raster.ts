@@ -15,9 +15,13 @@ export interface Snapshot {
   canvas: HTMLCanvasElement;
   pane: HTMLElement | null;
   scroll: number; // pane.scrollTop when painted
-  k: number; // px per CSS px
+  k: number; // px per CSS px (= devicePixelRatio, so the centre of a lens is 1:1 and crisp)
   v: number; // bumps on every repaint
   H: number; // viewport height when painted
+  top: number; // viewport y (CSS px) of the canvas' first row
+  h: number; // CSS px painted (the band under the floating controls ± a scroll margin)
+  w: number; // CSS px wide
+  ms: number; // how long the paint took
 }
 
 const firstColor = (s: string) => s.match(/rgba?\([^)]*\)/)?.[0] || '';
@@ -46,12 +50,17 @@ export function activePane(): HTMLElement | null {
   return document.querySelector('.pane[aria-hidden="false"]') as HTMLElement | null;
 }
 
-// Paint what's in [-H, 2H] (viewport coords) of the active pane.
-export function paint(snap: Snapshot | null, maxTex: number): Snapshot {
+// v6.4: paint only the band [top, top + h) of the viewport — the strip under
+// the floating controls plus a scroll margin above and below — at full
+// devicePixelRatio. Much less to walk and upload than v6.3's 3-screen window,
+// and sharp enough that text reads 1:1 through the middle of the dock.
+export function paint(snap: Snapshot | null, maxTex: number, band: { top: number; h: number }): Snapshot {
+  const t0 = performance.now();
   const W = innerWidth, H = innerHeight;
-  const k = Math.max(0.5, Math.min(2, devicePixelRatio || 1, maxTex / (3 * H), maxTex / W));
+  const top = Math.floor(band.top), bh = Math.ceil(band.h);
+  const k = Math.max(0.5, Math.min(3, devicePixelRatio || 1, maxTex / bh, maxTex / W));
   const canvas = snap?.canvas || document.createElement('canvas');
-  const cw = Math.round(W * k), ch = Math.round(3 * H * k);
+  const cw = Math.round(W * k), ch = Math.round(bh * k);
   if (canvas.width !== cw || canvas.height !== ch) {
     canvas.width = cw;
     canvas.height = ch;
@@ -59,13 +68,14 @@ export function paint(snap: Snapshot | null, maxTex: number): Snapshot {
   const x = canvas.getContext('2d')!;
   x.setTransform(1, 0, 0, 1, 0, 0);
   x.clearRect(0, 0, cw, ch);
-  x.setTransform(k, 0, 0, k, 0, H * k);
+  x.setTransform(k, 0, 0, k, 0, -top * k);
   const pane = activePane();
-  const out: Snapshot = { canvas, pane, scroll: pane ? pane.scrollTop : 0, k, v: (snap?.v || 0) + 1, H };
+  const out: Snapshot = { canvas, pane, scroll: pane ? pane.scrollTop : 0, k, v: (snap?.v || 0) + 1, H, top, h: ch / k, w: cw / k, ms: 0 };
   if (!pane) return out;
   x.textBaseline = 'alphabetic';
   let budget = 2600; // text runs
-  const inWin = (r: DOMRect) => r.width > 0 && r.height > 0 && r.bottom > -H && r.top < 2 * H;
+  const y0 = top, y1 = top + bh;
+  const inWin = (r: DOMRect) => r.width > 0 && r.height > 0 && r.bottom > y0 && r.top < y1;
   const range = document.createRange();
 
   const walk = (el: Element, alpha: number) => {
@@ -138,15 +148,23 @@ export function paint(snap: Snapshot | null, maxTex: number): Snapshot {
         range.selectNodeContents(n);
         const rs = range.getClientRects();
         if (!rs.length) continue;
-        if (rs[0].bottom < -H || rs[rs.length - 1].top > 2 * H) continue;
+        if (rs[0].bottom < y0 || rs[rs.length - 1].top > y1) continue;
         x.globalAlpha = a;
         x.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
         x.fillStyle = cs.color;
+        if ('letterSpacing' in x) (x as any).letterSpacing = cs.letterSpacing === 'normal' ? '0px' : cs.letterSpacing;
+        const tt = cs.textTransform;
+        const tx = (v: string) => (tt === 'uppercase' ? v.toUpperCase() : tt === 'lowercase' ? v.toLowerCase() : v);
+        // baseline from the font's own metrics, centred in the line box like the browser does
+        const mm = x.measureText('Hg');
         const fs = parseFloat(cs.fontSize) || 14;
-        const base = (q: DOMRect) => q.top + q.height / 2 + fs * 0.36;
+        const asc = mm.fontBoundingBoxAscent || fs * 0.8, desc = mm.fontBoundingBoxDescent || fs * 0.2;
+        const base = (q: DOMRect) => q.top + (q.height - (asc + desc)) / 2 + asc;
         if (rs.length === 1) {
           budget--;
-          x.fillText(t.replace(/\s+/g, ' ').trim(), rs[0].left, base(rs[0]), rs[0].width + 2);
+          const str = tx(t.replace(/\s+/g, ' ').trim());
+          const lead = /^\s/.test(t) ? x.measureText(' ').width : 0;
+          x.fillText(str, rs[0].left + lead, base(rs[0]), rs[0].width + 2);
         } else {
           // wrapped: one run per word
           const re = /\S+/g;
@@ -155,9 +173,9 @@ export function paint(snap: Snapshot | null, maxTex: number): Snapshot {
             range.setStart(n, m.index);
             range.setEnd(n, m.index + m[0].length);
             const q = range.getBoundingClientRect();
-            if (q.bottom < -H || q.top > 2 * H || !q.width) continue;
+            if (q.bottom < y0 || q.top > y1 || !q.width) continue;
             budget--;
-            x.fillText(m[0], q.left, base(q));
+            x.fillText(tx(m[0]), q.left, base(q));
           }
         }
       }
@@ -165,5 +183,7 @@ export function paint(snap: Snapshot | null, maxTex: number): Snapshot {
   };
   walk(pane, 1);
   x.globalAlpha = 1;
+  if ('letterSpacing' in x) (x as any).letterSpacing = '0px';
+  out.ms = performance.now() - t0;
   return out;
 }

@@ -35,7 +35,7 @@ uniform vec2 uView; uniform float uDpr; uniform int uN;
 uniform vec4 uS[${MAX}]; uniform vec4 uP[${MAX}]; uniform float uQ[${MAX}];
 uniform vec2 uL; uniform float uT; uniform float uE;
 uniform float uPhoto; uniform vec4 uPA; uniform vec4 uTint; uniform sampler2D uImg; uniform vec2 uEdge;
-uniform sampler2D uC; uniform vec3 uCM;
+uniform sampler2D uC; uniform vec4 uCM; uniform float uCW;
 ${LIQUID_GLSL}
 float sdBox(vec2 p, vec2 b, float r){ vec2 q = abs(p) - b + r; return length(max(q, 0.)) + min(max(q.x, q.y), 0.) - r; }
 float smin(float a, float b, float k){ float h = clamp(.5 + .5*(b - a)/k, 0., 1.); return mix(b, a, h) - k*h*(1. - h); }
@@ -53,8 +53,9 @@ vec3 tint(vec3 c, vec2 uv){
   float r = length(vec2((uv.x - .5) / 1.2, uv.y / .8));
   return mix(c, vec3(.047, .043, .055), mix(uTint.x, uTint.y, clamp(r / .7, 0., 1.)));
 }
-// the pane content (cards, text) painted into a 3-screen-tall window; uCM = (scroll since paint, window top offset H, on)
-vec4 contentAt(vec2 p){ vec2 c = vec2(p.x / uView.x, (p.y + uCM.x + uCM.y) / (3. * uCM.y)); if (uCM.z < .5 || c.y < 0. || c.y > 1.) return vec4(0.); return texture2D(uC, c); }
+// the pane content (cards, text) painted at full DPR into a band under the
+// floating controls; uCM = (scroll since paint, band top, band height, on), uCW = band width (CSS px)
+vec4 contentAt(vec2 p){ vec2 c = vec2(p.x / uCW, (p.y + uCM.x - uCM.y) / uCM.z); if (uCM.w < .5 || c.y < 0. || c.y > 1.) return vec4(0.); return texture2D(uC, c); }
 vec3 over(vec3 bg, vec4 c){ return bg * (1. - c.a) + c.rgb; }
 vec3 photoAt(vec2 p, float bias){ return texture2D(uImg, clamp(p * uPA.xy + uPA.zw, 0., 1.), bias).rgb; }
 void main(){
@@ -72,17 +73,19 @@ void main(){
   vec2 g = vec2(field(p + vec2(1., 0.)) - field(p - vec2(1., 0.)), field(p + vec2(0., 1.)) - field(p - vec2(0., 1.)));
   vec2 n = length(g) > 1e-4 ? normalize(g) : vec2(0., -1.);
   float press = P.z;
-  float w = clamp(min(S.z, S.w) * .62, 8., 22.);
+  float w = clamp(min(S.z, S.w) * .72, 8., 26.);
   float depth = max(-d, 0.);
   float x = clamp(depth / w, 0., 1.);
   // v6.3 convex rim: sample from deeper inside, compressed toward the edge, so
   // the band MAGNIFIES what's under the control (ds/dd ~ .1 at the rim, 1 inside)
   // and bends it around the corners; R/G/B bend by different amounts (fringe)
   float bend = (1. - x) * (1. - x);
-  float kk = .44 + .05 * press;
-  vec2 pr = p - n * bend * w * (kk - .05);
+  // v6.4: d(sample)/d(depth) = 1 - 2kk at the rim; kk < .5 or it folds over
+  // (that fold was the garbled streaks). kk .36 → ~3.5x magnification at the edge.
+  float kk = .36 + .04 * press;
+  vec2 pr = p - n * bend * w * (kk - .035);
   vec2 ps = p - n * bend * w * kk;
-  vec2 pb = p - n * bend * w * (kk + .05);
+  vec2 pb = p - n * bend * w * (kk + .035);
   float bias = 1.2 + 1.6 * bend;
   vec3 col;
   vec3 liq = liquid(vec2(ps.x / uView.x, 1. - ps.y / uView.y), uView, uT, uE, uPhoto);
@@ -92,24 +95,30 @@ void main(){
   } else {
     col = liq;
   }
+  // the scene tint sits on the backdrop, under the content (as on the page)
+  col = tint(col, ps / uView);
   vec4 cr = contentAt(pr) * Q, cg = contentAt(ps) * Q, cb = contentAt(pb) * Q;
   col = vec3(over(vec3(col.r), cr).r, over(vec3(col.g), cg).g, over(vec3(col.b), cb).b);
-  col = tint(col, ps / uView);
   // the scroll-edge dimming under the dock (matches .edge-bottom)
   if (uEdge.y > 0.) {
     float f = clamp((ps.y - uEdge.x) / uEdge.y, 0., 1.);
     float ga = f < .45 ? .2 * f / .45 : .2 + .14 * (f - .45) / .55;
     col = mix(col, vec3(.047, .043, .055), ga * clamp(f / .4, 0., 1.));
   }
-  // glass body: a little lift, lighter at the rim; adaptive dim when the backdrop is bright
-  col = mix(col, vec3(1.), .04 + .08 * bend);
-  col *= 1. - .3 * P.w;
+  // glass body: a little lift, lighter at the rim; adaptive dim when the backdrop is bright.
+  // v6.4 floating controls (Q=1) are clear: the content shows 1:1 and sharp in
+  // the middle, under a light tint (more over bright backdrops) so labels read.
+  col = mix(col, vec3(1.), .03 + .08 * bend);
+  col = mix(col, vec3(.047, .043, .055), Q * (.13 + .18 * P.w) * (1. - bend));
+  col *= 1. - .3 * P.w * (1. - Q);
   // specular rim, facing the light, plus a weaker catch opposite
   float f1 = max(dot(n, uL), 0.), f2 = max(dot(n, -uL), 0.);
   float line = exp(-depth * depth / 1.1) * (.3 + 1.25 * pow(f1, 3.) + .6 * pow(f2, 3.));
   float glow = (1. - x) * (1. - x) * (.16 * pow(f1, 2.) + .06 * pow(f2, 2.));
   vec3 lit = vec3(1., .98, .96) * (line + glow) * (1. + .8 * press);
-  float a = (1. - smoothstep(.55, 1., x)) * .96;
+  // in-pane lenses (Q=0) only draw the rim band (their middle is CSS glass over
+  // their own content); floating ones draw the whole body (no CSS blur at all)
+  float a = mix((1. - smoothstep(.55, 1., x)) * .96, 1., Q);
   // pressed: the whole lens lights up a little
   float wash = press * .14;
   float alpha = clamp(a + wash, 0., 1.);
@@ -166,7 +175,7 @@ export function GlassLayer() {
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return;
     gl.useProgram(prog);
     const U = (n: string) => gl.getUniformLocation(prog, n);
-    const uView = U('uView'), uDpr = U('uDpr'), uN = U('uN'), uS = U('uS'), uP = U('uP'), uL = U('uL'), uT = U('uT'), uE = U('uE'), uPhoto = U('uPhoto'), uPA = U('uPA'), uTint = U('uTint'), uEdge = U('uEdge'), uQ = U('uQ'), uC = U('uC'), uCM = U('uCM');
+    const uView = U('uView'), uDpr = U('uDpr'), uN = U('uN'), uS = U('uS'), uP = U('uP'), uL = U('uL'), uT = U('uT'), uE = U('uE'), uPhoto = U('uPhoto'), uPA = U('uPA'), uTint = U('uTint'), uEdge = U('uEdge'), uQ = U('uQ'), uC = U('uC'), uCM = U('uCM'), uCW = U('uCW');
     const buf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
     const loc = gl.getAttribLocation(prog, 'a');
@@ -215,19 +224,33 @@ export function GlassLayer() {
     const app = document.querySelector('.app') || document.body;
     mo.observe(app, { childList: true, subtree: true, characterData: true });
     (window as any).__mcContent = () => snap && { v: snap.v, k: snap.k, w: snap.canvas.width, h: snap.canvas.height, data: snap.canvas.toDataURL('image/png') };
+    // the band of the viewport the floating controls can sample (± the rim
+    // displacement); MARGIN of scroll either way before a repaint is needed
+    let band = { top: 0, bottom: 0 };
+    const MARGIN = () => Math.round(Math.max(240, innerHeight * 0.45));
+    const stats = { paints: 0, ms: 0, last: 0 };
+    (window as any).__mcGlassStats = () => ({ ...stats, k: snap?.k, w: snap?.canvas.width, h: snap?.canvas.height, top: snap?.top, bh: snap?.h });
     const contentTick = (now: number) => {
+      if (band.bottom <= band.top) { gl.uniform4f(uCM, 0, 0, 1, 0); return; }
       const pane = activePane();
       if (pane !== lastPane) { lastPane = pane; markDirty(380); }
       if (snap && pane && snap.pane === pane) {
         const dy = pane.scrollTop - snap.scroll;
-        if (Math.abs(dy) > snap.H * 0.7) markDirty();
+        const m = MARGIN();
+        // the band, shifted by the scroll since the paint, must stay inside the painted strip
+        if (band.top + dy < snap.top + 4 || band.bottom + dy > snap.top + snap.h - 4) markDirty();
+        else if (Math.abs(dy) > m * 0.8) markDirty();
         else if (now - scrollAt > 140 && dy !== 0) markDirty();
       }
       if (snap && Math.abs(innerHeight - snap.H) > 1) markDirty();
       if (dirty && now >= dirtyAt && now - lastPaint > 120) {
         dirty = false;
         lastPaint = now;
-        snap = paint(snap, maxTex);
+        const m = MARGIN();
+        snap = paint(snap, maxTex, { top: band.top - m, h: band.bottom - band.top + 2 * m });
+        stats.paints++;
+        stats.last = snap.ms;
+        stats.ms += snap.ms;
       }
       if (snap && snap.v !== snapV) {
         snapV = snap.v;
@@ -239,14 +262,15 @@ export function GlassLayer() {
         gl.activeTexture(gl.TEXTURE0);
       }
       const on = !!(snap && pane && snap.pane === pane && pane.style.opacity !== '0');
-      gl.uniform3f(uCM, on && pane ? pane.scrollTop - snap!.scroll : 0, snap ? snap.H : H, on ? 1 : 0);
+      gl.uniform4f(uCM, on && pane ? pane.scrollTop - snap!.scroll : 0, snap ? snap.top : 0, snap ? snap.h : 1, on ? 1 : 0);
+      gl.uniform1f(uCW, snap ? snap.w : W);
     };
 
     let W = 0, H = 0, dpr = 1;
     const resize = () => {
       W = innerWidth;
       H = innerHeight;
-      dpr = Math.min(2, devicePixelRatio || 1);
+      dpr = Math.min(3, devicePixelRatio || 1); // full DPR: the text seen through a lens is as sharp as the page
       cv.width = Math.round(W * dpr);
       cv.height = Math.round(H * dpr);
       gl.viewport(0, 0, cv.width, cv.height);
@@ -263,8 +287,11 @@ export function GlassLayer() {
     let raf = 0, last = 0, lastDim = 0, cleared = false, sig = '', still = 0;
     const frame = (now: number) => {
       raf = requestAnimationFrame(frame);
-      // 60 fps while things move (scroll, press, pointer, springs); 30 fps when still
-      if (lost || document.hidden || now - last < (still > 20 && now - light.pointerAt > 1500 ? 32 : 15)) return;
+      // every display frame while the content scrolls (the text seen through the
+      // dock must move in lockstep with the page, 120 Hz on ProMotion); 60 fps
+      // while things move (press, pointer, springs); 30 fps when still
+      const scrolling = now - scrollAt < 250;
+      if (lost || document.hidden || (!scrolling && now - last < (still > 20 && now - light.pointerAt > 1500 ? 32 : 15))) return;
       last = now;
       if (texV !== scene.v) upload();
       const t = sceneTime(now);
@@ -310,6 +337,10 @@ export function GlassLayer() {
           }
         }
       }
+      // the band the floating lenses sample (their rects + the rim's reach)
+      let bt = 1e9, bb = -1e9;
+      for (const s of live) if (s.fl) { bt = Math.min(bt, s.y - s.h - 24); bb = Math.max(bb, s.y + s.h + 24); }
+      band = bt < bb ? { top: bt, bottom: bb } : { top: 0, bottom: 0 };
       const v = new Float32Array(boxes.length * 12);
       boxes.forEach(([x0, y0, x1, y1], i) => v.set([x0, y0, x1, y0, x0, y1, x0, y1, x1, y0, x1, y1], i * 12));
       S.fill(0);
