@@ -3,8 +3,27 @@
 // Mac and must never be served stale. This worker only shows pushes and routes
 // a tap back into the panel at #mia.
 
+// Bump on every front-end switch so browsers install the new worker at once
+// (it is compared byte-for-byte). v6-default-1: panel v6 became / (task 0622).
+const SW_VERSION = 'v6-default-1';
+
 self.addEventListener('install', () => self.skipWaiting());
-self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
+self.addEventListener('activate', (event) =>
+  event.waitUntil(
+    (async () => {
+      // Belt and braces: drop any Cache Storage left by an older build, so no
+      // device can be shown the old app from a cache.
+      try {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((k) => caches.delete(k)));
+      } catch {}
+      await self.clients.claim();
+    })(),
+  ),
+);
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'mc-sw-version' && event.source) event.source.postMessage({ type: 'mc-sw-version', version: SW_VERSION });
+});
 
 self.addEventListener('push', (event) => {
   let data = {};

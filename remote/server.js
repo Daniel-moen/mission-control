@@ -381,6 +381,8 @@ const server = http.createServer((req, res) => {
   // Panel v6 (task 0612): Next.js static export at /v6 (remote/web → dist/v6.html
   // + dist/v6/_next). Hashed chunks cache forever; the page itself never does.
   if (pathname === '/v6' || pathname === '/v6/') return serveFile(res, path.join(DIST, 'v6.html'));
+  // The classic panel (v1) stays reachable at /classic since v6 took / (task 0622).
+  if (pathname === '/classic' || pathname === '/classic/') return serveFile(res, path.join(DIST, 'index.html'), { req });
   if (pathname.startsWith('/v6/_next/static/')) {
     const file = path.join(DIST, path.normalize(pathname).replace(/^(\.\.[/\\])+/, ''));
     if (file.startsWith(DIST)) return serveFile(res, file, { immutable: true });
@@ -406,22 +408,32 @@ const server = http.createServer((req, res) => {
   serveFile(res, path.join(DIST, ui === 'v1' ? 'index.html' : `${ui}.html`), { req });
 });
 
-// A/B of the panel (task 0444): v1 (index.html) is the default; a device that
-// chose v2 — in Settings, or by opening ?ui=v2 — carries the mc_ui cookie and
-// gets v2.html at the same URLs, so deep links (/#mia) and pushes work in both.
+// A/B of the panel (task 0444). Since task 0622 panel v6 is the default at /
+// (and every SPA route, so push deep links like /#task/0612 land in v6); the
+// classic panel (v1, index.html) lives at /classic. A device can still pin
+// another front end by opening ?ui=<name> (?ui=v6 goes back to the default):
+// that sets the mc_ui2 cookie. The old mc_ui cookie from the v2–v5.3 A/B is
+// ignored on purpose, so devices that once picked v5.3 also get v6 now.
 // v3a/v3b/v3c are the three design directions of task 0445 (Home + Mia only).
 // v4a/v4b/v4c are the three structural directions of task 0446; v5 (task 0483)
 // is v1's structure in v4's Lens glass.
-const UIS = new Set(['v1', 'v2', 'v3a', 'v3b', 'v3c', 'v4a', 'v4b', 'v4c', 'v5', 'v52', 'v53']);
+const UIS = new Set(['v1', 'classic', 'v6', 'v2', 'v3a', 'v3b', 'v3c', 'v4a', 'v4b', 'v4c', 'v5', 'v52', 'v53']);
+const DEFAULT_UI = 'v6';
 function uiFor(req, url, res) {
+  const built = (ui) => {
+    if (ui === 'classic' || ui === 'v1') return 'v1';
+    if (fs.existsSync(path.join(DIST, `${ui}.html`))) return ui;
+    return ui === DEFAULT_UI ? 'v1' : built(DEFAULT_UI);
+  };
   const q = url.searchParams.get('ui');
-  const built = (ui) => (ui !== 'v1' && fs.existsSync(path.join(DIST, `${ui}.html`)) ? ui : 'v1');
   if (UIS.has(q)) {
-    res.setHeader('set-cookie', `mc_ui=${q}; Path=/; Max-Age=31536000; SameSite=Lax`);
+    res.setHeader('set-cookie', q === DEFAULT_UI
+      ? 'mc_ui2=; Path=/; Max-Age=0; SameSite=Lax'
+      : `mc_ui2=${q}; Path=/; Max-Age=31536000; SameSite=Lax`);
     return built(q);
   }
-  const want = /(?:^|;\s*)mc_ui=(v2|v5[23]?|v[34][abc])(?:;|$)/.exec(req.headers.cookie || '');
-  return want ? built(want[1]) : 'v1';
+  const want = /(?:^|;\s*)mc_ui2=(v1|classic|v2|v5[23]?|v[34][abc])(?:;|$)/.exec(req.headers.cookie || '');
+  return built(want ? want[1] : DEFAULT_UI);
 }
 
 // ---------------------------------------------------------------------------

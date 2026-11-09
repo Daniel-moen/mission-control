@@ -298,7 +298,7 @@ function SettingsSheet() {
         </section>
         <section className="col gap8">
           <div className="eyebrow">Panel</div>
-          <a className="pill small" href="/" style={{ alignSelf: 'flex-start', textDecoration: 'none' }}><Icon name="external" size={15} /> Open the classic panel</a>
+          <a className="pill small" href="/classic" style={{ alignSelf: 'flex-start', textDecoration: 'none' }}><Icon name="external" size={15} /> Open the classic panel</a>
           <button className="pill small danger" style={{ alignSelf: 'flex-start' }} onClick={() => confirm('Forget the token on this device?') && forgetToken()}>Forget token</button>
           <div className="tiny">Build {BUILD} · link {getMC().transport}</div>
         </section>

@@ -144,7 +144,7 @@ function Dock() {
         {TABS.map((t, i) => (
           <button key={t} ref={(el) => { btns.current[i] = el; }} className={tab === t ? 'on' : ''} onClick={() => go(t)} aria-label={LABEL[t]} data-tab={t}>
             <Icon name={ICON[t]} size={22} style={{ position: 'relative' }} />
-            <span style={{ position: 'relative' }}>{LABEL[t]}</span>
+            <span className="lbl" style={{ position: 'relative' }}>{LABEL[t]}</span>
             {t === 'now' && badge ? <span className="badge num">{badge}</span> : null}
           </button>
         ))}

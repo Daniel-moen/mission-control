@@ -33,13 +33,20 @@ run(['test/fake-host.mjs']);
 await sleep(1200);
 const base = `http://localhost:${PORT}`;
 
-await check('relay serves /v6 and the classic panel at /', async () => {
-  const v6 = await fetch(`${base}/v6`);
-  assert.equal(v6.status, 200);
-  assert.match(await v6.text(), /\/v6\/_next\//);
-  const v1 = await fetch(`${base}/`);
-  assert.equal(v1.status, 200);
-  assert.doesNotMatch(await v1.text(), /\/v6\/_next\//);
+await check('relay serves v6 at / and /v6, the classic panel at /classic (task 0622)', async () => {
+  const isV6 = async (url, init) => { const r = await fetch(url, init); assert.equal(r.status, 200, url); return /\/v6\/_next\//.test(await r.text()); };
+  assert.ok(await isV6(`${base}/v6`), '/v6 is v6');
+  assert.ok(await isV6(`${base}/`), '/ is v6');
+  assert.ok(await isV6(`${base}/some/deep/route`), 'SPA routes are v6');
+  assert.ok(!(await isV6(`${base}/classic`)), '/classic is the classic panel');
+  assert.ok(!(await isV6(`${base}/?ui=classic`)), '?ui=classic pins the classic panel');
+  assert.ok(await isV6(`${base}/`, { headers: { cookie: 'mc_ui=v53' } }), 'a stale v5.3 A/B cookie no longer overrides v6');
+  assert.ok(!(await isV6(`${base}/`, { headers: { cookie: 'mc_ui2=classic' } })), 'mc_ui2=classic keeps a device on classic');
+  const man = await (await fetch(`${base}/v6/manifest.json`)).json();
+  assert.equal(man.start_url, '/', 'home-screen icon opens /');
+  const sw = await fetch(`${base}/sw.js`);
+  assert.equal(sw.status, 200);
+  assert.match(await sw.text(), /SW_VERSION = 'v6-default-1'/);
 });
 
 const browser = await webkit.launch();
@@ -102,6 +109,12 @@ for (const dev of [{ name: 'iphone', viewport: { width: 393, height: 852 } }, { 
   await check(`${dev.name}: fleet shows limits and sessions`, async () => {
     await page.click('[data-tab="fleet"]');
     await page.waitForSelector('[data-pane="fleet"] [data-agent]');
+  });
+  await check(`${dev.name}: a push tap's URL (/#task/0101) opens v6 at the task`, async () => {
+    await page.goto(`${base}/#task/0101`);
+    await page.waitForSelector('[data-sheet="task"] >> text=Live · executor 501', { timeout: 10000 });
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('[data-sheet]', { state: 'detached' });
   });
   await check(`${dev.name}: Mia can drive the panel (#hash deep link)`, async () => {
     await page.evaluate(() => { location.hash = '#mia'; });

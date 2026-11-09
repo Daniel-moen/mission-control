@@ -533,6 +533,13 @@ html.gl-lens .dock-wrap .glass.lens {
 html.gl-lens .dock-wrap .glass.lens::before { display: none; }
 html.gl-lens .dock-wrap .glass.lens button,
 html.gl-lens .dock-wrap .glass.lens span { text-shadow: 0 0 8px rgba(0, 0, 0, 0.55), 0 1px 2px rgba(0, 0, 0, 0.45); }
+/* v6.5 (task 0622): a light feathered tint right behind each label, so it stays
+   legible over the sharp refracted text (the shadow alone can lose to busy lines). */
+html.gl-lens .dock-wrap .glass.lens .lbl {
+  padding: 0 4px; border-radius: 7px;
+  background: rgba(12, 11, 14, 0.26);
+  box-shadow: 0 0 6px 3px rgba(12, 11, 14, 0.26);
+}
 html.gl-lens .dock-wrap .glass.lens svg { filter: drop-shadow(0 0 5px rgba(0, 0, 0, 0.5)) drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35)); }
 
 /* -- dock ------------------------------------------------------------------- */
