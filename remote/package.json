@@ -12,6 +12,7 @@
     "test:api": "node test/api-test.mjs",
     "test:panel": "node test/panel-e2e.mjs",
     "test:upload": "node test/upload-test.mjs",
+    "test:phone": "node test/phone-test.mjs",
     "test:upload-panel": "node test/upload-panel-e2e.mjs",
     "test:upload-mac": "bash test/upload-mac-e2e.sh",
     "test:spoken": "node test/spoken-test.mjs",

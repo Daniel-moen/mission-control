@@ -73,6 +73,7 @@ const { createUpload } = require('./upload');
 const { createDocAssets } = require('./docassets');
 const { createDocPages } = require('./docpages');
 const { createChannels } = require('./channels');
+const { createPhone } = require('./phone');
 
 const PORT = process.env.PORT || 8080;
 const TOKEN = process.env.MC_TOKEN || '';
@@ -112,12 +113,30 @@ const upload = createUpload({
   hostOnline: () => host !== null,
   hostCanUpload: () => hostCaps.includes('upload'),
 });
+// Mia phones Daniel (phone.js, task 0621): Twilio rings him, OpenAI Realtime
+// (SIP) is the voice, the relay runs the call's tools. Dark without its keys.
+const phone = createPhone({
+  tokenOk,
+  sendToHost: (obj) => {
+    if (!host || host.readyState !== host.OPEN) return false;
+    sendTo(host, obj);
+    return true;
+  },
+  hostOnline: () => host !== null,
+  latestSnapshot: () => lastSnapshot,
+  showOnPanel: (frame) => {
+    if (!panelCandidates()[0]) return { ok: false, detail: 'No panel is open — ask Daniel to open Mission Control.' };
+    routePanel(frame);
+    return { ok: true };
+  },
+});
 // A redeploy sends SIGTERM: write the realtime tally (open calls included)
 // and any pending TTS tally before going, so the next process can settle them.
 process.on('SIGTERM', () => {
   realtime.close();
   tts.close();
   upload.close();
+  phone.close();
   process.exit(0);
 });
 
@@ -217,7 +236,7 @@ const server = http.createServer((req, res) => {
 
   if (pathname === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, host: host !== null, viewers: viewers.size, pollers: pollers.size, pushSubscriptions: push.count(), stt: stt.info().provider, realtime: realtime.info(), tts: tts.info(), uploads: upload.info(), docAssets: docAssets.info().bytes, docPages: docPages.info().bytes, channels: channels.info(), panelBuild: panelBuild(), viewerBuilds: [...viewers].map((v) => v.build || 'legacy') }));
+    res.end(JSON.stringify({ ok: true, host: host !== null, viewers: viewers.size, pollers: pollers.size, pushSubscriptions: push.count(), stt: stt.info().provider, realtime: realtime.info(), tts: tts.info(), uploads: upload.info(), docAssets: docAssets.info().bytes, docPages: docPages.info().bytes, channels: channels.info(), phone: phone.info(), panelBuild: panelBuild(), viewerBuilds: [...viewers].map((v) => v.build || 'legacy') }));
     return;
   }
 
@@ -306,6 +325,16 @@ const server = http.createServer((req, res) => {
   if (pathname === '/tts') {
     tts.handle(req, res, url).catch((err) => {
       console.error('tts error:', err);
+      if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'internal error' }));
+    });
+    return;
+  }
+
+  // Phone calls from Mia (token-auth + signed provider webhooks) — see phone.js.
+  if (pathname === '/phone' || pathname.startsWith('/phone/')) {
+    phone.handle(req, res, url).catch((err) => {
+      console.error('phone error:', err);
       if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: 'internal error' }));
     });
@@ -581,6 +610,8 @@ const api = createApi({
 
 server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url, 'http://x');
+  // Twilio Media Streams for a phone call (phone.js checks the per-call key).
+  if (url.pathname === '/phone/stream') return phone.handleUpgrade(req, socket, head);
   if (url.pathname !== '/ws' || !tokenOk(url.searchParams.get('token'))) {
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
     socket.destroy();

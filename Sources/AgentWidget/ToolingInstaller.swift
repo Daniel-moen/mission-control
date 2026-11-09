@@ -35,6 +35,8 @@ enum ToolingInstaller {
                         name: "mia-core", body: miaCore, executable: true)
             installFile(dir: home + "/.mission-control/bin",
                         name: "mia-usage", body: miaUsage, executable: true)
+            installFile(dir: home + "/.mission-control/bin",
+                        name: "mia-phone", body: miaPhone, executable: true)
             installFile(dir: home + "/.claude/skills/mission-control-mia",
                         name: "SKILL.md", body: miaSkill, executable: false)
         }
@@ -2709,6 +2711,12 @@ HELP = """mia — Mia's line to Daniel and the Mission Control task list.
   mia recall --reindex                              rebuild notes.db from scratch (normally incremental)
   mia note --project X "fact"                       append a durable fact to memory/<X>.md and index it
   mia refresh --stdin [--dry-run]                   save handoff (stdin), then restart Mia FRESH (no --resume)
+  mia call "<why>" [--urgent] [--reason "<background>"]
+                                                    ring Daniel's phone (~/.mission-control/mia/phone.txt);
+                                                    his words come back as "(phone) …" messages
+  mia call-say <call_id> "<text>" [--hangup]        say your answer in the live call
+  mia call-hangup <call_id> | mia call-status [--json]
+                                                    end a call / configured?, live call, recent calls
   mia status [--all]                                tasks, open questions, reminders
                                                     (--all: old questions too)
   mia help
@@ -2725,6 +2733,18 @@ def cmd_jarvis(args):
         if c and os.path.isfile(c):
             os.execvp("python3", ["python3", c] + list(args))
     die("mia-jarvis is not installed next to mia (update Mission Control)")
+
+
+def cmd_phone(sub):
+    """Phone calls to Daniel live in their own script beside this one (mia-phone, task 0621)."""
+    def run(args):
+        me = os.environ.get("MIA_SELF") or ""
+        for c in (os.path.join(os.path.dirname(os.path.realpath(me)), "mia-phone") if me else "",
+                  os.path.expanduser("~/.mission-control/bin/mia-phone")):
+            if c and os.path.isfile(c):
+                os.execvp("python3", ["python3", c, sub] + list(args))
+        die("mia-phone is not installed next to mia (update Mission Control)")
+    return run
 
 
 def cmd_usage(args):
@@ -3034,7 +3054,9 @@ def main(argv):
              "panel": cmd_panel, "uploads": cmd_uploads,
              "question": cmd_question, "questions": cmd_question, "jarvis": cmd_jarvis,
              "core": cmd_core, "jobs": cmd_jobs, "usage": cmd_usage,
-             "recall": cmd_recall, "note": cmd_note, "refresh": cmd_refresh}
+             "recall": cmd_recall, "note": cmd_note, "refresh": cmd_refresh,
+             "call": cmd_phone("call"), "call-say": cmd_phone("call-say"),
+             "call-hangup": cmd_phone("call-hangup"), "call-status": cmd_phone("call-status")}
     if cmd not in table:
         die("unknown command: %s (try: mia help)" % cmd)
     table[cmd](rest)
@@ -3128,6 +3150,24 @@ and end your turn.
 The note is optional ("summarise this", "file this for Oblivion"). Files sent
 together are numbered and share the note. `mia uploads` lists recent ones
 (`--json` for id, path, mime, size, sha256, caption).
+
+**Phoning Daniel (Mia only, task 0621)** — a real call to his mobile:
+
+```
+mia call "<why you are calling>" [--urgent] [--reason "<background>"]   prints c_…
+mia call-say <call_id> "<text>" [--hangup]   your answer, spoken in the live call
+mia call-hangup <call_id>   ·   mia call-status [--json]
+```
+
+The voice on the line is you (it opens with the message). What Daniel asks
+arrives as `[MC] Daniel: (phone) … [call c_… — answer in the call with: mia
+call-say c_… "…"]`: answer with `mia call-say` (short, spoken), not `mia say`.
+His decisions on open questions arrive as answers starting "(phone)". You may
+`mia panel show-doc/show-url` during the call. Caps: ~5 min a call, 5/hour,
+20/day, none 23:00–07:00 SA time unless `--urgent`. When it ends you get
+"(phone) [call c_… ended …]". Exit 3 = refused by a guard (quiet hours, rate
+limit): push instead. Call only for what can't wait (see the Library doc
+"Mia phone calls").
 
 **Showing Daniel things (Mia only)** — he mostly reads the panel on his iPad
 or phone:
@@ -6532,7 +6572,7 @@ def cmd_beat(a):
     core = Core()
     ids = core.fire_beats(load_config(), force=a.id)
     if not ids:
-        die("no such heartbeat in schedule.json / heartbeats.beats: %s" % a.id)
+        die("no such heartbeat in schedule.json / heartbeats.beats, or it is already queued/running: %s" % a.id)
     print("beat %s queued as job %d" % (a.id, ids[0]))
 
 
@@ -6623,6 +6663,200 @@ def main(argv):
         ap.print_help()
         return
     a.fn(a)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
+"""#
+
+    // `mia call …` (task 0621): Mia phones Daniel, beside `mia`.
+    private static let miaPhone = #"""
+#!/usr/bin/env python3
+"""mia-phone: Mia phones Daniel (task 0621). Called as `mia call …` or directly.
+
+  mia call "<why you are calling>" [--urgent] [--reason "<background>"] [--to +27…]
+                                   ring Daniel; prints the call id (c_…)
+  mia call-say <call_id> "<text>" [--hangup]
+                                   say this in the live call (your answer to a
+                                   "(phone) …" message); --hangup: then say goodbye
+  mia call-hangup <call_id>        end the call now
+  mia call-status [--json]         configured?, live call, recent calls, limits
+
+The call: Daniel's phone rings (a US number). The voice on the line is you —
+it says the message, listens, and sends what he asks back to you as a chat
+line starting "(phone) … [call c_… — answer in the call with: mia call-say …]".
+Answer with `mia call-say`; it is spoken in the same call. While a call is live
+you can also `mia panel show-doc|show-url` as usual. Each call is capped at
+about 5 minutes; 5 calls an hour, 20 a day; no calls 23:00-07:00 (SA time)
+unless --urgent. When the call ends you get "(phone) [call c_… ended …]".
+
+The number comes from ~/.mission-control/mia/phone.txt (or --to). The relay
+URL and token from MC_RELAY_URL / MC_TOKEN, else the Mission Control app's
+Remote settings.
+"""
+import json
+import os
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+
+MIA_DIR = os.path.abspath(os.path.expanduser(os.environ.get("MIA_DIR") or "~/.mission-control/mia"))
+PHONE_FILE = os.path.join(MIA_DIR, "phone.txt")
+
+
+def die(msg, code=1):
+    print("mia call: " + msg, file=sys.stderr)
+    sys.exit(code)
+
+
+def defaults(key):
+    if os.environ.get("MC_DOC_NO_DEFAULTS") == "1":
+        return ""
+    try:
+        return subprocess.run(["defaults", "read", "com.agentwidget.mission-control", key],
+                              capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception:
+        return ""
+
+
+def relay():
+    url = (os.environ.get("MC_RELAY_URL") or defaults("remoteURL")).strip().rstrip("/")
+    token = (os.environ.get("MC_TOKEN") or defaults("remoteToken")).strip()
+    if url.startswith("wss://"):
+        url = "https://" + url[6:]
+    elif url.startswith("ws://"):
+        url = "http://" + url[5:]
+    elif url and not url.startswith(("http://", "https://")):
+        url = "https://" + url
+    if url.endswith("/ws"):
+        url = url[:-3]
+    if not url or not token:
+        die("no relay configured (set MC_RELAY_URL and MC_TOKEN, or the app's Remote settings)")
+    return url, token
+
+
+def call_api(method, path, body=None):
+    url, token = relay()
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url + path, data=data, method=method,
+                                 headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=40) as r:
+            return r.status, json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read() or b"{}")
+        except Exception:
+            return e.code, {"ok": False, "error": "HTTP %d" % e.code}
+    except Exception as e:
+        die("relay unreachable: %s" % e)
+
+
+def flags(args, names):
+    """Split args into positionals and {flag: value|True} for the given names (value flags end in =)."""
+    pos, opts, i = [], {}, 0
+    while i < len(args):
+        a = args[i]
+        if a + "=" in names:
+            if i + 1 >= len(args):
+                die("%s needs a value" % a, 2)
+            opts[a] = args[i + 1]
+            i += 2
+            continue
+        if a in names:
+            opts[a] = True
+        elif a.startswith("--"):
+            die("unknown option %s" % a, 2)
+        else:
+            pos.append(a)
+        i += 1
+    return pos, opts
+
+
+def number(opts):
+    to = opts.get("--to") or ""
+    if not to:
+        try:
+            to = open(PHONE_FILE).read().strip().splitlines()[0].strip()
+        except Exception:
+            die("no number: write Daniel's number (+27…) to %s or pass --to" % PHONE_FILE)
+    return to.replace(" ", "")
+
+
+def fail(status, data):
+    msg = data.get("error") or ("HTTP %d" % status)
+    if data.get("configured") is False:
+        miss = ", ".join(data.get("missing") or [])
+        msg = "phone calls are not configured on the relay yet" + (" (missing %s)" % miss if miss else "")
+    die(msg, 3 if status in (409, 429) else 1)
+
+
+def cmd_call(args):
+    pos, o = flags(args, {"--urgent", "--reason=", "--to="})
+    msg = " ".join(pos).strip()
+    if not msg:
+        die('usage: mia call "<why you are calling>" [--urgent] [--reason "<background>"] [--to +27…]', 2)
+    body = {"to": number(o), "message": msg, "urgent": bool(o.get("--urgent"))}
+    if o.get("--reason"):
+        body["reason"] = o["--reason"]
+    status, data = call_api("POST", "/phone/call", body)
+    if status != 200 or not data.get("ok"):
+        fail(status, data)
+    print(data["id"])
+    print("ringing Daniel; his words arrive as \"(phone) …\" messages — answer with: mia call-say %s \"…\"" % data["id"], file=sys.stderr)
+
+
+def cmd_say(args):
+    pos, o = flags(args, {"--hangup"})
+    if len(pos) < 2:
+        die('usage: mia call-say <call_id> "<text>" [--hangup]', 2)
+    status, data = call_api("POST", "/phone/say", {"id": pos[0], "text": " ".join(pos[1:]), "hangup": bool(o.get("--hangup"))})
+    if status != 200 or not data.get("ok"):
+        fail(status, data)
+    print("%s: %s" % (data.get("id"), data.get("status", "ok")))
+
+
+def cmd_hangup(args):
+    if len(args) != 1:
+        die("usage: mia call-hangup <call_id>", 2)
+    status, data = call_api("POST", "/phone/hangup", {"id": args[0]})
+    if status != 200 or not data.get("ok"):
+        fail(status, data)
+    print("%s: hung up" % data.get("id"))
+
+
+def cmd_status(args):
+    status, data = call_api("GET", "/phone")
+    if "--json" in args:
+        print(json.dumps(data, indent=2))
+        return
+    if data.get("configured") is False:
+        print("phone: not configured (missing %s)" % ", ".join(data.get("missing") or []))
+        return
+    if status != 200:
+        fail(status, data)
+    lim = data.get("limits", {})
+    print("phone: ready · live: %s · last 24h: %d calls, %s min, $%s" % (
+        ", ".join(data.get("live") or []) or "none", data["last24h"]["calls"], data["last24h"]["minutes"], data["last24h"]["usd"]))
+    print("limits: %s/h, %s/day, %ss per call, quiet %s" % (lim.get("perHour"), lim.get("perDay"), lim.get("maxSeconds"), lim.get("quietHours")))
+    for c in data.get("calls", [])[-8:]:
+        print("  %s  %s  %-10s %4ss  %s%s" % (c["id"], c["at"][:16].replace("T", " "), c["status"], c.get("seconds", 0),
+                                           "URGENT " if c.get("urgent") else "", (c.get("message") or "")[:60]))
+
+
+def main(argv):
+    if not argv or argv[0] in ("help", "-h", "--help"):
+        print(__doc__.strip())
+        return
+    if len(argv) > 1 and argv[1] in ("help", "-h", "--help"):
+        print(__doc__.strip())
+        return
+    table = {"call": cmd_call, "say": cmd_say, "call-say": cmd_say, "hangup": cmd_hangup, "call-hangup": cmd_hangup,
+             "status": cmd_status, "call-status": cmd_status}
+    if argv[0] not in table:
+        die("unknown command %s (try: mia-phone help)" % argv[0], 2)
+    table[argv[0]](argv[1:])
 
 
 if __name__ == "__main__":
