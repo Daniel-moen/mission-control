@@ -207,10 +207,14 @@ func axWalk(_ e: AXUIElement, _ d: Int = 0, _ visit: (AXUIElement) -> Bool) -> B
     for k in (axAttr(e, kAXChildrenAttribute) as? [AXUIElement]) ?? [] where axWalk(k, d + 1, visit) { return true }
     return false
 }
-let UI_APPS = ["com.apple.FaceTime", "com.apple.notificationcenterui", "com.apple.TelephonyUtilities", "com.apple.InCallService", "com.apple.UserNotificationCenter"]
+let UI_APPS = ["com.apple.FaceTime", "com.apple.notificationcenterui", "com.apple.TelephonyUtilities", "com.apple.InCallService", "com.apple.controlcenter", "com.apple.systemuiserver"]
+var exploreAll = false
 func uiRoots() -> [(String, AXUIElement)] {
     var out: [(String, AXUIElement)] = []
-    for b in UI_APPS { for app in NSRunningApplication.runningApplications(withBundleIdentifier: b) {
+    let apps = exploreAll
+        ? NSWorkspace.shared.runningApplications.filter { ($0.bundleIdentifier ?? "").hasPrefix("com.apple.") }
+        : UI_APPS.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
+    for app in apps { let b = app.bundleIdentifier ?? "?"; do {
         let ax = AXUIElementCreateApplication(app.processIdentifier); AXUIElementSetMessagingTimeout(ax, 2)
         for w in (axAttr(ax, kAXWindowsAttribute) as? [AXUIElement]) ?? [] { out.append((b, w)) }
     } }
@@ -373,10 +377,12 @@ final class Call {
         NSWorkspace.shared.open(URL(string: "facetime-audio://\(to)")!)
         log("dialling FaceTime Audio \(to.prefix(4))…")
         state = "confirm"
+        exploreAll = true // the call UI may live in any Apple UI process (logged at +3 s)
         tick()
         return nil
     }
     var confirmTries = 0
+    var sawCallUI = false, dumped = false
     func tick() {
         if ended { return }
         let t = Date().timeIntervalSince(startedAt)
@@ -388,6 +394,8 @@ final class Call {
                 log("no Call confirmation found; UI:\n\(dumpUI())"); return finish("failed", "could not start the FaceTime call")
             }
         case "ringing":
+            if !dumped && t > 3 { dumped = true; log("UI 3 s after dialling:\n\(dumpUI())") }
+            if findButton(["end", "end call", "leave"]) != nil { sawCallUI = true }
             if callTimerVisible() {
                 state = "live"; answeredAt = Date(); log("answered")
                 let me = processObject(pid: getpid())
@@ -396,7 +404,7 @@ final class Call {
                 send(["event": "answered"])
             } else if t > ringSeconds {
                 log("no answer after \(Int(ringSeconds)) s"); return finish("no-answer", "rang \(Int(ringSeconds)) s")
-            } else if t > 4 && findButton(["end", "end call", "leave", "cancel"]) == nil && !callTimerVisible() {
+            } else if sawCallUI && t > 4 && findButton(["end", "end call", "leave", "cancel"]) == nil && !callTimerVisible() {
                 log("call UI gone while ringing; UI:\n\(dumpUI())"); return finish("no-answer", "declined or unavailable")
             }
         case "live":
@@ -406,7 +414,7 @@ final class Call {
             if t > 330 { return finish("completed", "time cap (Mac)") }
         default: break
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.tick() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self.tick() }
     }
     func finish(_ reason: String, _ detail: String) {
         if ended { return }
@@ -434,7 +442,14 @@ if flags.contains("--check") {
     exit(((r["accessibility"] as? Bool) == true && (r["audioCapture"] as? Bool) == true && (r["blackhole"] as? Bool) == true) ? 0 : 1)
 }
 if flags.contains("--selftest") { exit(selftest()) }
-if flags.contains("--dump") { print(dumpUI()); exit(0) }
+if flags.contains("--dump") { exploreAll = flags.contains("--all"); log("dump:\n" + dumpUI()); exit(0) }
+if flags.contains("--explore"), let to = opts["--to"] {
+    // Debug: dial, then log every Apple app's UI for a few seconds; presses nothing.
+    exploreAll = true
+    NSWorkspace.shared.open(URL(string: "facetime-audio://\(to)")!)
+    for i in 0..<4 { Thread.sleep(forTimeInterval: 1.5); log("explore t+\(Double(i + 1) * 1.5)s:\n" + dumpUI()) }
+    exit(0)
+}
 guard let id = opts["--call"], let key = opts["--key"], let to = opts["--to"], let r = opts["--relay"], let relay = URL(string: r) else {
     log("usage: MiaCall --call <id> --key <k> --to <+27…> --relay <url> | --check | --selftest | --dump"); exit(2)
 }

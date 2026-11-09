@@ -20,5 +20,8 @@ cat > "$APP/Contents/Info.plist" <<PL
 <key>NSAppleEventsUsageDescription</key><string>Mia starts and ends her FaceTime calls.</string>
 </dict></plist>
 PL
-codesign --force --sign - "$APP" >/dev/null
+# Ad-hoc: macOS ties the permissions to this exact build, so a rebuild means
+# granting Accessibility + audio recording again (a local signing identity
+# would need Daniel's keychain password).
+codesign --force --sign - --identifier com.mia.call "$APP" >/dev/null
 echo "$APP"
