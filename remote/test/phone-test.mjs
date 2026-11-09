@@ -106,6 +106,7 @@ await new Promise((r) => mockServer.listen(MOCK_PORT, '127.0.0.1', r));
 
 // ---- relay boot -----------------------------------------------------------------
 const KEYS = {
+  PHONE_VIA: 'twilio',
   TWILIO_ACCOUNT_SID: 'ACtest',
   TWILIO_AUTH_TOKEN: AUTH_TOKEN,
   TWILIO_FROM: '+15005550006',
@@ -230,7 +231,7 @@ try {
   ok(h.ok === true && h.phone && h.phone.configured === false, '/health: phone.configured is false');
   for (const [m, p] of [['GET', '/phone'], ['POST', '/phone/call'], ['POST', '/phone/say'], ['POST', '/phone/twilio/answer'], ['POST', '/phone/openai']]) {
     const r = await api(m, p, m === 'POST' ? { to: DANIEL, message: 'x' } : undefined);
-    ok(r.status === 503 && r.json.configured === false && /not configured/.test(r.json.error) && r.json.missing.includes('TWILIO_ACCOUNT_SID'), `${m} ${p} → 503 not configured`);
+    ok(r.status === 503 && r.json.configured === false && /not configured/.test(r.json.error) && r.json.missing.includes('OPENAI_API_KEY'), `${m} ${p} → 503 not configured`);
   }
   ok((await fetch(`${PUBLIC}/`)).status === 200 || (await fetch(`${PUBLIC}/`)).status === 404, '/ still answers (static panel untouched)');
   // CLI against the dark relay
@@ -472,6 +473,53 @@ try {
   twl.ws.send(JSON.stringify({ event: 'stop' }));
   ok(await waitFor(async () => (await api('GET', '/phone')).json.calls.find((c) => c.id === sc.json.id)?.status === 'completed'), 'Twilio stops the stream → call completed');
   ok(await waitFor(() => rs.ws.readyState === WebSocket.CLOSED), '… and the Realtime session is closed');
+  h2.ws.close();
+  await stop(relay);
+
+  // =================================================================== FaceTime (the Mac streams the call; no Twilio keys)
+  console.log('facetime');
+  relay = boot({ OPENAI_API_KEY: 'sk-test', OPENAI_BASE_URL: `http://127.0.0.1:${MOCK_PORT}` }, 'facetime');
+  await up();
+  h2 = await connectHost();
+  const fh = (await (await fetch(`${PUBLIC}/health`)).json()).phone;
+  ok(fh.configured === true && fh.limits.via === 'facetime' && fh.limits.twilio === false, 'OpenAI key only: configured, FaceTime by default, Twilio off');
+  ok((await twilioHook('answer', 'c_x', { CallSid: 'CA1' })).status === 503, 'Twilio hooks answer 503 while Twilio is off');
+  ok((await api('POST', '/phone/call', { to: DANIEL, message: 'x', via: 'twilio' })).status === 503, 'via twilio without its keys → 503 not configured');
+  const twBefore = mock.twilio.length;
+  const fc = await api('POST', '/phone/call', { to: DANIEL, message: 'FaceTime test call' });
+  ok(fc.status === 200 && fc.json.via === 'facetime' && /^[0-9a-f]{32}$/.test(fc.json.key || '') && fc.json.stream === '/phone/stream', 'POST /phone/call → id + stream key for the Mac');
+  ok(mock.twilio.length === twBefore, 'no Twilio request for a FaceTime call');
+  const ft = { got: [] };
+  ft.ws = new WebSocket(`ws://127.0.0.1:${PORT}/phone/stream`);
+  await new Promise((r) => ft.ws.once('open', r));
+  ft.ws.on('message', (d) => ft.got.push(JSON.parse(d.toString())));
+  const s0 = mock.sockets.length;
+  ft.ws.send(JSON.stringify({ event: 'start', start: { streamSid: 'ft1', customParameters: { call: fc.json.id, key: fc.json.key, format: 'pcm16', wait: '1' } } }));
+  ok(await waitFor(async () => (await api('GET', '/phone')).json.calls.find((c) => c.id === fc.json.id)?.status === 'ringing'), 'stream start (wait) → ringing');
+  await sleep(300);
+  ok(mock.sockets.length === s0, 'no voice session while it rings (nothing billed)');
+  ft.ws.send(JSON.stringify({ event: 'answered' }));
+  ok(await waitFor(() => mock.sockets.length > s0 && mock.sockets.at(-1).got.some((e) => e.type === 'session.update')), 'answered → Realtime session');
+  const fs1 = mock.sockets.at(-1);
+  const fsu = fs1.got.find((e) => e.type === 'session.update');
+  ok(fsu.session.audio.input.format.type === 'audio/pcm' && fsu.session.audio.input.format.rate === 24000 && fsu.session.audio.output.format.rate === 24000, 'FaceTime audio: 24 kHz PCM16 both ways');
+  ok(fsu.session.instructions.includes('FaceTime test call'), '… with the reason for the call');
+  ft.ws.send(JSON.stringify({ event: 'media', media: { payload: 'AAAAAA==' } }));
+  ok(await waitFor(() => fs1.got.some((e) => e.type === 'input_audio_buffer.append' && e.audio === 'AAAAAA==')), 'Mac audio → Realtime');
+  fs1.ws.send(JSON.stringify({ type: 'response.output_audio.delta', delta: 'AQID' }));
+  ok(await waitFor(() => ft.got.some((m) => m.event === 'media' && m.media.payload === 'AQID')), 'Realtime audio → the Mac');
+  fs1.ws.send(JSON.stringify(spoke));
+  fs1.ws.send(JSON.stringify(toolCall('end_call')));
+  ok(await waitFor(() => ft.got.some((m) => m.event === 'hangup'), 6000), 'end_call → the Mac is told to hang up FaceTime');
+  ok(await waitFor(async () => (await api('GET', '/phone')).json.calls.find((c) => c.id === fc.json.id)?.status === 'completed'), 'logged completed');
+  // no answer
+  const fn = await api('POST', '/phone/call', { to: DANIEL, message: 'nobody home' });
+  const ft2 = new WebSocket(`ws://127.0.0.1:${PORT}/phone/stream`);
+  await new Promise((r) => ft2.once('open', r));
+  ft2.send(JSON.stringify({ event: 'start', start: { streamSid: 'ft2', customParameters: { call: fn.json.id, key: fn.json.key, format: 'pcm16', wait: '1' } } }));
+  await sleep(200);
+  ft2.send(JSON.stringify({ event: 'stop', stop: { reason: 'no-answer', detail: 'rang 45 s' } }));
+  ok(await waitFor(async () => (await api('GET', '/phone')).json.calls.find((c) => c.id === fn.json.id)?.status === 'no-answer'), 'the Mac reports no-answer → logged no-answer');
   h2.ws.close();
   await stop(relay);
 

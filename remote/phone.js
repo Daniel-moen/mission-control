@@ -1,5 +1,17 @@
 // Mia phones Daniel: real ringing calls (task 0621).
 //
+// Two ways to ring him, one voice: FaceTime Audio from the Mac (the default
+// since MTN silently drops calls from our US Twilio number) or Twilio. Either
+// way the call's audio is streamed to /phone/stream and the relay runs the
+// OpenAI Realtime session (persona, tools, call-say, guards, log) below.
+//   FaceTime: mia call → POST /phone/call {via:"facetime"} → { id, key } →
+//   MiaCall.app dials FaceTime, opens wss://…/phone/stream, sends
+//   start{call,key,format:"pcm16",wait:"1"} → "ringing"; "answered" → the
+//   voice starts (24 kHz PCM16 both ways); "stop" {reason} ends it; the relay
+//   sends {event:"hangup"} when Mia (or the cap) ends the call.
+//
+// The Twilio path, kept as a fallback (dark unless its three keys are set):
+//
 // The phone side is Twilio Programmable Voice (a US number: no regulatory
 // documents); the voice and the conversation are OpenAI Realtime over SIP.
 // The relay never touches audio:
@@ -197,11 +209,18 @@ function createPhone({
     project: env.OPENAI_PROJECT_ID || '',
     whsec: env.OPENAI_WEBHOOK_SECRET || '',
   };
-  // Required for any call; the two SIP extras switch the bridge from Media
-  // Streams (relay ⇄ OpenAI WebSocket, nothing to set up at OpenAI) to SIP.
-  const NAMES = { sid: 'TWILIO_ACCOUNT_SID', authToken: 'TWILIO_AUTH_TOKEN', from: 'TWILIO_FROM', openaiKey: 'OPENAI_API_KEY' };
+  // The voice needs the OpenAI key (every call). Twilio calls also need the
+  // three Twilio keys; FaceTime calls (task 0621 pivot: the Mac dials FaceTime
+  // Audio and streams the call here) need nothing else. The two SIP extras
+  // switch Twilio calls from Media Streams to OpenAI's SIP connector.
+  const NAMES = { openaiKey: 'OPENAI_API_KEY' };
+  const TWILIO_NAMES = { sid: 'TWILIO_ACCOUNT_SID', authToken: 'TWILIO_AUTH_TOKEN', from: 'TWILIO_FROM' };
   const missing = Object.keys(NAMES).filter((k) => !cfg[k]).map((k) => NAMES[k]);
+  const twilioMissing = Object.keys(TWILIO_NAMES).filter((k) => !cfg[k]).map((k) => TWILIO_NAMES[k]);
   const configured = missing.length === 0;
+  const twilioReady = configured && twilioMissing.length === 0;
+  const defaultVia = String(env.PHONE_VIA || 'facetime').toLowerCase() === 'twilio' ? 'twilio' : 'facetime';
+  const streamSecret = cfg.authToken || crypto.randomBytes(32).toString('hex');
   const wantSip = String(env.PHONE_BRIDGE || '').toLowerCase();
   const mode = wantSip === 'stream' ? 'stream' : cfg.project && cfg.whsec ? 'sip' : 'stream';
   const publicUrl = (env.PHONE_PUBLIC_URL || '').replace(/\/+$/, '');
@@ -217,9 +236,9 @@ function createPhone({
   const quiet = parseQuiet(env.PHONE_QUIET || '23-7');
   const allow = String(env.PHONE_TO_ALLOW || '').split(',').map((s) => s.trim()).filter(Boolean);
   const storePath = dataFile('phone-calls.json', { override: env.PHONE_STORE, env, log, tag: 'phone' });
-  const limits = { bridge: mode, perHour, perDay, maxSeconds, quietHours: quiet ? `${fmtH(quiet.from)}-${fmtH(quiet.to)} ${tz}` : 'off' };
+  const limits = { via: defaultVia, twilio: twilioReady, bridge: mode, perHour, perDay, maxSeconds, quietHours: quiet ? `${fmtH(quiet.from)}-${fmtH(quiet.to)} ${tz}` : 'off' };
 
-  if (configured) log.log(`phone: Twilio ${maskNum(cfg.from)} → OpenAI ${mode === 'sip' ? 'SIP' : 'Media Streams bridge'} (${model}/${voice}) · ${perHour}/h ${perDay}/day · quiet ${limits.quietHours} · log ${storePath}`);
+  if (configured) log.log(`phone: ${defaultVia} by default · Twilio ${twilioReady ? `${maskNum(cfg.from)} → ${mode === 'sip' ? 'SIP' : 'Media Streams'}` : 'off'} · OpenAI (${model}/${voice}) · ${perHour}/h ${perDay}/day · quiet ${limits.quietHours} · log ${storePath}`);
   else log.log(`phone: not configured (missing ${missing.join(', ')}) — /phone/* answers 503`);
 
   function fmtH(h) {
@@ -265,7 +284,7 @@ function createPhone({
   const byOpenai = new Map(); // OpenAI call_id → our id
 
   function publicSummary(c) {
-    return { id: c.id, at: new Date(c.at).toISOString(), urgent: !!c.urgent, status: c.status, seconds: c.seconds || 0, usd: c.usd || 0, why: c.why || undefined };
+    return { id: c.id, at: new Date(c.at).toISOString(), via: c.via || 'twilio', urgent: !!c.urgent, status: c.status, seconds: c.seconds || 0, usd: c.usd || 0, why: c.why || undefined };
   }
   function info() {
     const d0 = now() - 86400e3;
@@ -530,7 +549,7 @@ function createPhone({
 
   // ---- Media Streams bridge: Twilio (μ-law 8 kHz) ⇄ relay ⇄ OpenAI Realtime WS ----
   function streamKey(id) {
-    return crypto.createHmac('sha256', cfg.authToken).update(`stream:${id}`).digest('hex').slice(0, 32);
+    return crypto.createHmac('sha256', streamSecret).update(`stream:${id}`).digest('hex').slice(0, 32);
   }
   const streamWss = WS && WS.Server ? new WS.Server({ noServer: true }) : null;
   function handleUpgrade(req, socket, head) {
@@ -544,6 +563,7 @@ function createPhone({
   function onStream(tw) {
     let c = null;
     let streamSid = '';
+    let pipe = null;
     const toTwilio = (obj) => {
       if (tw.readyState === 1) tw.send(JSON.stringify(obj));
     };
@@ -567,17 +587,29 @@ function createPhone({
         c = cand;
         c.tw = tw;
         streamSid = String(m.start.streamSid || '');
-        c.twilioSid = c.twilioSid || String(m.start.callSid || '');
-        openRealtime(c, {
+        if (c.via !== 'facetime') c.twilioSid = c.twilioSid || String(m.start.callSid || '');
+        // FaceTime streams 24 kHz PCM16 and says when he picks up; Twilio
+        // streams μ-law and only connects once he has.
+        c.format = p.format === 'pcm16' ? 'pcm16' : 'pcmu';
+        pipe = {
           audio: (b64) => toTwilio({ event: 'media', streamSid, media: { payload: b64 } }),
           clear: () => toTwilio({ event: 'clear', streamSid }),
-        });
+        };
+        if (p.wait === '1') setStatus(c, 'ringing');
+        else openRealtime(c, pipe);
         return;
       }
       if (!c) return;
+      if (m.event === 'answered') {
+        if (!c.ws && LIVE.has(c.status)) openRealtime(c, pipe);
+        return;
+      }
       if (m.event === 'media' && m.media?.payload) {
         if (c.ws && c.ws.readyState === 1) c.ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: m.media.payload }));
       } else if (m.event === 'stop') {
+        // FaceTime says how it ended (no-answer, declined, failed, completed).
+        const why = String(m.stop?.reason || '');
+        if (['no-answer', 'busy', 'failed', 'canceled'].includes(why) && LIVE.has(c.status)) setStatus(c, why, clip(m.stop?.detail, 120) || undefined);
         tw.close();
       }
     });
@@ -606,8 +638,9 @@ function createPhone({
     c.pipe = pipe;
     ws.on('open', () => {
       const session = sessionFor(c);
-      session.audio.input.format = { type: 'audio/pcmu' };
-      session.audio.output.format = { type: 'audio/pcmu' };
+      const fmt = c.format === 'pcm16' ? { type: 'audio/pcm', rate: 24000 } : { type: 'audio/pcmu' };
+      session.audio.input.format = fmt;
+      session.audio.output.format = { ...fmt };
       delete session.model; // fixed by the URL
       sendWs(c, { type: 'session.update', session });
       setStatus(c, 'connected');
@@ -646,6 +679,13 @@ function createPhone({
     if (!c || !LIVE.has(c.status)) return false;
     c.why = clip(why, 120);
     let ok = false;
+    // FaceTime: the Mac ends the call when told (and when the stream closes).
+    if (c.tw && c.tw.readyState === 1) {
+      try {
+        c.tw.send(JSON.stringify({ event: 'hangup', reason: c.why }));
+        ok = true;
+      } catch {}
+    }
     try {
       if (c.openaiId) await openai(`${encodeURIComponent(c.openaiId)}/hangup`);
       ok = true;
@@ -704,12 +744,14 @@ function createPhone({
     const to = clip(body.to, 20).replace(/[\s()-]/g, '');
     const message = clip(body.message, 600);
     const urgent = body.urgent === true;
+    const via = body.via === 'twilio' || body.via === 'facetime' ? body.via : defaultVia;
+    if (via === 'twilio' && !twilioReady) return { status: 503, body: { ok: false, configured: false, error: 'Twilio calls are not configured', missing: twilioMissing } };
     if (!numberOk(to)) return { status: 400, body: { ok: false, error: 'Not a number Mia may call' } };
     if (!message) return { status: 400, body: { ok: false, error: 'No message' } };
     if (!hostOnline()) return { status: 503, body: { ok: false, error: 'The Mac is offline (Mia could not act on the call)' } };
     const g = guard({ urgent });
     if (g) return { status: g.status, body: { ok: false, error: g.error, quiet: g.quiet || undefined } };
-    if (!publicUrl) return { status: 503, body: { ok: false, configured: false, error: 'PHONE_PUBLIC_URL is not set' } };
+    if (!publicUrl && via === 'twilio') return { status: 503, body: { ok: false, configured: false, error: 'PHONE_PUBLIC_URL is not set' } };
 
     const c = {
       id: `c_${crypto.randomBytes(5).toString('hex')}`,
@@ -718,6 +760,7 @@ function createPhone({
       message,
       reason: clip(body.reason, 1500) || undefined,
       urgent,
+      via,
       status: 'dialing',
       placed: true,
       seconds: 0,
@@ -729,6 +772,14 @@ function createPhone({
     store.calls.push(c);
     live.set(c.id, c);
     save();
+    // Dialled but never answered / never streamed: give up after 90 s.
+    c.timers.push(setTimeout(() => { if (c.status === 'dialing' || c.status === 'ringing') hangup(c, 'never connected', 'no-answer'); }, 90e3));
+    if (via === 'facetime') {
+      // The Mac (mia call → MiaCall.app) dials FaceTime and opens /phone/stream
+      // with this key; the voice starts when it says "answered".
+      log.log(`phone: call ${c.id} via FaceTime${urgent ? ' (urgent)' : ''} → ${maskNum(to)}`);
+      return { status: 200, body: { ok: true, id: c.id, via, status: c.status, key: streamKey(c.id), stream: '/phone/stream' } };
+    }
     try {
       const data = await twilio('/Calls.json', {
         To: to,
@@ -748,10 +799,8 @@ function createPhone({
       setStatus(c, 'failed', `Twilio: ${e.message}`);
       return { status: 502, body: { ok: false, id: c.id, error: `Could not place the call: ${e.message}` } };
     }
-    // Ringing that never turns into a call (Twilio callbacks lost): give up.
-    c.timers.push(setTimeout(() => { if (c.status === 'dialing' || c.status === 'ringing') hangup(c, 'never connected', 'no-answer'); }, 90e3));
     log.log(`phone: call ${c.id} placed${urgent ? ' (urgent)' : ''} → ${maskNum(to)}`);
-    return { status: 200, body: { ok: true, id: c.id, status: c.status } };
+    return { status: 200, body: { ok: true, id: c.id, via, status: c.status } };
   }
 
   async function onTwilio(route, req, res, url) {
@@ -829,11 +878,12 @@ function createPhone({
       return json(res, 503, { ok: false, configured: false, error: 'Phone calls are not configured', missing });
     }
     if (route === '/phone/twilio/answer' || route === '/phone/twilio/status') {
+      if (!twilioReady) return json(res, 503, { ok: false, configured: false, error: 'Twilio calls are not configured', missing: twilioMissing });
       if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'POST only' });
       return onTwilio(route.endsWith('answer') ? 'answer' : 'status', req, res, url);
     }
     if (route === '/phone/openai') {
-      if (mode !== 'sip') return json(res, 503, { ok: false, configured: false, error: 'SIP bridge is not configured (set OPENAI_PROJECT_ID and OPENAI_WEBHOOK_SECRET)' });
+      if (mode !== 'sip' || !twilioReady) return json(res, 503, { ok: false, configured: false, error: 'SIP bridge is not configured (set OPENAI_PROJECT_ID and OPENAI_WEBHOOK_SECRET)' });
       if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'POST only' });
       return onOpenai(req, res);
     }
