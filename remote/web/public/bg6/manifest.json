@@ -1,0 +1,66 @@
+[
+  {
+    "file": "city-night.webp",
+    "tone": "night",
+    "title": "City lights",
+    "desc": "A skyline after dark: thousands of lit windows, a warm city glow on the haze, light trails on the waterfront and their reflections.",
+    "credit": "Generated for Mission Control (procedural shader, tools/backdrops)",
+    "licence": "original work, no third-party rights"
+  },
+  {
+    "file": "aurora.webp",
+    "tone": "night",
+    "title": "Aurora",
+    "desc": "Green and magenta aurora curtains with fine rays over dark peaks, a star field, and the lights mirrored in a still lake.",
+    "credit": "Generated for Mission Control (procedural shader, tools/backdrops)",
+    "licence": "original work, no third-party rights"
+  },
+  {
+    "file": "dunes-dusk.webp",
+    "tone": "dusk",
+    "title": "Dunes at sunset",
+    "desc": "Sharp-crested sand dunes in low sunset light: orange lit faces, violet shadows, a glowing sun on a rose sky.",
+    "credit": "Generated for Mission Control (procedural shader, tools/backdrops)",
+    "licence": "original work, no third-party rights"
+  },
+  {
+    "file": "peaks-dawn.webp",
+    "tone": "dawn",
+    "title": "Peaks at dawn",
+    "desc": "Layer after layer of mountain ridges in morning haze, a rose-gold sky and the first sun catching the snow.",
+    "credit": "Generated for Mission Control (procedural shader, tools/backdrops)",
+    "licence": "original work, no third-party rights"
+  },
+  {
+    "file": "hills-day.webp",
+    "tone": "day",
+    "title": "Hills in the sun",
+    "desc": "Rolling green and gold hills under a warm hazy sky: field stripes, hedgerows and lone trees.",
+    "credit": "Generated for Mission Control (procedural shader, tools/backdrops)",
+    "licence": "original work, no third-party rights"
+  },
+  {
+    "file": "silk-day.webp",
+    "tone": "day",
+    "title": "Silk",
+    "desc": "An abstract colour field: folds of silk in coral, gold, magenta and violet with crisp highlights along every fold.",
+    "credit": "Generated for Mission Control (procedural shader, tools/backdrops)",
+    "licence": "original work, no third-party rights"
+  },
+  {
+    "file": "prism-dusk.webp",
+    "tone": "dusk",
+    "title": "Prism field",
+    "desc": "An abstract field of warm light split into bands: soft colour clouds crossed by fine refracted lines.",
+    "credit": "Generated for Mission Control (procedural shader, tools/backdrops)",
+    "licence": "original work, no third-party rights"
+  },
+  {
+    "file": "ember-dawn.webp",
+    "tone": "dawn",
+    "title": "Ember field",
+    "desc": "An abstract dawn colour field: peach and rose light flowing over deep plum, with fine contour lines.",
+    "credit": "Generated for Mission Control (procedural shader, tools/backdrops)",
+    "licence": "original work, no third-party rights"
+  }
+]

@@ -21,7 +21,7 @@
 import { useEffect, useRef } from 'react';
 import { LIQUID_GLSL } from './Liquid';
 import { paint, activePane, type Snapshot } from '@/lib/raster';
-import { TINT, energy, lenses, light, lightDir, lumMap, photoMap, scene, sceneTime, setGlActive } from '@/lib/glass';
+import { TINT, tintK, energy, lenses, light, lightDir, lumMap, photoMap, scene, sceneTime, setGlActive } from '@/lib/glass';
 
 const MAX = 12;
 
@@ -34,7 +34,7 @@ precision highp float;
 uniform vec2 uView; uniform float uDpr; uniform int uN;
 uniform vec4 uS[${MAX}]; uniform vec4 uP[${MAX}]; uniform float uQ[${MAX}];
 uniform vec2 uL; uniform float uT; uniform float uE;
-uniform float uPhoto; uniform vec4 uPA; uniform vec4 uTint; uniform sampler2D uImg; uniform vec2 uEdge;
+uniform float uPhoto; uniform vec4 uPA; uniform vec4 uTint; uniform float uTK; uniform sampler2D uImg; uniform vec2 uEdge;
 uniform sampler2D uC; uniform vec4 uCM; uniform float uCW;
 ${LIQUID_GLSL}
 float sdBox(vec2 p, vec2 b, float r){ vec2 q = abs(p) - b + r; return length(max(q, 0.)) + min(max(q.x, q.y), 0.) - r; }
@@ -48,10 +48,11 @@ float field(vec2 p){
   }
   return d;
 }
-vec3 tint(vec3 c, vec2 uv){
-  c = mix(c, vec3(.047, .043, .055), mix(uTint.z, uTint.w, uv.y));
+vec3 tint(vec3 c0, vec2 uv){
+  vec3 c = mix(c0, vec3(.047, .043, .055), mix(uTint.z, uTint.w, uv.y));
   float r = length(vec2((uv.x - .5) / 1.2, uv.y / .8));
-  return mix(c, vec3(.047, .043, .055), mix(uTint.x, uTint.y, clamp(r / .7, 0., 1.)));
+  c = mix(c, vec3(.047, .043, .055), mix(uTint.x, uTint.y, clamp(r / .7, 0., 1.)));
+  return mix(c0, c, uTK); // the .scene-tint layer's opacity (adaptive)
 }
 // the pane content (cards, text) painted at full DPR into a band under the
 // floating controls; uCM = (scroll since paint, band top, band height, on), uCW = band width (CSS px)
@@ -148,9 +149,10 @@ function sceneLum(cx: number, cy: number, W: number, H: number, pa: number[]): n
     const v = Math.min(0.999, Math.max(0, cy * pa[1] + pa[3]));
     base = lumMap.data[Math.floor(v * lumMap.h) * lumMap.w + Math.floor(u * lumMap.w)] * 0.9 + 0.06;
   }
-  const lin = tnt[2] + (tnt[3] - tnt[2]) * (cy / H);
+  const k = tintK();
+  const lin = k * (tnt[2] + (tnt[3] - tnt[2]) * (cy / H));
   const r = Math.hypot((cx / W - 0.5) / 1.2, cy / H / 0.8);
-  const rad = tnt[0] + (tnt[1] - tnt[0]) * Math.min(1, r / 0.7);
+  const rad = k * (tnt[0] + (tnt[1] - tnt[0]) * Math.min(1, r / 0.7));
   return base * (1 - lin) * (1 - rad);
 }
 
@@ -175,7 +177,7 @@ export function GlassLayer() {
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return;
     gl.useProgram(prog);
     const U = (n: string) => gl.getUniformLocation(prog, n);
-    const uView = U('uView'), uDpr = U('uDpr'), uN = U('uN'), uS = U('uS'), uP = U('uP'), uL = U('uL'), uT = U('uT'), uE = U('uE'), uPhoto = U('uPhoto'), uPA = U('uPA'), uTint = U('uTint'), uEdge = U('uEdge'), uQ = U('uQ'), uC = U('uC'), uCM = U('uCM'), uCW = U('uCW');
+    const uView = U('uView'), uDpr = U('uDpr'), uN = U('uN'), uS = U('uS'), uP = U('uP'), uL = U('uL'), uT = U('uT'), uE = U('uE'), uPhoto = U('uPhoto'), uPA = U('uPA'), uTint = U('uTint'), uEdge = U('uEdge'), uTK = U('uTK'), uQ = U('uQ'), uC = U('uC'), uCM = U('uCM'), uCW = U('uCW');
     const buf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
     const loc = gl.getAttribLocation(prog, 'a');
@@ -371,6 +373,7 @@ export function GlassLayer() {
       gl.uniform4f(uPA, pa[0], pa[1], pa[2], pa[3]);
       const tn = scene.mode === 'gradient' ? TINT.gradient : TINT.photo;
       gl.uniform4f(uTint, tn[0], tn[1], tn[2], tn[3]);
+      gl.uniform1f(uTK, tintK());
       const eb = document.querySelector('.edge-bottom');
       const er = eb ? eb.getBoundingClientRect() : null;
       gl.uniform2f(uEdge, er ? er.top : 0, er ? er.height : 0);

@@ -150,7 +150,11 @@ export const lumMap = { w: 0, h: 0, data: null as Float32Array | null };
 // ---- the scene, as the lens layer needs to re-create it ------------------------------
 // Tint over the photo (must match .scene-tint in globals.css):
 //   radial 120% 80% at 50% 0%: alpha A0 → A1 at 70%;  linear top→bottom: B0 → B1
-export const TINT = { photo: [0.03, 0.3, 0.06, 0.38], gradient: [0, 0, 0.26, 0.7] };
+// v6.4: the photo tint is applied with strength TINT.k (0.5 = the v6.3 look),
+// raised for bright backdrops so text stays legible (adaptive tint); TINT.bright
+// (0..1) also darkens the content cards a little (--bright in globals.css).
+export const TINT = { photo: [0.06, 0.6, 0.12, 0.76], gradient: [0, 0, 0.26, 0.7], k: 0.5, bright: 0 };
+export const tintK = () => (scene.mode === 'gradient' ? 1 : TINT.k);
 export const scene = { mode: 'photo' as 'photo' | 'gradient', img: null as HTMLImageElement | null, v: 0 };
 export function setScenePhoto(img: HTMLImageElement | null, mode: 'photo' | 'gradient') {
   scene.img = img;
@@ -169,6 +173,15 @@ export function setScenePhoto(img: HTMLImageElement | null, mode: 'photo' | 'gra
       for (let i = 0; i < out.length; i++) out[i] = (0.2126 * d[i * 4] + 0.7152 * d[i * 4 + 1] + 0.0722 * d[i * 4 + 2]) / 255;
       lumMap.w = lumMap.h = 32;
       lumMap.data = out;
+      // adaptive tint: how bright is the photo where the content sits (lower 4/5)?
+      let sum = 0, cnt = 0;
+      for (let y = 6; y < 32; y++) for (let x2 = 4; x2 < 28; x2++) { sum += out[y * 32 + x2]; cnt++; }
+      const mean = sum / cnt;
+      const bright = Math.max(0, Math.min(1, (mean - 0.2) / 0.35));
+      TINT.bright = bright;
+      TINT.k = 0.5 + 0.34 * bright;
+      document.documentElement.style.setProperty('--tint-k', TINT.k.toFixed(3));
+      document.documentElement.style.setProperty('--bright', bright.toFixed(3));
     } catch {
       /* tainted */
     }

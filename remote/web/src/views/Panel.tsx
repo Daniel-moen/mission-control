@@ -17,6 +17,7 @@ import { Fleet } from './Fleet';
 import { SheetBody } from './Sheets';
 import { Talk } from './Talk';
 import { Liquid } from '@/ui/Liquid';
+import { pickBackdrop } from '@/lib/backdrops';
 
 const LABEL: Record<Tab, string> = { now: 'Now', tasks: 'Tasks', mia: 'Mia', library: 'Library', fleet: 'Fleet' };
 const ICON: Record<Tab, string> = { now: 'now', tasks: 'tasks', mia: 'mia', library: 'library', fleet: 'fleet' };
@@ -30,15 +31,23 @@ function Scene() {
   useEffect(() => {
     const m = localStorage.getItem('mc6_scene') || 'photo';
     setMode(m);
-    const h = new Date().getHours();
-    const n = String((Math.floor(h / 2.4) % 10) + 1).padStart(2, '0');
-    const url = `/bg/${localStorage.getItem('mc6_bg') || n}.jpg`;
-    const img = new Image();
-    img.onload = () => {
-      setPhoto(url);
-      setScenePhoto(m === 'gradient' ? null : img, m === 'gradient' ? 'gradient' : 'photo');
+    const load = (url: string) => {
+      const img = new Image();
+      img.onload = () => {
+        setPhoto(url);
+        setScenePhoto(m === 'gradient' ? null : img, m === 'gradient' ? 'gradient' : 'photo');
+      };
+      img.src = url;
     };
-    img.src = url;
+    // v6.4 backdrops (/v6/bg6, our own renders) by time of day; mc6_bg pins one
+    // ('city-night' etc., or a v1 photo number like '06' → /bg/06.jpg)
+    const pin = localStorage.getItem('mc6_bg');
+    if (pin && /^\d\d$/.test(pin)) load(`/bg/${pin}.jpg`);
+    else
+      fetch('/v6/bg6/manifest.json')
+        .then((r) => r.json())
+        .then((list: { file: string; tone: string }[]) => load(`/v6/bg6/${pickBackdrop(list, new Date(), pin)}`))
+        .catch(() => load('/bg/08.jpg'));
     if (m === 'gradient') setScenePhoto(null, 'gradient');
   }, []);
   // the photo's drift is driven from the scene clock (not CSS) so the glass

@@ -33,6 +33,11 @@ vec3 liquid(vec2 uv, vec2 r, float t, float energy, float photo){
   c += sand * .35 * exp(-d*d*3.2) * (.7 + .3*energy);
   float cf = pow(abs(sin((f*9. + w2.x*6.) - t*.12)), 18.);
   c += vec3(1., .8, .7) * cf * .05;
+  // v6.4: more structure — thin bright caustic veins riding the flow, and a
+  // slow interference ripple, so the glass has edges and lines to bend
+  float vein = 1. - abs(2. * fbm(q * 2.6 + 1.8 * w2 - s * 1.5) - 1.);
+  c += vec3(1., .78, .62) * pow(vein, 12.) * (.26 + .1 * energy);
+  c += vec3(.9, .5, .55) * .04 * sin(f * 40. + t * .2) * smoothstep(.4, .8, f);
   for (int i = 0; i < 3; i++) {
     float sc = 7. + float(i) * 5.;
     vec2 g = q * sc + vec2(0., -t * (.05 + .03*float(i)));
@@ -88,7 +93,7 @@ export function Liquid({ photo = true }: { photo?: boolean }) {
     const uT = gl.getUniformLocation(prog, 't');
     const uE = gl.getUniformLocation(prog, 'energy');
     const uP = gl.getUniformLocation(prog, 'photo');
-    const SCALE = 0.32;
+    const SCALE = 0.4; // v6.4: a bit finer, so the veins stay crisp enough to refract
     const resize = () => {
       cv.width = Math.max(64, Math.round(innerWidth * SCALE));
       cv.height = Math.max(64, Math.round(innerHeight * SCALE));

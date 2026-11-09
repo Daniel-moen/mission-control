@@ -438,12 +438,16 @@ button.glass:active { transform: scale(0.985); }
    ===================================================================== */
 :root { animation: none; }
 .scene-photo { animation: none; transform: scale(1.06); }
+/* v6.4: twice the v6.3 tint at opacity --tint-k (0.5 = v6.3), raised for bright
+   backdrops so text stays legible; must match TINT.photo + tintK() in glass.ts */
 .scene-tint {
   background:
-    radial-gradient(120% 80% at 50% 0%, rgba(12, 11, 14, 0.03), rgba(12, 11, 14, 0.3) 70%),
-    linear-gradient(180deg, rgba(12, 11, 14, 0.06), rgba(12, 11, 14, 0.38));
+    radial-gradient(120% 80% at 50% 0%, rgba(12, 11, 14, 0.06), rgba(12, 11, 14, 0.6) 70%),
+    linear-gradient(180deg, rgba(12, 11, 14, 0.12), rgba(12, 11, 14, 0.76));
+  opacity: var(--tint-k, 0.5);
+  transition: opacity 0.6s ease;
 }
-.scene.gradient .scene-tint { background: linear-gradient(180deg, rgba(12, 11, 14, 0.26), rgba(12, 11, 14, 0.7)); }
+.scene.gradient .scene-tint { background: linear-gradient(180deg, rgba(12, 11, 14, 0.26), rgba(12, 11, 14, 0.7)); opacity: 1; }
 .scene:not(.nogl):not(.gradient) .blob { display: none; }
 html.calm .blob { animation: none; }
 
@@ -451,7 +455,7 @@ html.calm .blob { animation: none; }
 .glass {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.105), rgba(255, 255, 255, 0.055)),
-    rgba(28, 26, 34, 0.2);
+    rgba(28, 26, 34, calc(0.2 + var(--bright, 0) * 0.22));
   -webkit-backdrop-filter: blur(26px) saturate(175%) brightness(1.06);
   backdrop-filter: blur(26px) saturate(175%) brightness(1.06);
   box-shadow:
