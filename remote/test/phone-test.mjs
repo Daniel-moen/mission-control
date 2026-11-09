@@ -76,7 +76,8 @@ const mockServer = http.createServer((req, res) => {
   req.on('end', () => {
     const u = new URL(req.url, 'http://x');
     if (u.pathname.startsWith('/2010-04-01/')) {
-      const rec = { path: u.pathname, auth: req.headers.authorization || '', params: Object.fromEntries(new URLSearchParams(body)) };
+      const sp = new URLSearchParams(body);
+      const rec = { path: u.pathname, auth: req.headers.authorization || '', params: Object.fromEntries(sp), events: sp.getAll('StatusCallbackEvent') };
       mock.twilio.push(rec);
       if (mock.twilioFail) {
         res.writeHead(400, { 'content-type': 'application/json' });
@@ -264,6 +265,7 @@ try {
   ok(tw.auth === `Basic ${Buffer.from(`ACtest:${AUTH_TOKEN}`).toString('base64')}`, 'Twilio: basic auth with SID + auth token');
   ok(tw.params.To === DANIEL && tw.params.From === '+15005550006', 'Twilio: To = Daniel, From = TWILIO_FROM');
   ok(tw.params.Url === `${PUBLIC}/phone/twilio/answer?call=${id}` && tw.params.StatusCallback === `${PUBLIC}/phone/twilio/status?call=${id}`, 'Twilio: answer + status callbacks on the public URL');
+  ok(tw.events.join(',') === 'initiated,ringing,answered,completed', 'Twilio: StatusCallbackEvent sent as repeated parameters (21626 otherwise)');
   ok(tw.params.MachineDetection === 'Enable' && Number(tw.params.TimeLimit) <= 330, 'Twilio: machine detection on, time limit ~5 min');
   ok((await api('POST', '/phone/call', { to: DANIEL, message: 'again' })).status === 409, 'a second call while one is live → 409');
 

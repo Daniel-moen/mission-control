@@ -306,7 +306,11 @@ function createPhone({
         authorization: `Basic ${Buffer.from(`${cfg.sid}:${cfg.authToken}`).toString('base64')}`,
         'content-type': 'application/x-www-form-urlencoded',
       },
-      body: new URLSearchParams(params).toString(),
+      // Arrays become repeated keys (StatusCallbackEvent=initiated&StatusCallbackEvent=ringing…).
+      body: Object.entries(params).reduce((q, [k, v]) => {
+        for (const x of Array.isArray(v) ? v : [v]) q.append(k, x);
+        return q;
+      }, new URLSearchParams()).toString(),
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw Object.assign(new Error(data.message || `Twilio said ${r.status}`), { status: r.status, code: data.code });
@@ -638,7 +642,7 @@ function createPhone({
     c.timers.push(setTimeout(() => hangup(c, 'time limit'), maxSeconds * 1000));
   }
 
-  async function hangup(c, why) {
+  async function hangup(c, why, status = 'completed') {
     if (!c || !LIVE.has(c.status)) return false;
     c.why = clip(why, 120);
     let ok = false;
@@ -654,7 +658,7 @@ function createPhone({
     } catch (e) {
       log.warn(`phone: Twilio hangup ${c.id}:`, e.message);
     }
-    setStatus(c, 'completed', why);
+    setStatus(c, status, why);
     return ok;
   }
 
@@ -733,7 +737,7 @@ function createPhone({
         Method: 'POST',
         StatusCallback: hookUrl('status', c.id),
         StatusCallbackMethod: 'POST',
-        StatusCallbackEvent: 'initiated ringing answered completed',
+        StatusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
         MachineDetection: 'Enable',
         Timeout: '30',
         TimeLimit: String(maxSeconds + 30),
@@ -745,7 +749,7 @@ function createPhone({
       return { status: 502, body: { ok: false, id: c.id, error: `Could not place the call: ${e.message}` } };
     }
     // Ringing that never turns into a call (Twilio callbacks lost): give up.
-    c.timers.push(setTimeout(() => { if (c.status === 'dialing' || c.status === 'ringing') hangup(c, 'never connected'); }, 90e3));
+    c.timers.push(setTimeout(() => { if (c.status === 'dialing' || c.status === 'ringing') hangup(c, 'never connected', 'no-answer'); }, 90e3));
     log.log(`phone: call ${c.id} placed${urgent ? ' (urgent)' : ''} → ${maskNum(to)}`);
     return { status: 200, body: { ok: true, id: c.id, status: c.status } };
   }
