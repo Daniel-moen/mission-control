@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """mia-phone: Mia phones Daniel (task 0621). Called as `mia call …` or directly.
 
-  mia call "<why you are calling>" [--urgent] [--reason "<background>"] [--to +27…]
-                                   ring Daniel; prints the call id (c_…)
+  mia call "<why you are calling>" [--urgent] [--reason "<background>"] [--to +27…] [--twilio]
+                                   ring Daniel (FaceTime Audio from this Mac; --twilio: the
+                                   phone network, if Twilio is set up); prints the call id
   mia call-say <call_id> "<text>" [--hangup]
                                    say this in the live call (your answer to a
                                    "(phone) …" message); --hangup: then say goodbye
   mia call-hangup <call_id>        end the call now
   mia call-status [--json]         configured?, live call, recent calls, limits
 
-The call: Daniel's phone rings (a US number). The voice on the line is you —
+The call: Daniel's iPhone rings with a FaceTime Audio call from Mia's Apple ID
+(MiaCall.app on this Mac dials it; the Mac must be awake). Log per call:
+~/.mission-control/mia/facetime/<id>.log. The voice on the line is you —
 it says the message, listens, and sends what he asks back to you as a chat
 line starting "(phone) … [call c_… — answer in the call with: mia call-say …]".
 Answer with `mia call-say`; it is spoken in the same call. While a call is live
@@ -119,17 +122,38 @@ def fail(status, data):
     die(msg, 3 if status in (409, 429) else 1)
 
 
+MIACALL_APP = os.path.expanduser(os.environ.get("MIA_CALL_APP") or "~/Applications/MiaCall.app")
+
+
+def launch_facetime(call_id, key, to):
+    """Hand the call to MiaCall.app (its own Accessibility/audio permissions): it dials
+    FaceTime Audio and streams the call to the relay."""
+    if not os.path.isdir(MIACALL_APP):
+        die("MiaCall.app is not installed (%s) — run scripts/miacall/build.sh" % MIACALL_APP)
+    url, _ = relay()
+    cmd = ["open", "-n", "-g", MIACALL_APP, "--args", "--call", call_id, "--key", key, "--to", to, "--relay", url]
+    if os.environ.get("MIA_CALL_DRY_RUN") == "1":
+        print("dry run: " + " ".join(cmd[:-8] + ["--call", call_id, "--key", "…", "--to", to, "--relay", url]), file=sys.stderr)
+        return
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        die("could not start MiaCall: %s" % (r.stderr.strip() or r.returncode))
+
+
 def cmd_call(args):
-    pos, o = flags(args, {"--urgent", "--reason=", "--to="})
+    pos, o = flags(args, {"--urgent", "--reason=", "--to=", "--twilio"})
     msg = " ".join(pos).strip()
     if not msg:
         die('usage: mia call "<why you are calling>" [--urgent] [--reason "<background>"] [--to +27…]', 2)
     body = {"to": number(o), "message": msg, "urgent": bool(o.get("--urgent"))}
     if o.get("--reason"):
         body["reason"] = o["--reason"]
+    body["via"] = "twilio" if o.get("--twilio") else "facetime"
     status, data = call_api("POST", "/phone/call", body)
     if status != 200 or not data.get("ok"):
         fail(status, data)
+    if data.get("via") == "facetime":
+        launch_facetime(data["id"], data["key"], body["to"])
     print(data["id"])
     print("ringing Daniel; his words arrive as \"(phone) …\" messages — answer with: mia call-say %s \"…\"" % data["id"], file=sys.stderr)
 
