@@ -91,6 +91,15 @@ const mockServer = http.createServer((req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end('{}');
     }
+    if (u.pathname === '/v1/embeddings') {
+      mock.probes = (mock.probes || 0) + 1;
+      if (mock.noCredits) {
+        res.writeHead(429, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ error: { message: 'You have no credits remaining.', type: 'insufficient_quota', code: 'credit_balance_exhausted' } }));
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end('{"data":[]}');
+    }
     res.writeHead(404);
     res.end();
   });
@@ -520,6 +529,42 @@ try {
   await sleep(200);
   ft2.send(JSON.stringify({ event: 'stop', stop: { reason: 'no-answer', detail: 'rang 45 s' } }));
   ok(await waitFor(async () => (await api('GET', '/phone')).json.calls.find((c) => c.id === fn.json.id)?.status === 'no-answer'), 'the Mac reports no-answer → logged no-answer');
+  // task 0629: the OpenAI org has no credits → the Realtime socket errors right after the answer
+  const fq = await api('POST', '/phone/call', { to: DANIEL, message: 'quota call' });
+  ok(fq.status === 200, 'voice probe passes → call placed');
+  const ft3 = { got: [] };
+  ft3.ws = new WebSocket(`ws://127.0.0.1:${PORT}/phone/stream`);
+  await new Promise((r) => ft3.ws.once('open', r));
+  ft3.ws.on('message', (d) => ft3.got.push(JSON.parse(d.toString())));
+  const s3 = mock.sockets.length;
+  ft3.ws.send(JSON.stringify({ event: 'start', start: { streamSid: 'ft3', customParameters: { call: fq.json.id, key: fq.json.key, format: 'pcm16', wait: '1' } } }));
+  await sleep(200);
+  const nq = h2.frames.length;
+  ft3.ws.send(JSON.stringify({ event: 'answered' }));
+  ok(await waitFor(() => mock.sockets.length > s3 && mock.sockets.at(-1).got.some((e) => e.type === 'session.update')), 'answered → Realtime session');
+  mock.sockets.at(-1).ws.send(JSON.stringify({ type: 'error', error: { type: 'insufficient_quota', code: 'insufficient_quota', message: 'You have no credits remaining. Add credits to continue using the API' } }));
+  ok(await waitFor(() => ft3.got.some((m) => m.event === 'hangup' && /credits/.test(m.reason))), 'quota error → the Mac is told to hang up (voice out of credits)');
+  const fql = await waitFor(async () => { const c = (await api('GET', '/phone')).json.calls.find((x) => x.id === fq.json.id); return c?.status === 'failed' && /credits/.test(c.why); });
+  ok(fql, 'logged failed (voice provider out of credits)');
+  ok(await waitFor(() => h2.frames.slice(nq).some((f) => f.type === 'miaSend' && /could not talk.*no credits/.test(f.text))), 'Mia is told the voice has no credits');
+  const fq2 = await api('POST', '/phone/call', { to: DANIEL, message: 'again' });
+  ok(fq2.status === 503 && fq2.json.voice === false && /credits/.test(fq2.json.error), 'next call refused before dialling (voice out of credits)');
+  ok((await (await fetch(`${PUBLIC}/health`)).json()).phone.voice?.ok === false, '/health shows voice ok:false');
+  h2.ws.close();
+  await stop(relay);
+
+  // =================================================================== voice probe (task 0629)
+  console.log('voice probe');
+  mock.noCredits = true;
+  const p0 = mock.probes || 0;
+  relay = boot({ OPENAI_API_KEY: 'sk-test', OPENAI_BASE_URL: `http://127.0.0.1:${MOCK_PORT}` }, 'probe');
+  await up();
+  h2 = await connectHost();
+  const pr = await api('POST', '/phone/call', { to: DANIEL, message: 'probe' });
+  ok(pr.status === 503 && pr.json.voice === false && /credit_balance_exhausted/.test(pr.json.error), 'no credits → POST /phone/call 503 before dialling');
+  ok((mock.probes || 0) > p0, 'probed with a near-free embedding');
+  ok(!(await api('GET', '/phone')).json.calls.some((c) => c.message === 'probe'), 'no call logged (nothing rang)');
+  mock.noCredits = false;
   h2.ws.close();
   await stop(relay);
 
