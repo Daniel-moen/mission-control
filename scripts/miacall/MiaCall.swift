@@ -495,7 +495,7 @@ final class Call {
     var lastPressAt = Date.distantPast, sawConfirm = false
     var lastSig = "", confirmPresses = 0, broughtForward = false, sentReturn = false
     var sawCallUI = false, sawRingingText = false, noUITicks = 0, quietUITicks = 0, timerSeen: String?
-    var mediaIn = 0, mediaBytes = 0, firstMediaAt: Date?, fallbackSpoken = false, lastStats = Date()
+    var mediaIn = 0, mediaBytes = 0, firstMediaAt: Date?, fallbackSpoken = false, lastStats = Date(), speechUntil = Date.distantPast
     init(id: String, key: String, to: String, relay: URL?, rehearsal: Bool) {
         self.id = id; self.key = key; self.to = to; self.relay = relay; self.rehearsal = rehearsal
         ringSeconds = Double(opts["--ring-seconds"] ?? "") ?? 60
@@ -518,8 +518,8 @@ final class Call {
                     guard self.wsOpen else { return }
                     self.wsOpen = false
                     log("ws closed: \(e.localizedDescription) (state \(self.state))")
-                    if self.state == "live" { self.speakFallback("Sorry Daniel, I lost my connection. I'll message you instead."); self.finish("completed", "relay closed", after: 5) }
-                    else { self.finish("completed", "relay closed") }
+                    if self.state == "live" && !self.ended && !self.fallbackSpoken { self.speakFallback("Sorry Daniel, I lost my connection. I'll message you instead.") }
+                    self.finish("completed", "relay closed", after: self.state == "live" ? 0.8 : 0)
                 }
             case .success(let m):
                 if case .string(let s) = m, let d = s.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
@@ -540,8 +540,15 @@ final class Call {
                             if self.state == "live" && why == "never connected" {
                                 // The relay's dial timer raced the answer: say so rather than going silent.
                                 self.speakFallback("Hi Daniel, it's Mia. My voice line timed out just as you answered. I'll message you instead.")
-                                self.finish("completed", "relay gave up as he answered", after: 6)
-                            } else { self.finish("completed", why, after: 0.8) }
+                                self.finish("completed", "relay gave up as he answered", after: 0.8)
+                            } else {
+                                // The relay ended a live call before Mia's voice ever arrived (0629: voice
+                                // provider out of credits): say so before hanging up, never a silent drop.
+                                if self.state == "live" && self.mediaIn == 0 && !self.fallbackSpoken {
+                                    self.speakFallback("Sorry Daniel, my voice line isn't working right now. I'll message you instead.")
+                                }
+                                self.finish("completed", why, after: 0.8)
+                            }
                         }
                     default: break
                     }
@@ -667,14 +674,27 @@ final class Call {
     }
     func speakFallback(_ text: String) {
         fallbackSpoken = true
-        if let d = sayPCM16(text) { player.play(pcm16: d); log("local voice → BlackHole: \"\(text)\" (\(String(format: "%.1f", Double(d.count) / 48000)) s)") }
-        else { log("local voice failed (say)") }
+        if let d = sayPCM16(text) {
+            player.play(pcm16: d)
+            // Queued after anything already playing; finish() waits for it (+1 s).
+            speechUntil = max(speechUntil, Date()).addingTimeInterval(Double(d.count) / 48000)
+            log("local voice → BlackHole: \"\(text)\" (\(String(format: "%.1f", Double(d.count) / 48000)) s)")
+        } else { log("local voice failed (say)") }
     }
     func finish(_ reason: String, _ detail: String, after: Double = 0) {
         if ended { return }
         ended = true
         log("ending: \(reason) (\(detail))\(after > 0 ? " in \(after) s" : "")")
-        axq.asyncAfter(deadline: .now() + after) {
+        let t0 = Date()
+        func whenQuiet(_ body: @escaping () -> Void) {
+            // Never press End over Mia's local line: wait for it to finish, plus 1 s (max 15 s).
+            let left = speechUntil.addingTimeInterval(1).timeIntervalSinceNow
+            if left > 0 && Date().timeIntervalSince(t0) < 15 {
+                axq.asyncAfter(deadline: .now() + min(left, 15)) { whenQuiet(body) }
+            } else { body() }
+        }
+        axq.asyncAfter(deadline: .now() + after) { whenQuiet {
+            if self.speechUntil > t0 { log("local voice done; pressing End") }
             if let e = endButtons(snapshot()).first { _ = axPress(e, "End") }
             else if let c = cancelButtons(snapshot()).first { _ = axPress(c, "Cancel") }
             self.send(["event": "stop", "stop": ["reason": reason, "detail": detail]])
@@ -687,7 +707,7 @@ final class Call {
                 writeResult(["id": self.id, "reason": reason, "detail": detail, "seconds": self.answeredAt.map { Int(Date().timeIntervalSince($0)) } ?? 0, "state": self.state])
                 exit(reason == "failed" ? 1 : 0)
             }
-        }
+        } }
     }
 }
 
