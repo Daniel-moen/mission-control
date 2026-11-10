@@ -721,7 +721,7 @@ final class Call {
     var lastPressAt = Date.distantPast, sawConfirm = false
     var lastSig = "", confirmPresses = 0, broughtForward = false, sentReturn = false
     var sawCallUI = false, sawRingingText = false, noUITicks = 0, quietUITicks = 0, timerSeen: String?
-    var mediaIn = 0, mediaBytes = 0, firstMediaAt: Date?, fallbackSpoken = false, lastStats = Date(), speechUntil = Date.distantPast, gatedChunks = 0
+    var mediaIn = 0, mediaBytes = 0, firstMediaAt: Date?, fallbackSpoken = false, lastStats = Date(), speechUntil = Date.distantPast, gatedChunks = 0, bargeIns = 0
     init(id: String, key: String, to: String, relay: URL?, rehearsal: Bool) {
         self.id = id; self.key = key; self.to = to; self.relay = relay; self.rehearsal = rehearsal
         ringSeconds = Double(opts["--ring-seconds"] ?? "") ?? 60
@@ -895,7 +895,7 @@ final class Call {
                 // 0632/0633: the capture aggregate is clocked by the default output, so Core Audio lists
                 // the speakers under MiaCall while it runs; that is the tap's clock, not Mia's voice.
                 let clock = objString(defaultDevice(input: false), kAudioObjectPropertyName)
-                log(String(format: "live %d s: timer %@, relay audio %d chunks / %.1f s, call audio rms %.4f, gated %.1f s, Mia's voice → %@ (tap clock: %@)", Int(inState), timer ?? "-", mediaIn, Double(mediaBytes) / 48000, cap.rms, Double(gatedChunks) * 0.04, outs.filter { $0 != clock }.description, clock))
+                log(String(format: "live %d s: timer %@, relay audio %d chunks / %.1f s, call audio rms %.4f, gated %.1f s, barge-ins %d, Mia's voice → %@ (tap clock: %@)", Int(inState), timer ?? "-", mediaIn, Double(mediaBytes) / 48000, cap.rms, Double(gatedChunks) * 0.04, bargeIns, outs.filter { $0 != clock }.description, clock))
                 if outs.contains(where: { $0 != voiceName && !$0.lowercased().contains("blackhole") && $0 != clock }) { log("WARNING: Mia's audio is reaching \(outs), not only \(voiceName)") }
             }
             if rehearsal && inState > 10 { return finish("completed", "rehearsal done") }
@@ -907,18 +907,30 @@ final class Call {
     func connected(_ why: String) {
         go("live", why); answeredAt = Date(); log("answered (\(why))")
         let me = processObject(pid: getpid())
-        // 0633 half-duplex safety net: while Mia speaks (+400 ms) Daniel's side goes up as
-        // silence, so nothing she says can come back as his words (echo from his speakerphone).
-        // He can't talk over her then; MIA_CALL_DUPLEX=full turns the gate off.
-        let gate = ProcessInfo.processInfo.environment["MIA_CALL_DUPLEX"] != "full"
-        log("half-duplex gate: \(gate ? "on (Daniel's audio is muted while Mia speaks + 400 ms)" : "off (MIA_CALL_DUPLEX=full)")")
-        let silence40 = Data(count: 960 * 2)
+        // 0633 half-duplex safety net with barge-in: while Mia speaks (+400 ms), Daniel's side goes
+        // up as silence, so any echo of her voice from his speakerphone can't come back as his words,
+        // UNLESS it is clearly louder than that echo (he is talking over her): then it passes
+        // (opens after 2 loud 40 ms chunks, stays open 800 ms) and the relay stops her.
+        // MIA_CALL_DUPLEX=full: no gate. MIA_CALL_DUPLEX=half: strict, no barge-in.
+        let mode = ProcessInfo.processInfo.environment["MIA_CALL_DUPLEX"] ?? "barge"
+        log("echo gate: \(mode == "full" ? "off" : mode == "half" ? "strict half-duplex" : "half-duplex with barge-in (loud speech passes)")")
+        var floor: Float = 0.002, loud = 0, openUntil = Date.distantPast
         cap.onPCM = { [weak self] d in
             guard let self = self else { return }
-            if gate && self.player.speaking(tail: 0.4) {
-                self.gatedChunks += 1
-                self.send(["event": "media", "media": ["payload": (d.count == silence40.count ? silence40 : Data(count: d.count)).base64EncodedString()]])
-            } else { self.send(["event": "media", "media": ["payload": d.base64EncodedString()]]) }
+            var pass = true
+            if mode != "full" && self.player.speaking(tail: 0.4) {
+                var e: Float = 0; let n = d.count / 2
+                d.withUnsafeBytes { raw in let p = raw.bindMemory(to: Int16.self); for i in 0..<n { let v = Float(p[i]) / 32768; e += v * v } }
+                let r = n > 0 ? sqrt(e / Float(n)) : 0
+                if mode == "half" { pass = false }
+                else if Date() < openUntil { pass = true; if r > max(0.008, floor * 3) { openUntil = Date().addingTimeInterval(0.8) } }
+                else if r > max(0.008, floor * 3) {
+                    loud += 1
+                    if loud >= 2 { openUntil = Date().addingTimeInterval(0.8); pass = true; self.bargeIns += 1; log(String(format: "barge-in: rms %.4f over echo floor %.4f", r, floor)) } else { pass = false }
+                } else { loud = 0; floor = floor * 0.95 + min(r, 0.05) * 0.05; pass = false }
+            } else { loud = 0 }
+            if pass { self.send(["event": "media", "media": ["payload": d.base64EncodedString()]]) }
+            else { self.gatedChunks += 1; self.send(["event": "media", "media": ["payload": Data(count: d.count).base64EncodedString()]]) }
         }
         // Daniel's side = FaceTime's call output (process tap), never a microphone.
         let callers = ProcessInfo.processInfo.environment["MIA_CALL_TAP"] == "global" ? [] : callAudioClients()

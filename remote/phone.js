@@ -85,22 +85,28 @@ const TOKEN_KEYS = ['audioIn', 'audioInCached', 'audioOut', 'textIn', 'textInCac
 const emptyTokens = () => Object.fromEntries(TOKEN_KEYS.map((k) => [k, 0]));
 const LIVE = new Set(['dialing', 'ringing', 'answered', 'connected']);
 
-const PERSONA = `You are Mia, Daniel's personal assistant. You are on a real phone call with him: you rang his mobile. You have his files, email, calendar, the web and a team of coding agents at your disposal through your tools. To Daniel you are one single assistant: you are the one who does the work.
+const PERSONA = `You are Mia, Daniel's personal assistant, on a live phone call with him. You rang him. You have his files, email, calendar, the web and a team of coding agents through your tools. To Daniel you are one assistant, and you do the work yourself.
 
-Personality: like Jarvis. Calm, dry, straight to the point. One or two short sentences at a time. No filler and no pleasantries ("Great question", "Sure thing!", "Absolutely", "Happy to help"). Never read a list aloud: give the key point and offer more. No markdown; never read out ids, links or file paths. It is a phone line: speak clearly, a touch slower than usual.
+Voice: like Jarvis to Tony Stark. Calm, dry, quietly confident, a little wry. Natural spoken English with contractions, at an easy conversational pace. Answer first, in one short sentence; add a second only if it is really needed. Then stop and let him talk.
 
-Never reveal how you work inside. Never say you will "pass it on", "ask Mia", "hand it off", "check with the team", or mention another agent, a back end, a system, a tool or a model. Never refer to Mia in the third person. Never mention OpenAI.
+Never:
+- filler or acknowledgement loops: no "Got it", "Sure", "Absolutely", "Okay so", "Great question", "Happy to help", and no "I'm on it, I'll do that next, I'll get back to you" chains;
+- repeating yourself, or repeating his request back to him;
+- talking over him: if he starts speaking, stop at once and listen;
+- filling silence: a quiet line is fine, wait for him or for a result;
+- asking "anything else?" after every answer;
+- reading lists, ids, links, file paths or markdown aloud;
+- revealing how you work inside: never say you'll "pass it on", "ask Mia", "check with the team", or mention an agent, a back end, a system, a tool, a model or OpenAI. Never refer to Mia in the third person.
 
-How you work: you do not answer from memory. For every job, decision, question about facts or Daniel's own data, call send_to_mia with his complete request or decision in his own words, first person. send_to_mia carries only what DANIEL asked for: never your own greeting, the reason for the call, a check like "can you hear me", or his small talk ("yes", "I can hear you", "hello"). Then say a short first-person line ("On it, one moment.", "Checking now."). Never state a result before it arrives. While you wait, stay quiet or say at most a word or two if he speaks; it is fine for the line to be silent for a while.
+Work: you do not answer from memory. For a job, a decision, or a question about facts, the web or his data, call send_to_mia with his complete request in his words, first person. It carries only what DANIEL asked for: never your own lines, the reason for the call, "can you hear me", or his small talk ("yes", "hello", "I can hear you"). Acknowledge with at most two or three words ("On it." / "Checking.") once, and only if you haven't already said something this turn. Then stay silent. Never invent or predict a result.
 
-Results: a system message starting with "Result:" is the outcome of work you started or news for Daniel. Say it right away as your own finding, answer first, one or two sentences, facts exact.
+Results: a system message starting with "Result:" is the outcome of your work or news for Daniel. Say it straight away as your own finding: the answer itself, exact facts, one or two sentences, no preamble.
 
-Status: when he asks what you are working on, call get_status and summarise in a sentence or two.
-Questions: when he picks an option for one of your open questions, call answer_question with its id and his choice, then confirm in a few words.
-Showing things: when he wants to see something, or the reason for the call points at a document or page, call show_on_panel with the document name or https link; say "It's on your screen."
-Ending: when he says goodbye or that he is done, or a system message says time is up, say a very short goodbye and call end_call.
-
-If he interrupts you, stop and listen. If you did not catch something, say so in a few words.`;
+Status: when he asks what you are working on, call get_status and give the gist in a sentence.
+Questions: when he picks an option for one of your open questions, call answer_question with its id and his choice, then confirm in two or three words.
+Showing things: when he wants to see something, or the reason for the call points at a document or page, call show_on_panel with the document name or https link and say "It's on your screen."
+Ending: when he says goodbye or that he's done, or a system message says time is up, say a brief goodbye ("Talk soon.") and call end_call.
+If you didn't catch something, say "Sorry, say again?"`;
 
 const TOOLS = [
   {
@@ -241,7 +247,11 @@ function createPhone({
   const twilioBase = (env.TWILIO_API_BASE || 'https://api.twilio.com').replace(/\/+$/, '');
   const openaiBase = (env.OPENAI_BASE_URL || 'https://api.openai.com').replace(/\/+$/, '');
   const sipHost = env.OPENAI_SIP_HOST || 'sip.api.openai.com';
-  const model = env.PHONE_MODEL || 'gpt-realtime-2.1-mini';
+  // 0633: the full model by default (more natural, follows "no filler" far better than
+  // mini; ~$0.12/min vs ~$0.04). PHONE_MODEL=gpt-realtime-2.1-mini to save.
+  const model = env.PHONE_MODEL || 'gpt-realtime-2.1';
+  const reasoning = env.PHONE_REASONING || 'low';
+  const turnEagerness = env.PHONE_EAGERNESS || 'low';
   const voice = env.PHONE_VOICE || env.REALTIME_VOICE || 'marin';
   const maxSeconds = Math.max(5, Number(env.PHONE_MAX_SECONDS) || 300);
   const perHour = Number(env.PHONE_PER_HOUR) || 5;
@@ -291,7 +301,7 @@ function createPhone({
     saveTimer.unref?.();
   }
   function persistable(c) {
-    const { ws, tw, pipe, timers, inbox, responding, said, lastSent, ...rest } = c;
+    const { ws, tw, pipe, timers, inbox, responding, said, lastSent, playing, ...rest } = c;
     return rest;
   }
   // ---- is the voice usable? (task 0629: the OpenAI org ran out of credits;
@@ -418,19 +428,24 @@ function createPhone({
     const why = [`Why you are calling: ${c.message}`];
     if (c.reason) why.push(`Background (do not read it out, use it to answer): ${c.reason}`);
     if (c.urgent) why.push('It is urgent.');
-    why.push('Open the call yourself: greet Daniel in a few words ("Hi Daniel, it\'s Mia.") and give the reason straight away, then listen.');
+    why.push('Open the call yourself in one breath: "Hi Daniel, it\'s Mia." and the reason in one sentence. Then stop and listen; do not ask whether he can hear you.');
     return {
       type: 'realtime',
       model,
       instructions: `${PERSONA}\n\n${why.join('\n')}`,
       output_modalities: ['audio'],
       audio: {
-        input: { noise_reduction: { type: 'far_field' }, turn_detection: { type: 'semantic_vad', eagerness: 'medium', create_response: true, interrupt_response: true } },
+        // Low eagerness: semantic VAD waits for him to finish the thought instead of jumping
+        // in on a pause (0633: she cut him off on medium). He can still talk over her.
+        // near_field: FaceTime/phone audio is a close, already-cleaned voice.
+        input: { noise_reduction: { type: 'near_field' }, turn_detection: { type: 'semantic_vad', eagerness: turnEagerness, create_response: true, interrupt_response: true } },
         output: { voice },
       },
       tools: TOOLS,
       tool_choice: 'auto',
-      max_output_tokens: 600,
+      max_output_tokens: 400, // ~20 s of speech: a Jarvis line, never a monologue
+      truncation: { type: 'retention_ratio', retention_ratio: 0.5, token_limits: { post_instructions: 4000 } },
+      ...(/realtime-2/.test(model) ? { reasoning: { effort: reasoning } } : {}),
     };
   }
 
@@ -512,21 +527,21 @@ function createPhone({
         if (!c.heard) {
           c.dropped = (c.dropped || 0) + 1;
           log.log(`phone: call ${c.id} send_to_mia dropped (Daniel has not spoken yet): ${clip(text, 120)}`);
-          return { ok: false, error: 'Daniel has not said anything yet. send_to_mia is only for a request he made. Do not send your own lines; just talk to him.' };
+          return { ok: false, quiet: true, error: 'Daniel has not said anything yet. send_to_mia is only for a request he made. Do not send your own lines.' };
         }
         if (echoes(text, recent)) {
           c.dropped = (c.dropped || 0) + 1;
           log.log(`phone: call ${c.id} send_to_mia dropped (Mia's own words): ${clip(text, 120)}`);
-          return { ok: false, error: 'That is what YOU just said, not a request from Daniel. Never send your own words. Listen to him.' };
+          return { ok: false, quiet: true, error: 'That is what YOU just said, not a request from Daniel. Never send your own words. Listen to him.' };
         }
         if (c.lastSent && c.lastSent.text === text.toLowerCase() && Date.now() - c.lastSent.at < 120e3) {
-          return { ok: true, status: 'Already started; no need to send it again.' };
+          return { ok: true, quiet: true, status: 'Already started; say nothing about it.' };
         }
         c.lastSent = { text: text.toLowerCase(), at: Date.now() };
         const sent = sendToHost({ type: 'miaSend', text: `${PHONE_TAG}${text}  [call ${c.id} — answer in the call with: mia call-say ${c.id} "…"]` });
         if (sent === false) return { ok: false, error: 'Daniel\'s Mac is not reachable right now.' };
         c.asked = (c.asked || 0) + 1;
-        return { ok: true, status: 'Started. The outcome arrives as a "Result:" message. Tell Daniel briefly, first person, that you are on it.' };
+        return { ok: true, status: 'Started. The outcome arrives later as a "Result:" message. If you have not spoken this turn, say two or three words at most ("On it."); otherwise say nothing.' };
       }
       case 'get_status':
         return toolStatus();
@@ -587,18 +602,25 @@ function createPhone({
         }
         const calls = (ev.response?.output || []).filter((o) => o.type === 'function_call');
         if (calls.length) {
+          // 0633: a forced response after every tool output made her stack fillers
+          // ("Got it." + "I'm on it, I'll do that next."). Speak again only when there is
+          // something to say: get_status / a real failure, or she said nothing yet.
+          const spoke = (ev.response?.output || []).some((o) => o.type === 'message');
+          let reply = false;
           for (const fc of calls) {
             let args = {};
             try {
               args = JSON.parse(fc.arguments || '{}');
             } catch {}
             const out = runTool(c, fc.name, args);
-            sendWs(c, { type: 'conversation.item.create', item: { type: 'function_call_output', call_id: fc.call_id, output: JSON.stringify(out) } });
+            const { quiet, ...shown } = out || {};
+            sendWs(c, { type: 'conversation.item.create', item: { type: 'function_call_output', call_id: fc.call_id, output: JSON.stringify(shown) } });
+            if (fc.name === 'get_status' || (out && out.ok === false && !quiet) || (!spoke && !quiet && fc.name !== 'end_call')) reply = true;
           }
-          if (!c.ending) {
+          if (!c.ending && reply) {
             c.responding = true;
             sendWs(c, { type: 'response.create' });
-          }
+          } else speakNext(c);
           return;
         }
         speakNext(c);
@@ -757,8 +779,23 @@ function createPhone({
       } catch {
         return;
       }
-      if (ev.type === 'response.output_audio.delta' && ev.delta) return pipe.audio(ev.delta);
-      if (ev.type === 'input_audio_buffer.speech_started') pipe.clear(); // he talks over her: stop her audio
+      if (ev.type === 'response.output_audio.delta' && ev.delta) {
+        // What she has sent for this item, so a barge-in can cut her transcript where he stopped hearing.
+        if (!c.playing || c.playing.item !== ev.item_id) c.playing = { item: ev.item_id, at: Date.now(), ms: 0 };
+        c.playing.ms += (Buffer.byteLength(ev.delta, 'base64') / (c.format === 'pcm16' ? 48 : 8));
+        return pipe.audio(ev.delta);
+      }
+      if (ev.type === 'input_audio_buffer.speech_started') {
+        // He talks over her: stop her audio now and tell the model how much he actually heard,
+        // so it doesn't carry on (or repeat) as if he'd heard the rest.
+        pipe.clear();
+        const p = c.playing;
+        if (p && p.item) {
+          const heard = Math.max(0, Math.round(Math.min(p.ms, Date.now() - p.at - 150)));
+          if (heard < p.ms - 200) sendWs(c, { type: 'conversation.item.truncate', item_id: p.item, content_index: 0, audio_end_ms: heard });
+        }
+        c.playing = null;
+      }
       onSideband(c, ev);
     });
     ws.on('error', (e) => log.warn(`phone: realtime ${c.id}:`, e.message));
