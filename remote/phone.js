@@ -280,6 +280,52 @@ function createPhone({
     const { ws, tw, pipe, timers, inbox, responding, ...rest } = c;
     return rest;
   }
+  // ---- is the voice usable? (task 0629: the OpenAI org ran out of credits;
+  // the Realtime socket still opens, then errors insufficient_quota and closes
+  // ~3 s after Daniel answers.) Probe with a near-free embedding before
+  // dialling: never ring him for a call that cannot talk. OK is cached 10 min,
+  // a billing failure 5 min (and set straight away by a live quota error).
+  const probeEnabled = String(env.PHONE_VOICE_PROBE || 'on').toLowerCase() !== 'off';
+  let voiceState = { ok: true, at: 0, error: '' };
+  const BILLING = /insufficient_quota|credit_balance_exhausted|billing_hard_limit|no credits remaining|exceeded your current quota/i;
+  function voiceDown(message) {
+    voiceState = { ok: false, at: now(), error: clip(message, 200) || 'out of credits' };
+    log.warn(`phone: voice unavailable — ${voiceState.error}`);
+  }
+  async function voiceCheck() {
+    if (!probeEnabled) return voiceState.ok || now() - voiceState.at > 300e3 ? { ok: true } : voiceState;
+    const age = now() - voiceState.at;
+    if (voiceState.at && (voiceState.ok ? age < 600e3 : age < 300e3)) return voiceState;
+    try {
+      const r = await fetchImpl(`${openaiBase}/v1/embeddings`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${cfg.openaiKey}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'text-embedding-3-small', input: 'ok' }),
+        signal: AbortSignal.timeout?.(6000),
+      });
+      if (r.ok) {
+        voiceState = { ok: true, at: now(), error: '' };
+        return voiceState;
+      }
+      const t = await r.text().catch(() => '');
+      let msg = '';
+      try {
+        const j = JSON.parse(t);
+        msg = [j.error?.code, j.error?.type, j.error?.message].filter(Boolean).join(': ');
+      } catch {
+        msg = t;
+      }
+      if (r.status === 401 || r.status === 403 || BILLING.test(msg)) {
+        voiceDown(`OpenAI ${r.status}: ${msg}`);
+        return voiceState;
+      }
+      return { ok: true }; // rate limit / 5xx: don't block the call on a hiccup
+    } catch (e) {
+      log.warn('phone: voice probe failed (calling anyway):', e.message);
+      return { ok: true };
+    }
+  }
+
   const live = new Map(); // id → call record (same object as in store.calls)
   const byOpenai = new Map(); // OpenAI call_id → our id
 
@@ -292,6 +338,7 @@ function createPhone({
     return {
       configured,
       ...(configured ? {} : { missing }),
+      voice: voiceState.at ? { ok: voiceState.ok, checked: new Date(voiceState.at).toISOString(), error: voiceState.error || undefined } : { ok: null },
       live: [...live.values()].map((c) => c.id),
       last24h: { calls: recent.filter((c) => c.placed).length, minutes: round(recent.reduce((a, c) => a + (c.seconds || 0), 0) / 60, 100), usd: round(recent.reduce((a, c) => a + (c.usd || 0), 0)) },
       limits,
@@ -400,7 +447,7 @@ function createPhone({
     if (c.openaiId) byOpenai.delete(c.openaiId);
     log.log(`phone: call ${c.id} ${c.status}${c.why ? ` (${c.why})` : ''} · ${c.seconds || 0}s · $${(c.usd || 0).toFixed(4)}`);
     // Mia hears how it went (not for the ones she hung up herself mid-flow).
-    const said = { completed: 'ended', 'no-answer': 'was not answered', busy: 'was busy', failed: 'failed', canceled: 'was cancelled', voicemail: 'went to voicemail, so I hung up', lost: 'was cut off (relay restart)' }[c.status] || c.status;
+    const said = c.voiceError ? `could not talk: the voice provider (OpenAI) has no credits left, so Daniel heard only the fallback line. Message him instead; OpenAI billing needs topping up (${c.voiceError})` : { completed: 'ended', 'no-answer': 'was not answered', busy: 'was busy', failed: 'failed', canceled: 'was cancelled', voicemail: 'went to voicemail, so I hung up', lost: 'was cut off (relay restart)' }[c.status] || c.status;
     sendToHost({ type: 'miaSend', text: `${PHONE_TAG}[call ${c.id} ${said}${c.seconds ? ` after ${c.seconds}s` : ''}]` });
   }
 
@@ -509,9 +556,16 @@ function createPhone({
         speakNext(c);
         break;
       }
-      case 'error':
-        log.warn(`phone: call ${c.id} realtime error: ${clip(ev.error?.message, 200)}`);
+      case 'error': {
+        const msg = [ev.error?.code, ev.error?.type, ev.error?.message].filter(Boolean).join(': ');
+        log.warn(`phone: call ${c.id} realtime error: ${clip(msg, 240)}`);
+        if (BILLING.test(msg)) {
+          voiceDown(msg);
+          c.voiceError = clip(ev.error?.code || ev.error?.type || 'insufficient_quota', 60);
+          hangup(c, 'voice provider out of credits', 'failed');
+        }
         break;
+      }
       default:
     }
   }
@@ -752,6 +806,8 @@ function createPhone({
     const g = guard({ urgent });
     if (g) return { status: g.status, body: { ok: false, error: g.error, quiet: g.quiet || undefined } };
     if (!publicUrl && via === 'twilio') return { status: 503, body: { ok: false, configured: false, error: 'PHONE_PUBLIC_URL is not set' } };
+    const v = await voiceCheck();
+    if (!v.ok) return { status: 503, body: { ok: false, voice: false, error: `Mia's call voice is unavailable (${v.error}). Not dialling; message Daniel instead. OpenAI billing needs credits.` } };
 
     const c = {
       id: `c_${crypto.randomBytes(5).toString('hex')}`,
