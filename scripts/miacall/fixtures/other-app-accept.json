@@ -1,0 +1,38 @@
+{
+ "windows": [
+  {
+   "app": "com.apple.notificationcenterui",
+   "title": "Notification Center",
+   "tree": {
+    "role": "AXWindow",
+    "title": "Notification Center",
+    "children": [
+     {
+      "role": "AXGroup",
+      "desc": "Calendar invite",
+      "children": [
+       {
+        "role": "AXStaticText",
+        "ident": "title",
+        "value": "Lunch with +27 (83) 561-5106"
+       },
+       {
+        "role": "AXButton",
+        "title": "Accept"
+       },
+       {
+        "role": "AXButton",
+        "title": "Decline"
+       }
+      ]
+     },
+     {
+      "role": "AXGroup",
+      "ident": "widgets-overlay-view"
+     }
+    ]
+   }
+  }
+ ],
+ "expect": "none"
+}

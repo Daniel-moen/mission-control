@@ -1,0 +1,46 @@
+{
+ "windows": [
+  {
+   "app": "com.apple.notificationcenterui",
+   "title": "Notification Center",
+   "tree": {
+    "role": "AXWindow",
+    "title": "Notification Center",
+    "children": [
+     {
+      "role": "AXGroup",
+      "desc": "FACETIME_NOTIFICATION",
+      "ident": "FACETIME_NOTIFICATION",
+      "children": [
+       {
+        "role": "AXGroup",
+        "ident": "AvatarView",
+        "desc": "FaceTime Audio",
+        "actions": [
+         "AXPress"
+        ]
+       },
+       {
+        "role": "AXButton",
+        "desc": "‪+27 (83) 561-5106‬, Click to Call"
+       },
+       {
+        "role": "AXButton",
+        "title": "Call"
+       },
+       {
+        "role": "AXButton",
+        "title": "Cancel"
+       }
+      ]
+     },
+     {
+      "role": "AXGroup",
+      "ident": "widgets-overlay-view"
+     }
+    ]
+   }
+  }
+ ],
+ "expect": "none"
+}

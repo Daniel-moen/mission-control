@@ -1,0 +1,67 @@
+{
+ "windows": [
+  {
+   "app": "com.apple.notificationcenterui",
+   "title": "Notification Center",
+   "tree": {
+    "role": "AXWindow",
+    "title": "Notification Center",
+    "children": [
+     {
+      "role": "AXGroup",
+      "desc": "FACETIME_NOTIFICATION",
+      "ident": "FACETIME_NOTIFICATION",
+      "children": [
+       {
+        "role": "AXGroup",
+        "ident": "AvatarView",
+        "desc": "FaceTime Audio",
+        "actions": [
+         "AXPress"
+        ]
+       },
+       {
+        "role": "AXStaticText",
+        "ident": "title",
+        "value": "Daniel Moen"
+       },
+       {
+        "role": "AXStaticText",
+        "ident": "body",
+        "value": "FaceTime Audio"
+       },
+       {
+        "role": "AXButton",
+        "title": "Accept"
+       },
+       {
+        "role": "AXButton",
+        "title": "Decline"
+       }
+      ]
+     },
+     {
+      "role": "AXGroup",
+      "ident": "widgets-overlay-view"
+     }
+    ]
+   }
+  },
+  {
+   "app": "com.apple.notificationcenterui",
+   "title": "Month",
+   "tree": {
+    "role": "AXWindow",
+    "title": "Month",
+    "children": [
+     {
+      "role": "AXGroup",
+      "desc": "Calendar",
+      "ident": "widget-local:com.apple.iCal"
+     }
+    ]
+   }
+  }
+ ],
+ "expect": "daniel"
+}

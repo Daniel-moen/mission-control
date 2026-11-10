@@ -1,0 +1,34 @@
+{
+ "windows": [
+  {
+   "app": "com.apple.notificationcenterui",
+   "title": "Notification Center",
+   "tree": {
+    "role": "AXWindow",
+    "title": "Notification Center",
+    "children": [
+     {
+      "role": "AXGroup",
+      "ident": "widgets-overlay-view"
+     }
+    ]
+   }
+  },
+  {
+   "app": "com.apple.notificationcenterui",
+   "title": "Month",
+   "tree": {
+    "role": "AXWindow",
+    "title": "Month",
+    "children": [
+     {
+      "role": "AXGroup",
+      "desc": "Calendar",
+      "ident": "widget-local:com.apple.iCal"
+     }
+    ]
+   }
+  }
+ ],
+ "expect": "none"
+}

@@ -1,0 +1,43 @@
+{
+ "windows": [
+  {
+   "app": "com.apple.FaceTime",
+   "title": "FaceTime",
+   "tree": {
+    "role": "AXWindow",
+    "title": "FaceTime",
+    "children": [
+     {
+      "role": "AXGroup",
+      "children": [
+       {
+        "role": "AXStaticText",
+        "ident": "",
+        "value": "+27 (83) 561-5106"
+       },
+       {
+        "role": "AXStaticText",
+        "ident": "",
+        "value": "FaceTime Audio…"
+       },
+       {
+        "role": "AXGroup",
+        "children": [
+         {
+          "role": "AXButton",
+          "title": "Decline"
+         },
+         {
+          "role": "AXButton",
+          "title": "Accept"
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  }
+ ],
+ "expect": "daniel"
+}

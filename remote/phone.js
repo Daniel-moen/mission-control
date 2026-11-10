@@ -64,6 +64,11 @@
 //   POST /phone/call         (token)  { to, message, urgent?, reason? } → { ok, id }
 //   POST /phone/say          (token)  { id, text, hangup? } → { ok, queued|spoken }
 //   POST /phone/hangup       (token)  { id } → { ok }
+//   POST /phone/incoming     (token)  { from? } → { ok, id, key } — Daniel is FaceTiming Mia
+//                            (task 0636): the Mac's MiaCall --listen saw his call, checked the
+//                            caller; it answers and streams to /phone/stream like an outbound
+//                            call. Own cap (PHONE_IN_PER_HOUR, 10/h; not counted against the
+//                            outbound 5/h), no quiet hours, the same credit probe (503 voice:false).
 //   POST /phone/twilio/answer  (Twilio signature) → TwiML
 //   POST /phone/twilio/status  (Twilio signature) → 204
 //   POST /phone/openai         (OpenAI webhook signature) → 200
@@ -256,11 +261,12 @@ function createPhone({
   const maxSeconds = Math.max(5, Number(env.PHONE_MAX_SECONDS) || 300);
   const perHour = Number(env.PHONE_PER_HOUR) || 5;
   const perDay = Number(env.PHONE_PER_DAY) || 20;
+  const inPerHour = Number(env.PHONE_IN_PER_HOUR) || 10;
   const tz = env.PHONE_TZ || 'Africa/Johannesburg';
   const quiet = parseQuiet(env.PHONE_QUIET || '23-7');
   const allow = String(env.PHONE_TO_ALLOW || '').split(',').map((s) => s.trim()).filter(Boolean);
   const storePath = dataFile('phone-calls.json', { override: env.PHONE_STORE, env, log, tag: 'phone' });
-  const limits = { via: defaultVia, twilio: twilioReady, bridge: mode, perHour, perDay, maxSeconds, quietHours: quiet ? `${fmtH(quiet.from)}-${fmtH(quiet.to)} ${tz}` : 'off' };
+  const limits = { via: defaultVia, twilio: twilioReady, bridge: mode, perHour, perDay, inPerHour, maxSeconds, quietHours: quiet ? `${fmtH(quiet.from)}-${fmtH(quiet.to)} ${tz}` : 'off' };
 
   if (configured) log.log(`phone: ${defaultVia} by default · Twilio ${twilioReady ? `${maskNum(cfg.from)} → ${mode === 'sip' ? 'SIP' : 'Media Streams'}` : 'off'} · OpenAI (${model}/${voice}) · ${perHour}/h ${perDay}/day · quiet ${limits.quietHours} · log ${storePath}`);
   else log.log(`phone: not configured (missing ${missing.join(', ')}) — /phone/* answers 503`);
@@ -354,7 +360,7 @@ function createPhone({
   const byOpenai = new Map(); // OpenAI call_id → our id
 
   function publicSummary(c) {
-    return { id: c.id, at: new Date(c.at).toISOString(), via: c.via || 'twilio', urgent: !!c.urgent, status: c.status, seconds: c.seconds || 0, usd: c.usd || 0, why: c.why || undefined };
+    return { id: c.id, at: new Date(c.at).toISOString(), via: c.via || 'twilio', ...(c.inbound ? { inbound: true } : {}), urgent: !!c.urgent, status: c.status, seconds: c.seconds || 0, usd: c.usd || 0, why: c.why || undefined };
   }
   function info() {
     const d0 = now() - 86400e3;
@@ -364,7 +370,7 @@ function createPhone({
       ...(configured ? {} : { missing }),
       voice: voiceState.at ? { ok: voiceState.ok, checked: new Date(voiceState.at).toISOString(), error: voiceState.error || undefined } : { ok: null },
       live: [...live.values()].map((c) => c.id),
-      last24h: { calls: recent.filter((c) => c.placed).length, minutes: round(recent.reduce((a, c) => a + (c.seconds || 0), 0) / 60, 100), usd: round(recent.reduce((a, c) => a + (c.usd || 0), 0)) },
+      last24h: { calls: recent.filter((c) => c.placed).length, incoming: recent.filter((c) => c.inbound).length, minutes: round(recent.reduce((a, c) => a + (c.seconds || 0), 0) / 60, 100), usd: round(recent.reduce((a, c) => a + (c.usd || 0), 0)) },
       limits,
       log: store.calls.slice(-5).map(publicSummary),
     };
@@ -425,14 +431,22 @@ function createPhone({
   }
 
   function sessionFor(c) {
-    const why = [`Why you are calling: ${c.message}`];
-    if (c.reason) why.push(`Background (do not read it out, use it to answer): ${c.reason}`);
-    if (c.urgent) why.push('It is urgent.');
-    why.push('Open the call yourself in one breath: "Hi Daniel, it\'s Mia." and the reason in one sentence. Then stop and listen; do not ask whether he can hear you.');
+    let persona = PERSONA;
+    const why = [];
+    if (c.inbound) {
+      // 0636: Daniel rang her. Jarvis picks up with two words and listens; no reason to give.
+      persona = PERSONA.replace('You rang him.', 'He rang you: you just picked up.');
+      why.push('Daniel phoned you. Pick up with only "Yes, Daniel?" (or just "Daniel."), nothing more: no greeting speech, no "how can I help", no reason for a call. Then stop and listen.');
+    } else {
+      why.push(`Why you are calling: ${c.message}`);
+      if (c.reason) why.push(`Background (do not read it out, use it to answer): ${c.reason}`);
+      if (c.urgent) why.push('It is urgent.');
+      why.push('Open the call yourself in one breath: "Hi Daniel, it\'s Mia." and the reason in one sentence. Then stop and listen; do not ask whether he can hear you.');
+    }
     return {
       type: 'realtime',
       model,
-      instructions: `${PERSONA}\n\n${why.join('\n')}`,
+      instructions: `${persona}\n\n${why.join('\n')}`,
       output_modalities: ['audio'],
       audio: {
         // Low eagerness: semantic VAD waits for him to finish the thought instead of jumping
@@ -476,8 +490,10 @@ function createPhone({
     if (c.openaiId) byOpenai.delete(c.openaiId);
     log.log(`phone: call ${c.id} ${c.status}${c.why ? ` (${c.why})` : ''} · ${c.seconds || 0}s · $${(c.usd || 0).toFixed(4)}`);
     // Mia hears how it went (not for the ones she hung up herself mid-flow).
+    const label = c.inbound ? 'incoming call' : 'call';
     const said = c.voiceError ? `could not talk: the voice provider (OpenAI) has no credits left, so Daniel heard only the fallback line. Message him instead; OpenAI billing needs topping up (${c.voiceError})` : { completed: 'ended', 'no-answer': 'was not answered', busy: 'was busy', failed: 'failed', canceled: 'was cancelled', voicemail: 'went to voicemail, so I hung up', lost: 'was cut off (relay restart)' }[c.status] || c.status;
-    sendToHost({ type: 'miaSend', text: `${PHONE_TAG}[call ${c.id} ${said}${c.seconds ? ` after ${c.seconds}s` : ''}]` });
+    const shown = c.inbound && c.status === 'no-answer' ? 'was not picked up (the Mac could not answer it)' : said;
+    sendToHost({ type: 'miaSend', text: `${PHONE_TAG}[${label} ${c.id} ${shown}${c.seconds ? ` after ${c.seconds}s` : ''}]` });
   }
 
   function sendWs(c, ev) {
@@ -944,6 +960,38 @@ function createPhone({
     return { status: 200, body: { ok: true, id: c.id, via, status: c.status } };
   }
 
+  // ---- incoming: Daniel FaceTimes Mia's Apple ID (task 0636) -----------------------
+  // The Mac (MiaCall --listen → mia-phone incoming) has already checked the caller is
+  // Daniel. Refusals carry `line`: what MiaCall says before hanging up (it answers, says
+  // it, ends); `ignore`: let it ring (another call is live).
+  async function incomingCall(body) {
+    const t = now();
+    if (live.size) return { status: 409, body: { ok: false, ignore: true, error: 'A call is already live' } };
+    if (!hostOnline()) return { status: 503, body: { ok: false, host: false, error: 'The Mac is offline', line: "Sorry Daniel, I can't reach my desk right now. Text me instead." } };
+    const lastHour = store.calls.filter((c) => c.inbound && c.at > t - 3600e3).length;
+    if (lastHour >= inPerHour) return { status: 429, body: { ok: false, error: `Rate limit: ${inPerHour} incoming calls an hour`, line: "Sorry Daniel, I can't take another call right now. Text me instead." } };
+    const base = { at: t, to: '', message: 'Daniel phoned Mia', inbound: true, via: 'facetime', urgent: false, placed: false, seconds: 0, usd: 0, timers: [], inbox: [], responding: false };
+    const v = await voiceCheck();
+    if (!v.ok) {
+      // Logged (so a redial loop still hits the cap) and Mia hears about it.
+      const id = `c_${crypto.randomBytes(5).toString('hex')}`;
+      store.calls.push({ ...base, id, status: 'failed', why: 'voice out of credit', endedAt: t, timers: undefined, inbox: undefined });
+      save();
+      log.log(`phone: incoming call ${id} refused: voice unavailable (${v.error})`);
+      sendToHost({ type: 'miaSend', text: `${PHONE_TAG}[Daniel phoned (incoming call ${id}) but the voice line is out of credit (${v.error}); he heard "my voice line is out of credit, text me instead". OpenAI billing needs topping up.]` });
+      return { status: 503, body: { ok: false, voice: false, id, error: `Mia's call voice is unavailable (${v.error})`, line: 'Sorry Daniel, my voice line is out of credit. Text me instead.' } };
+    }
+    const c = { ...base, id: `c_${crypto.randomBytes(5).toString('hex')}`, status: 'ringing' };
+    store.calls.push(c);
+    live.set(c.id, c);
+    save();
+    // Picked up but never streamed/connected: give up after 60 s.
+    c.timers.push(setTimeout(() => { if (c.status === 'dialing' || c.status === 'ringing') hangup(c, 'never connected', 'no-answer'); }, 60e3));
+    log.log(`phone: incoming call ${c.id} from Daniel via FaceTime`);
+    sendToHost({ type: 'miaSend', text: `${PHONE_TAG}[incoming call ${c.id} from Daniel — his words follow as "(phone) …"; answer in the call with: mia call-say ${c.id} "…"]` });
+    return { status: 200, body: { ok: true, id: c.id, via: 'facetime', status: c.status, key: streamKey(c.id), stream: '/phone/stream' } };
+  }
+
   async function onTwilio(route, req, res, url) {
     const raw = await readBody(req);
     const params = Object.fromEntries(new URLSearchParams(raw));
@@ -1036,6 +1084,10 @@ function createPhone({
     const body = parseJson(await readBody(req));
     if (route === '/phone/call') {
       const r = await placeCall(body);
+      return json(res, r.status, r.body);
+    }
+    if (route === '/phone/incoming') {
+      const r = await incomingCall(body);
       return json(res, r.status, r.body);
     }
     if (route === '/phone/say') {

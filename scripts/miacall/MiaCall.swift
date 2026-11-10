@@ -17,6 +17,15 @@
 //               --dump      print FaceTime's accessibility tree (debugging the UI)
 //               --route-test  TTS into BlackHole while the default input flips; checks it never hits the speakers
 //               --mic       select BlackHole in FaceTime's Video › Microphone (no call)
+//               --listen    (task 0636) the always-on watcher (LaunchAgent com.mia.call.listen):
+//                           AX observers on the call UI apps + Core Audio process-list events
+//                           (a slow 10 s fallback scan) spot an incoming FaceTime call; the
+//                           caller goes to `mia-phone incoming` (Daniel only, else it rings
+//                           on); then it launches  --answer --call <id> --key <k> --relay <url>
+//                           (or --answer --line "<text>": pick up, say it, hang up)
+//               --answer    pick up the incoming call: route audio, press Accept, then the
+//                           same live call as outbound (relay voice, gate, logs, hangup)
+//               --listen-test <fixture.json>  run the incoming-call detector on a simulated AX tree
 // Log + result: ~/.mission-control/mia/facetime/<id>.log / .json
 import AppKit
 import ApplicationServices
@@ -32,15 +41,22 @@ var flags = Set<String>()
 do {
     var it = CommandLine.arguments.dropFirst().makeIterator()
     while let a = it.next() {
-        if ["--call", "--key", "--to", "--relay", "--ring-seconds"].contains(a) { opts[a] = it.next() ?? "" } else { flags.insert(a) }
+        if ["--call", "--key", "--to", "--relay", "--ring-seconds", "--from", "--line", "--listen-test"].contains(a) { opts[a] = it.next() ?? "" } else { flags.insert(a) }
     }
 }
 let dir = (NSHomeDirectory() as NSString).appendingPathComponent(".mission-control/mia/facetime")
 try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-let tag = opts["--call"] ?? (flags.contains("--check") ? "check" : flags.contains("--selftest") ? "selftest" : flags.contains("--rehearse") ? "rehearse" : flags.contains("--say-test") ? "say-test" : flags.contains("--route-test") ? "route-test" : flags.contains("--mic") ? "mic" : "run")
+let listenFixture = ProcessInfo.processInfo.environment["MIA_LISTEN_FIXTURE"]
+let tag = opts["--call"] ?? (flags.contains("--listen") ? (listenFixture == nil ? "listen" : "listen-fixture") : opts["--listen-test"] != nil ? "listen-test" : flags.contains("--answer") ? "in-\(Int(Date().timeIntervalSince1970))" : flags.contains("--check") ? "check" : flags.contains("--selftest") ? "selftest" : flags.contains("--rehearse") ? "rehearse" : flags.contains("--say-test") ? "say-test" : flags.contains("--route-test") ? "route-test" : flags.contains("--mic") ? "mic" : "run")
 let logPath = (dir as NSString).appendingPathComponent("\(tag).log")
-FileManager.default.createFile(atPath: logPath, contents: nil)
+if tag == "listen", let sz = (try? FileManager.default.attributesOfItem(atPath: logPath))?[.size] as? Int, sz < 2_000_000 {
+    // the watcher runs for weeks: append, rotate at 2 MB
+} else {
+    if tag == "listen" { try? FileManager.default.removeItem(atPath: logPath + ".1"); try? FileManager.default.moveItem(atPath: logPath, toPath: logPath + ".1") }
+    FileManager.default.createFile(atPath: logPath, contents: nil)
+}
 let logFH = FileHandle(forWritingAtPath: logPath)
+_ = logFH?.seekToEndOfFile()
 func log(_ s: String) {
     let line = "\(ISO8601DateFormatter().string(from: Date())) \(s)\n"
     logFH?.write(line.data(using: .utf8)!)
@@ -341,9 +357,12 @@ func axAttr(_ e: AXUIElement, _ n: String) -> AnyObject? { var v: AnyObject?; re
 func axStr(_ e: AXUIElement, _ n: String) -> String { (axAttr(e, n) as? String) ?? ((axAttr(e, n) as? NSNumber)?.stringValue ?? "") }
 func axActions(_ e: AXUIElement) -> [String] { var a: CFArray?; return AXUIElementCopyActionNames(e, &a) == .success ? ((a as? [String]) ?? []) : [] }
 let FACETIME = "com.apple.FaceTime"
-let UI_APPS = [FACETIME, "com.apple.notificationcenterui", "com.apple.UserNotificationCenter", "com.apple.TelephonyUtilities", "com.apple.InCallService"]
+let PHONE_APP = "com.apple.mobilephone" // macOS 26's Phone app can carry FaceTime Audio calls
+let UI_APPS = [FACETIME, "com.apple.notificationcenterui", "com.apple.UserNotificationCenter", "com.apple.TelephonyUtilities", "com.apple.InCallService", PHONE_APP]
 var exploreAll = false
 struct Node { let app: String, win: String, role: String, title: String, desc: String, ident: String, value: String, actions: [String], el: AXUIElement
+    /// 0636: index of the parent node in the snapshot (-1 for a window), so a button's container is known.
+    var parent: Int = -1
     var labels: [String] { [title, desc].map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty } }
 }
 func tokenWindows(pid: pid_t) -> [AXUIElement] {
@@ -387,17 +406,18 @@ func snapshot(crossSpace: Bool = true) -> [Node] {
         let wt = axStr(w, kAXTitleAttribute)
         if b == "com.apple.notificationcenterui" && wt.hasPrefix("com.apple.") { continue } // desktop widgets (clock etc.)
         var count = 0
-        func walk(_ e: AXUIElement, _ d: Int) {
+        func walk(_ e: AXUIElement, _ d: Int, _ parent: Int) {
             count += 1
             if count > 2500 || d > 30 { return }
             let id = axStr(e, kAXIdentifierAttribute)
             if id.hasPrefix("FaceTime.RecentsList") || id == "FTRecentsView" { return }
             let role = axStr(e, kAXRoleAttribute)
             nodes.append(Node(app: b, win: wt, role: role, title: axStr(e, kAXTitleAttribute), desc: axStr(e, kAXDescriptionAttribute), ident: id,
-                              value: String(axStr(e, kAXValueAttribute).prefix(80)), actions: role == "AXStaticText" ? [] : axActions(e), el: e))
-            for k in (axAttr(e, kAXChildrenAttribute) as? [AXUIElement]) ?? [] { walk(k, d + 1) }
+                              value: String(axStr(e, kAXValueAttribute).prefix(80)), actions: role == "AXStaticText" ? [] : axActions(e), el: e, parent: parent))
+            let me = nodes.count - 1
+            for k in (axAttr(e, kAXChildrenAttribute) as? [AXUIElement]) ?? [] { walk(k, d + 1, me) }
         }
-        walk(w, 0)
+        walk(w, 0, -1)
     }
     return nodes
 }
@@ -485,17 +505,79 @@ func inCallControls(_ ns: [Node]) -> Bool {
     let ls = Set(ns.filter { isButton($0) && inCallUI($0, w) }.flatMap { $0.labels })
     return ls.contains("keypad") && ls.contains("mute")
 }
-/// "<number> left": the other side hung up (FaceTime banner/notification).
-func leftText(_ ns: [Node]) -> String? {
+/// "<number> left": the other side hung up (FaceTime banner/notification). `ignoring`: banners
+/// that were already there when this call started (0636: an old "… left" from an earlier call
+/// would otherwise end a new one at once).
+func leftKey(_ n: Node, _ s: String) -> String { "\(CFHash(n.el))|\(s)" }
+func leftKeys(_ ns: [Node]) -> Set<String> {
+    var out = Set<String>()
+    for n in ns { for s in [n.value, n.title, n.desc] where clean(s).lowercased().hasSuffix(" left") { out.insert(leftKey(n, clean(s))) } }
+    return out
+}
+func leftText(_ ns: [Node], ignoring: Set<String> = []) -> String? {
     for n in ns where n.app == FACETIME || n.app.contains("notificationcenterui") || n.app == "com.apple.UserNotificationCenter" || n.app.contains("InCall") {
         for s in [n.value, n.title, n.desc] {
             let l = clean(s).lowercased()
             guard l.hasSuffix(" left"), l.count > 6, !["minute", "second", "hour", "battery", "day"].contains(where: { l.contains($0) }) else { continue }
+            if ignoring.contains(leftKey(n, clean(s))) { continue }
             if l.rangeOfCharacter(from: .decimalDigits) != nil || n.app == FACETIME { return clean(s) }
         }
     }
     return nil
 }
+// MARK: - incoming calls (task 0636)
+// An incoming FaceTime call is an Accept/Answer button in the call UI: FaceTime's
+// notification (Notification Center, FACETIME_NOTIFICATION) or FaceTime / Phone /
+// InCallService. The caller is the text of the container that holds Accept (and
+// Decline): never the rest of the window, where an old "<number> left" banner can sit.
+let ACCEPT_LABELS: Set<String> = ["accept", "answer", "accept call", "answer call", "accept audio", "audio"]
+let INCOMING_NOISE: Set<String> = ["accept", "answer", "accept call", "answer call", "decline", "decline call", "reject", "options", "close", "show details", "message", "remind me", "remind me later", "send message", "accept audio", "audio", "video"]
+struct Incoming { let accept: Node, caller: String, key: String }
+func isAncestor(_ a: Int, of j: Int, _ ns: [Node]) -> Bool {
+    var k = ns[j].parent
+    while k >= 0 { if k == a { return true }; k = ns[k].parent }
+    return false
+}
+func incomingCalls(_ ns: [Node]) -> [Incoming] {
+    var out: [Incoming] = []
+    for (i, n) in ns.enumerated() where isButton(n) && n.ident != "AvatarView" && n.labels.contains(where: { ACCEPT_LABELS.contains($0) }) {
+        // "Audio"/"Video" alone are only accept buttons next to a Decline (FaceTime's incoming banner).
+        var chain: [Int] = []; var k = n.parent
+        while k >= 0 { chain.append(k); k = ns[k].parent }
+        let decline = ns.indices.filter { j in isButton(ns[j]) && ns[j].labels.contains { $0 == "decline" || $0 == "decline call" || $0 == "reject" } }
+        // The container: the nearest ancestor that also holds a Decline; else the window's direct child.
+        let box = chain.first { a in decline.contains { isAncestor(a, of: $0, ns) } } ?? (chain.count >= 2 ? chain[chain.count - 2] : chain.first ?? -1)
+        let hasDecline = box >= 0 && decline.contains { isAncestor(box, of: $0, ns) }
+        if !hasDecline && n.labels.allSatisfy({ $0 == "audio" || $0 == "accept audio" }) { continue }
+        func gather(_ box: Int) -> ([Int], [String]) {
+            let scope = box >= 0 ? [box] + ns.indices.filter { isAncestor(box, of: $0, ns) } : [i]
+            var texts: [String] = []
+            for j in scope { for s in [ns[j].title, ns[j].desc, ns[j].value] {
+                let t = clean(s); if t.isEmpty || INCOMING_NOISE.contains(t.lowercased()) || texts.contains(t) { continue }
+                texts.append(t)
+            } }
+            return (scope, texts)
+        }
+        var (scope, texts) = gather(box)
+        // Accept + Decline in a bare button row: climb to the first container with the caller's text
+        // (never up to the window itself, which holds everything).
+        var up = chain.firstIndex(of: box).map { $0 + 1 } ?? chain.count
+        while texts.isEmpty && up < chain.count - 1 { (scope, texts) = gather(chain[up]); up += 1 }
+        let ctx = texts.joined(separator: ", ")
+        let callApp = n.app == FACETIME || n.app.contains("InCall") || n.app.contains("Telephony") || n.app == PHONE_APP
+        let facetimey = callApp || ctx.lowercased().contains("facetime") || scope.contains { ns[$0].ident.uppercased().contains("FACETIME") }
+        guard facetimey else { continue }
+        out.append(Incoming(accept: n, caller: ctx, key: "\(n.app)|\(n.win)|\(ctx)"))
+    }
+    return out
+}
+/// For logs: never write a stranger's number in full.
+func maskCaller(_ s: String) -> String {
+    var out = ""; var digits = 0
+    for ch in s { if ch.isNumber { digits += 1; out.append(digits <= 3 ? ch : "•") } else { out.append(ch) } }
+    return String(out.prefix(80))
+}
+
 func axPress(_ n: Node, _ why: String) -> Bool {
     let r = AXUIElementPerformAction(n.el, kAXPressAction as CFString)
     log("pressed \(why): \(describe(n)) → \(r.rawValue)")
@@ -708,6 +790,15 @@ func sayPCM16(_ text: String) -> Data? {
     return nil
 }
 
+// MARK: - the active call (0636): the watcher never answers while a MiaCall call runs
+let activeCallPath = (dir as NSString).appendingPathComponent("active-call.pid")
+func writeActiveCall() { try? "\(getpid())".write(toFile: activeCallPath, atomically: true, encoding: .utf8) }
+func clearActiveCall() { if activeCallPID() == getpid() { try? FileManager.default.removeItem(atPath: activeCallPath) } }
+func activeCallPID() -> pid_t? {
+    guard let s = try? String(contentsOfFile: activeCallPath, encoding: .utf8), let p = pid_t(s.trimmingCharacters(in: .whitespacesAndNewlines)), p > 0 else { return nil }
+    return kill(p, 0) == 0 ? p : nil
+}
+
 // MARK: - the call
 // All call state lives on one serial queue (axq); the main thread only runs the app.
 let axq = DispatchQueue(label: "miacall.ax")
@@ -718,13 +809,17 @@ final class Call {
     var prevInput = AudioDeviceID(0), prevFaceTimeMic: String?, micOK = false
     var state = "starting", answeredAt: Date?, ringingAt: Date?, ended = false
     let launchedAt = Date(), ringSeconds: Double, rehearsal: Bool
+    /// 0636: Daniel is calling Mia (press Accept, don't dial); `line`: no voice, say it and hang up.
+    let inbound: Bool, line: String?, from: String
+    var acceptPresses = 0, staleLeft = Set<String>()
     var lastPressAt = Date.distantPast, sawConfirm = false
     var lastSig = "", confirmPresses = 0, broughtForward = false, sentReturn = false
     var sawCallUI = false, sawRingingText = false, noUITicks = 0, quietUITicks = 0, timerSeen: String?
     var mediaIn = 0, mediaBytes = 0, firstMediaAt: Date?, fallbackSpoken = false, lastStats = Date(), speechUntil = Date.distantPast, gatedChunks = 0, bargeIns = 0
-    init(id: String, key: String, to: String, relay: URL?, rehearsal: Bool) {
+    init(id: String, key: String, to: String, relay: URL?, rehearsal: Bool, inbound: Bool = false, line: String? = nil, from: String = "") {
         self.id = id; self.key = key; self.to = to; self.relay = relay; self.rehearsal = rehearsal
-        ringSeconds = Double(opts["--ring-seconds"] ?? "") ?? 60
+        self.inbound = inbound; self.line = line; self.from = from
+        ringSeconds = Double(opts["--ring-seconds"] ?? "") ?? (inbound ? 20 : 60)
     }
     func send(_ obj: [String: Any]) {
         guard let ws = ws, wsOpen else { return }
@@ -808,9 +903,18 @@ final class Call {
             wsOpen = true
             ws?.resume(); receive()
             send(["event": "start", "start": ["streamSid": "ft-\(id)", "customParameters": ["call": id, "key": key, "format": "pcm16", "wait": "1"]]])
-        } else { log("rehearsal: no relay; dialling \(to) (a number nobody answers)") }
-        // A confirmation left over from an earlier attempt would be pressed instead of ours.
+        } else if inbound { log("incoming call, no relay: Mia picks up only to say \"\(line ?? "")\"") }
+        else { log("rehearsal: no relay; dialling \(to) (a number nobody answers)") }
+        writeActiveCall()
         let pre = snapshot()
+        staleLeft = leftKeys(pre)
+        if inbound {
+            log("incoming call from \(maskCaller(from)); UI: \(signature(pre))")
+            state = "accept"
+            axq.async { self.tick() }
+            return nil
+        }
+        // A confirmation left over from an earlier attempt would be pressed instead of ours.
         let stale = Set(callButtons(pre).map { $0.win })
         for c in cancelButtons(pre) where stale.contains(c.win) { _ = axPress(c, "Cancel on a stale confirmation") }
         log("UI before dialling: \(signature(pre))")
@@ -833,6 +937,28 @@ final class Call {
         let inState = Date().timeIntervalSince(stateAt), sinceLaunch = Date().timeIntervalSince(launchedAt)
         let ends = endButtons(ns), timer = timerText(ns), ringing = ringingText(ns)
         switch state {
+        case "accept":
+            // 0636: Daniel's incoming call: press Accept on his banner (the caller we were given).
+            let incs = incomingCalls(ns)
+            let mine = incs.first { from.isEmpty || $0.caller == from } ?? incs.first
+            if !ends.isEmpty || timer != nil {
+                go("ringing", acceptPresses == 0 ? "call UI up without pressing Accept" : "call UI up after \(acceptPresses) Accept press(es)")
+                ringingAt = Date(); send(["event": "ringing"])
+                let m = setFaceTimeMic(micName, launch: false)
+                log("in call: " + (m.ok ? "" : "WARNING ") + m.info)
+            } else if Date().timeIntervalSince(lastPressAt) < 1.4 {
+                // just pressed
+            } else if let m = mine, acceptPresses < 5 {
+                acceptPresses += 1; lastPressAt = Date()
+                if !axPress(m.accept, "Accept (try \(acceptPresses))") { bringFaceTimeForward() }
+            } else if mine == nil && acceptPresses > 0 {
+                go("ringing", "incoming banner gone after \(acceptPresses) Accept press(es); waiting for the call UI")
+                ringingAt = Date(); send(["event": "ringing"])
+            } else if mine == nil && inState > 5 {
+                log("the incoming call is gone; UI:\n\(dump(ns))"); return finish("no-answer", "the call was gone before Mia could pick up")
+            } else if inState > 15 {
+                log("could not pick up; UI:\n\(dump(ns))"); return finish("failed", "could not press Accept")
+            }
         case "confirm":
             let calls = callButtons(ns), acts = callActions(ns)
             if !calls.isEmpty || !acts.isEmpty { if !sawConfirm { log("Call confirmation found: \((calls.first.map(describe) ?? acts.first.map { describe($0.0) }) ?? "")") }; sawConfirm = true }
@@ -866,7 +992,7 @@ final class Call {
             if ringing != nil { if !sawRingingText { log("ringing text: \"\(ringing!)\"") }; sawRingingText = true }
             // Connected = a call timer that is up in two polls in a row, or the
             // "Calling…" text gone while End stays (Daniel→Daniel calls show no name).
-            if let left = leftText(ns) { log("'\(left)' while ringing"); return finish("completed", "Daniel left the call") }
+            if let left = leftText(ns, ignoring: staleLeft) { log("'\(left)' while ringing"); return finish("completed", "Daniel left the call") }
             if let (tm, inLabel) = timerInfo(ns) {
                 if timerSeen != nil || tm != "0:00" && tm != "00:00" || inLabel && !ends.isEmpty { return connected("call timer \(tm)\(inLabel ? " (in label)" : "")") }
                 timerSeen = tm
@@ -884,10 +1010,10 @@ final class Call {
         case "live":
             if !ends.isEmpty || timer != nil { noUITicks = 0 } else { noUITicks += 1 }
             if noUITicks == 1 { log("call UI not seen (1); UI: \(sig)") }
-            if let left = leftText(ns) { log("'\(left)'"); return finish("completed", "Daniel hung up") }
+            if let left = leftText(ns, ignoring: staleLeft) { log("'\(left)'"); return finish("completed", "Daniel hung up") }
             if noUITicks >= 7 { log("FaceTime call ended; UI:\n\(dump(ns))"); return finish("completed", "Daniel hung up") }
-            if !rehearsal && firstMediaAt == nil && inState > 8 && !fallbackSpoken {
-                log("no audio from the relay 8 s after answering: local voice"); speakFallback("Hi Daniel, it's Mia. One moment, I'm connecting.")
+            if !rehearsal && relay != nil && firstMediaAt == nil && inState > 8 && !fallbackSpoken {
+                log("no audio from the relay 8 s after answering: local voice"); speakFallback(inbound ? "One moment, Daniel." : "Hi Daniel, it's Mia. One moment, I'm connecting.")
             }
             if Date().timeIntervalSince(lastStats) >= 5 {
                 lastStats = Date()
@@ -906,6 +1032,11 @@ final class Call {
     }
     func connected(_ why: String) {
         go("live", why); answeredAt = Date(); log("answered (\(why))")
+        if let l = line, relay == nil {
+            // 0636: no voice (out of credit, rate cap, relay down): say why, then hang up.
+            speakFallback(l)
+            return finish("completed", "no voice: said the local line", after: 0.3)
+        }
         let me = processObject(pid: getpid())
         // 0633 half-duplex safety net with barge-in: while Mia speaks (+400 ms), Daniel's side goes
         // up as silence, so any echo of her voice from his speakerphone can't come back as his words,
@@ -977,11 +1108,143 @@ final class Call {
                 if let p = self.prevFaceTimeMic { log("restore: " + setFaceTimeMic(p, launch: false).info) }
                 self.wsOpen = false
                 self.ws?.cancel(with: .normalClosure, reason: nil)
-                writeResult(["id": self.id, "reason": reason, "detail": detail, "seconds": self.answeredAt.map { Int(Date().timeIntervalSince($0)) } ?? 0, "state": self.state])
+                writeResult(["id": self.id, "reason": reason, "detail": detail, "seconds": self.answeredAt.map { Int(Date().timeIntervalSince($0)) } ?? 0, "state": self.state, "inbound": self.inbound])
+                clearActiveCall()
                 exit(reason == "failed" ? 1 : 0)
             }
         } }
     }
+}
+
+// MARK: - the watcher (--listen, task 0636)
+// Event-driven: an AXObserver per call-UI app (window/element created, layout changed),
+// Core Audio's process list (the ringtone starts a client), app launches. Each event
+// schedules ONE bounded scan of those apps (no cross-Space token sweep) 0.25 s later;
+// a 10 s fallback scan covers missed events. Idle cost: a few small AX reads.
+let LISTEN_NOTES = [kAXWindowCreatedNotification, kAXCreatedNotification, kAXFocusedWindowChangedNotification, kAXMainWindowChangedNotification, "AXLayoutChanged"]
+var theListener: Listener?
+let axCallback: AXObserverCallback = { _, _, note, _ in theListener?.poke(note as String) }
+final class Listener {
+    var observers: [pid_t: AXObserver] = [:]
+    var pending = false, handled: [String: Date] = [:], busyUntil = Date.distantPast
+    var events = 0, scans = 0, scanTime = 0.0, statsAt = Date()
+    let miaPhone = env["MIA_PHONE"] ?? (NSHomeDirectory() as NSString).appendingPathComponent(".mission-control/bin/mia-phone")
+    let python = env["MIA_PYTHON"] ?? "/usr/bin/python3"
+    func start() {
+        log("listen: watching for FaceTime calls to Mia (pid \(getpid()), Accessibility \(AXIsProcessTrusted() ? "yes" : "NO"), mia-phone \(miaPhone))")
+        if !AXIsProcessTrusted() { log("listen: WARNING no Accessibility permission: incoming calls can't be seen or answered") }
+        attachAll()
+        let nc = NSWorkspace.shared.notificationCenter
+        for n in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
+            nc.addObserver(forName: n, object: nil, queue: .main) { [weak self] note in
+                let b = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier ?? ""
+                if UI_APPS.contains(b) { self?.attachAll(); self?.poke("launch \(b)") }
+            }
+        }
+        // The ringtone / call audio: a process starts or stops talking to Core Audio.
+        var a = prop(kAudioHardwarePropertyProcessObjectList)
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &a, DispatchQueue.main) { [weak self] _, _ in self?.poke("audio clients") }
+        Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in self?.poke("fallback") }
+        poke("start")
+    }
+    func attachAll() {
+        let apps = UI_APPS.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
+        let pids = Set(apps.map { $0.processIdentifier })
+        for (pid, o) in observers where !pids.contains(pid) {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(o), .defaultMode); observers[pid] = nil
+        }
+        for app in apps where observers[app.processIdentifier] == nil {
+            var o: AXObserver?
+            guard AXObserverCreate(app.processIdentifier, axCallback, &o) == .success, let obs = o else { continue }
+            let el = AXUIElementCreateApplication(app.processIdentifier)
+            var okN = 0
+            for n in LISTEN_NOTES where AXObserverAddNotification(obs, el, n as CFString, nil) == .success { okN += 1 }
+            CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
+            observers[app.processIdentifier] = obs
+            log("listen: observing \(app.bundleIdentifier ?? "?") (pid \(app.processIdentifier), \(okN)/\(LISTEN_NOTES.count) notifications)")
+        }
+    }
+    /// Main thread. Coalesces bursts of events into one scan.
+    func poke(_ why: String) {
+        events += 1
+        if pending { return }
+        pending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { self.pending = false; axq.async { self.scan(why) } }
+    }
+    func scan(_ why: String) {
+        let t0 = Date()
+        let incs = incomingCalls(listenFixture.map(fixtureNodes) ?? snapshot(crossSpace: false))
+        scans += 1; scanTime += Date().timeIntervalSince(t0)
+        if Date().timeIntervalSince(statsAt) > 3600 {
+            log(String(format: "listen: last hour %d events, %d scans, %.2f s scanning", events, scans, scanTime))
+            events = 0; scans = 0; scanTime = 0; statsAt = Date()
+        }
+        handled = handled.filter { Date().timeIntervalSince($0.value) < 120 }
+        for inc in incs where handled[inc.key] == nil {
+            handled[inc.key] = Date()
+            log("listen: incoming call (\(why)): \(maskCaller(inc.caller)) | \(describe(inc.accept))")
+            if let p = activeCallPID() { log("listen: a MiaCall call is running (pid \(p)); letting it ring"); continue }
+            if Date() < busyUntil { log("listen: already picking up another call; letting it ring"); continue }
+            busyUntil = Date().addingTimeInterval(25)
+            handle(inc)
+        }
+    }
+    func handle(_ inc: Incoming) {
+        guard let r = runMiaPhone(["incoming", "--from", inc.caller]) else {
+            launchAnswer(["--line", "Sorry Daniel, my voice line is down right now. Text me instead."], inc); return
+        }
+        if r["ignore"] as? Bool == true {
+            busyUntil = .distantPast
+            log("listen: not answering (\(r["reason"] ?? r["error"] ?? "?")): \(maskCaller(inc.caller)) rings on"); return
+        }
+        if r["ok"] as? Bool == true, let id = r["id"] as? String, let key = r["key"] as? String, let relay = r["relay"] as? String {
+            log("listen: Daniel → call \(id); picking up")
+            launchAnswer(["--call", id, "--key", key, "--relay", relay], inc)
+        } else if let line = r["line"] as? String {
+            log("listen: no voice (\(r["error"] ?? "?")): picking up to say \"\(line)\"")
+            launchAnswer(["--line", line] + ((r["id"] as? String).map { ["--call", $0] } ?? []), inc)
+        } else { busyUntil = .distantPast; log("listen: mia-phone said \(r); letting it ring") }
+    }
+    func runMiaPhone(_ args: [String]) -> [String: Any]? {
+        let p = Process(); p.executableURL = URL(fileURLWithPath: python); p.arguments = [miaPhone] + args
+        let out = Pipe(), err = Pipe(); p.standardOutput = out; p.standardError = err
+        do { try p.run() } catch { log("listen: mia-phone: \(error)"); return nil }
+        let deadline = Date().addingTimeInterval(20)
+        while p.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
+        if p.isRunning { p.terminate(); log("listen: mia-phone timed out"); return nil }
+        let d = out.fileHandleForReading.readDataToEndOfFile()
+        let e = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        if !e.isEmpty { log("listen: mia-phone stderr: \(e.trimmingCharacters(in: .whitespacesAndNewlines).prefix(300))") }
+        let line = String(data: d, encoding: .utf8)?.split(separator: "\n").last.map(String.init) ?? ""
+        guard let j = line.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: j) as? [String: Any] else { log("listen: mia-phone gave no JSON (exit \(p.terminationStatus))"); return nil }
+        return o
+    }
+    func launchAnswer(_ args: [String], _ inc: Incoming) {
+        if env["MIA_LISTEN_DRY_RUN"] == "1" { log("listen: dry run: would launch --answer \(args.filter { $0.count < 40 })"); return }
+        let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        p.arguments = ["-n", "-g", Bundle.main.bundlePath, "--args", "--answer", "--from", inc.caller] + args
+        do { try p.run(); p.waitUntilExit(); log("listen: launched the answering MiaCall (open exit \(p.terminationStatus))") }
+        catch { log("listen: could not launch MiaCall --answer: \(error)") }
+    }
+}
+
+/// --listen-test: build Nodes from a simulated AX tree and run the detector.
+/// Fixture: {"windows":[{"app":"com.apple.notificationcenterui","title":"Notification Center",
+///   "tree":{"role":"AXWindow","children":[{"role":"AXGroup","desc":"…","children":[…]}]}}]}
+func fixtureNodes(_ path: String) -> [Node] {
+    guard let d = FileManager.default.contents(atPath: path), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return [] }
+    let dummy = AXUIElementCreateApplication(0)
+    var nodes: [Node] = []
+    func add(_ t: [String: Any], _ app: String, _ win: String, _ parent: Int) {
+        func g(_ k: String) -> String { t[k] as? String ?? "" }
+        let role = g("role")
+        let acts = (t["actions"] as? [String]) ?? (role == "AXButton" ? ["AXPress"] : [])
+        nodes.append(Node(app: app, win: win, role: role, title: g("title"), desc: g("desc"), ident: g("ident"), value: g("value"), actions: acts, el: dummy, parent: parent))
+        let me = nodes.count - 1
+        for k in (t["children"] as? [[String: Any]]) ?? [] { add(k, app, win, me) }
+    }
+    for w in (o["windows"] as? [[String: Any]]) ?? [] { add(w["tree"] as? [String: Any] ?? [:], w["app"] as? String ?? "", w["title"] as? String ?? "", -1) }
+    return nodes
 }
 
 // MARK: - main
@@ -999,6 +1262,31 @@ if flags.contains("--check") {
     exit(((r["accessibility"] as? Bool) == true && (r["audioCapture"] as? Bool) == true && (r["blackhole"] as? Bool) == true) ? 0 : 1)
 }
 if flags.contains("--selftest") { exit(selftest()) }
+if let fx = opts["--listen-test"] {
+    let incs = incomingCalls(fixtureNodes(fx))
+    let r: [[String: Any]] = incs.map { ["caller": $0.caller, "accept": [$0.accept.title, $0.accept.desc].filter { !$0.isEmpty }.joined(separator: "/"), "app": $0.accept.app] }
+    let d = try! JSONSerialization.data(withJSONObject: r, options: [.sortedKeys])
+    print(String(data: d, encoding: .utf8)!); exit(0)
+}
+if flags.contains("--listen") {
+    // One watcher only (the LaunchAgent restarts it if it dies).
+    let fd = open((dir as NSString).appendingPathComponent(listenFixture == nil ? "listen.lock" : "listen-fixture.lock"), O_CREAT | O_RDWR, 0o644)
+    if fd < 0 || flock(fd, LOCK_EX | LOCK_NB) != 0 { log("listen: another watcher is running; exiting"); exit(0) }
+    AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.8)
+    theListener = Listener(); theListener!.start()
+    app.run()
+}
+if flags.contains("--answer") {
+    // Picked up by the watcher: --call/--key/--relay (the voice) or --line (no voice).
+    AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 1.0)
+    let relay = opts["--relay"].flatMap { URL(string: $0) }
+    let line = opts["--line"]
+    guard relay != nil && opts["--key"] != nil || line != nil else { log("usage: --answer --from <caller> (--call <id> --key <k> --relay <url> | --line <text>)"); exit(2) }
+    let call = Call(id: opts["--call"] ?? tag, key: opts["--key"] ?? "", to: "", relay: line == nil ? relay : nil, rehearsal: false, inbound: true, line: line, from: opts["--from"] ?? "")
+    axq.async { if let e = call.start() { log("cannot answer: \(e)"); writeResult(["id": call.id, "reason": "failed", "detail": e, "inbound": true]); exit(1) } }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 420) { axq.async { call.finish("completed", "watchdog") } }
+    app.run()
+}
 if flags.contains("--mic") {
     // FaceTime's Video › Microphone: show it and select BlackHole (or MIA_CALL_MIC), no call.
     AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 1.0)
