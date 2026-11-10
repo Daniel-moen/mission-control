@@ -91,7 +91,7 @@ Personality: like Jarvis. Calm, dry, straight to the point. One or two short sen
 
 Never reveal how you work inside. Never say you will "pass it on", "ask Mia", "hand it off", "check with the team", or mention another agent, a back end, a system, a tool or a model. Never refer to Mia in the third person. Never mention OpenAI.
 
-How you work: you do not answer from memory. For every job, decision, question about facts or Daniel's own data, call send_to_mia with his complete request or decision in his own words, first person. Then say a short first-person line ("On it, one moment.", "Checking now."). Never state a result before it arrives. While you wait, stay quiet or say at most a word or two if he speaks; it is fine for the line to be silent for a while.
+How you work: you do not answer from memory. For every job, decision, question about facts or Daniel's own data, call send_to_mia with his complete request or decision in his own words, first person. send_to_mia carries only what DANIEL asked for: never your own greeting, the reason for the call, a check like "can you hear me", or his small talk ("yes", "I can hear you", "hello"). Then say a short first-person line ("On it, one moment.", "Checking now."). Never state a result before it arrives. While you wait, stay quiet or say at most a word or two if he speaks; it is fine for the line to be silent for a while.
 
 Results: a system message starting with "Result:" is the outcome of work you started or news for Daniel. Say it right away as your own finding, answer first, one or two sentences, facts exact.
 
@@ -141,6 +141,20 @@ const TOOLS = [
 
 // ---- helpers -----------------------------------------------------------------
 
+// 0633: the voice model called send_to_mia with its OWN lines ("Hi Daniel, it's Mia…",
+// "Daniel, if you can hear me, just say yes."), so Mia got them as Daniel's words.
+// words(): lowercase word list; echoes(): most of `text`'s words are in one of Mia's lines.
+const words = (s) => String(s || '').toLowerCase().replace(/[’']/g, '').match(/[a-z0-9]+/g) || [];
+function echoes(text, lines) {
+  const w = words(text);
+  if (!w.length) return false;
+  return lines.some((line) => {
+    const set = new Set(words(line));
+    if (!set.size) return false;
+    const hit = w.filter((x) => set.has(x)).length;
+    return hit / w.length >= 0.7 && (w.length >= 3 || hit === w.length);
+  });
+}
 const clip = (s, n) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, n);
 const round = (n, p = 1e4) => Math.round(n * p) / p;
 
@@ -277,7 +291,7 @@ function createPhone({
     saveTimer.unref?.();
   }
   function persistable(c) {
-    const { ws, tw, pipe, timers, inbox, responding, ...rest } = c;
+    const { ws, tw, pipe, timers, inbox, responding, said, lastSent, ...rest } = c;
     return rest;
   }
   // ---- is the voice usable? (task 0629: the OpenAI org ran out of credits;
@@ -491,8 +505,24 @@ function createPhone({
   function runTool(c, name, args) {
     switch (name) {
       case 'send_to_mia': {
-        const text = clip(args.text, 1500);
+        const text = clip(args.text, 1500).replace(/^(daniel|him|he)\s*(says|said)?\s*:\s*/i, '');
         if (!text) return { ok: false, error: 'Nothing to send.' };
+        // Guards (0633): only Daniel's own requests reach Mia.
+        const recent = (c.said || []).filter((x) => Date.now() - x.at < 180e3).map((x) => x.text);
+        if (!c.heard) {
+          c.dropped = (c.dropped || 0) + 1;
+          log.log(`phone: call ${c.id} send_to_mia dropped (Daniel has not spoken yet): ${clip(text, 120)}`);
+          return { ok: false, error: 'Daniel has not said anything yet. send_to_mia is only for a request he made. Do not send your own lines; just talk to him.' };
+        }
+        if (echoes(text, recent)) {
+          c.dropped = (c.dropped || 0) + 1;
+          log.log(`phone: call ${c.id} send_to_mia dropped (Mia's own words): ${clip(text, 120)}`);
+          return { ok: false, error: 'That is what YOU just said, not a request from Daniel. Never send your own words. Listen to him.' };
+        }
+        if (c.lastSent && c.lastSent.text === text.toLowerCase() && Date.now() - c.lastSent.at < 120e3) {
+          return { ok: true, status: 'Already started; no need to send it again.' };
+        }
+        c.lastSent = { text: text.toLowerCase(), at: Date.now() };
         const sent = sendToHost({ type: 'miaSend', text: `${PHONE_TAG}${text}  [call ${c.id} — answer in the call with: mia call-say ${c.id} "…"]` });
         if (sent === false) return { ok: false, error: 'Daniel\'s Mac is not reachable right now.' };
         c.asked = (c.asked || 0) + 1;
@@ -523,8 +553,22 @@ function createPhone({
     }
   }
 
+  function rememberSaid(c, text) {
+    const t = clip(text, 600);
+    if (!t) return;
+    c.said = (c.said || []).filter((x) => Date.now() - x.at < 180e3 && x.text !== t);
+    c.said.push({ at: Date.now(), text: t });
+    if (c.said.length > 12) c.said.shift();
+  }
   function onSideband(c, ev) {
     switch (ev.type) {
+      case 'input_audio_buffer.speech_started':
+        c.heard = (c.heard || 0) + 1;
+        break;
+      case 'response.output_audio_transcript.done':
+      case 'response.audio_transcript.done':
+        rememberSaid(c, ev.transcript);
+        break;
       case 'response.created':
         c.responding = true;
         break;
@@ -536,6 +580,10 @@ function createPhone({
           const t = c.tokens;
           c.usd = round((t.audioIn * p.audioIn + t.audioInCached * p.audioInCached + t.audioOut * p.audioOut + t.textIn * p.textIn + t.textInCached * p.textInCached + t.textOut * p.textOut) / 1e6, 1e5);
           save();
+        }
+        // What she said in this response (in case the transcript event came late or not at all).
+        for (const o of ev.response?.output || []) {
+          if (o.type === 'message') for (const part of o.content || []) if (part.transcript || part.text) rememberSaid(c, part.transcript || part.text);
         }
         const calls = (ev.response?.output || []).filter((o) => o.type === 'function_call');
         if (calls.length) {

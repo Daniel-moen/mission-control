@@ -303,15 +303,35 @@ try {
   sock.ws.send(JSON.stringify(spoke));
   await sleep(100);
 
-  // send_to_mia
+  // 0633 guards: before Daniel says anything, and her own words, never reach Mia
   let n0 = host.frames.length;
-  sock.ws.send(JSON.stringify(toolCall('send_to_mia', { text: 'Restart the relay and tell me when it is back' })));
+  sock.ws.send(JSON.stringify({ type: 'response.output_audio_transcript.done', transcript: "Hi Daniel, it's Mia. The relay is down. Can you hear me?" }));
+  sock.ws.send(JSON.stringify(toolCall('send_to_mia', { text: "Hi Daniel, it's Mia. The relay is down." })));
+  ok(await waitFor(() => lastOutput(sock, 'send_to_mia')?.ok === false), 'send_to_mia before Daniel spoke → refused');
+  sock.ws.send(JSON.stringify(spoke));
+  sock.ws.send(JSON.stringify({ type: 'input_audio_buffer.speech_started' }));
+  sock.ws.send(JSON.stringify({ type: 'response.done', response: { output: [{ type: 'message', content: [{ type: 'output_audio', transcript: 'Daniel, if you can hear me, just say yes.' }] }] } }));
+  await sleep(50);
+  sock.ws.send(JSON.stringify(toolCall('send_to_mia', { text: 'Daniel, if you can hear me, just say yes.' })));
+  ok(await waitFor(() => /YOU just said/.test(lastOutput(sock, 'send_to_mia')?.error || '')), "send_to_mia with Mia's own line → refused");
+  sock.ws.send(JSON.stringify(spoke));
+  await sleep(50);
+  ok(!host.frames.slice(n0).some((f) => f.type === 'miaSend'), '… and nothing reached the Mac');
+  // send_to_mia
+  n0 = host.frames.length;
+  sock.ws.send(JSON.stringify(toolCall('send_to_mia', { text: 'Daniel: Restart the relay and tell me when it is back' })));
   ok(await waitFor(() => host.frames.slice(n0).some((f) => f.type === 'miaSend')), 'send_to_mia → a miaSend on the Mac');
   const sent = host.frames.slice(n0).find((f) => f.type === 'miaSend');
   ok(sent.text.startsWith('(phone) Restart the relay') && sent.text.includes(`mia call-say ${id}`), 'the message starts "(phone) …" and says how to answer');
   ok(await waitFor(() => lastOutput(sock, 'send_to_mia')?.ok === true), 'send_to_mia: tool output ok');
   ok(sock.got.filter((e) => e.type === 'response.create').length >= 2, 'a response follows the tool output');
   sock.ws.send(JSON.stringify(spoke));
+  n0 = host.frames.length;
+  sock.ws.send(JSON.stringify(toolCall('send_to_mia', { text: 'Restart the relay and tell me when it is back' })));
+  ok(await waitFor(() => /Already started/.test(lastOutput(sock, 'send_to_mia')?.status || '')), 'the same request twice → sent once');
+  sock.ws.send(JSON.stringify(spoke));
+  await sleep(50);
+  ok(!host.frames.slice(n0).some((f) => f.type === 'miaSend'), '… no second miaSend');
   // get_status
   sock.ws.send(JSON.stringify(toolCall('get_status')));
   ok(await waitFor(() => lastOutput(sock, 'get_status')), 'get_status answered');
@@ -473,6 +493,7 @@ try {
   rs.ws.send(JSON.stringify({ type: 'input_audio_buffer.speech_started' }));
   ok(await waitFor(() => twl.got.some((m) => m.event === 'clear')), 'he talks over her → clear (barge-in)');
   rs.ws.send(JSON.stringify(spoke));
+  rs.ws.send(JSON.stringify({ type: 'input_audio_buffer.speech_started' }));
   const n1 = h2.frames.length;
   rs.ws.send(JSON.stringify(toolCall('send_to_mia', { text: 'Check the logs' })));
   ok(await waitFor(() => h2.frames.slice(n1).some((f) => f.type === 'miaSend' && f.text.startsWith('(phone) Check the logs'))), 'tools work on the stream bridge too');
