@@ -2,17 +2,21 @@
 //
 // `mia call "…"` asks the relay for a call (POST /phone/call → id + stream key),
 // then opens this app:  open -n -g MiaCall.app --args --call <id> --key <k> --to <+27…> --relay <https://…>
-//   1. default input → BlackHole 2ch (FaceTime's mic = Mia's voice), restored after
+//   1. default input → BlackHole 2ch AND FaceTime's own Video › Microphone → BlackHole 2ch
+//      (FaceTime's mic = Mia's voice), both restored after (0630)
 //   2. facetime-audio://<number>, then presses the "Call" confirmation (Accessibility)
 //   3. wss://relay/phone/stream: start {format:pcm16, wait:1} → ringing
 //   4. answered (FaceTime shows a call timer) → "answered"; the relay starts the
-//      OpenAI Realtime voice. Call audio: a Core Audio process tap (all processes but
-//      this one, muted on the speakers) → 24 kHz PCM16 → relay; relay audio → BlackHole.
+//      OpenAI Realtime voice. Call audio: a Core Audio process tap on FaceTime's call
+//      processes (avconferenced…; muted on the speakers, works with the Mac muted) →
+//      24 kHz PCM16 → relay; relay audio → an IOProc on BlackHole only (never the speakers).
 //   5. ends on: relay {event:hangup} (Mia's goodbye / 5 min cap), FaceTime call gone,
 //      no answer within 45 s. Then "stop" {reason}, restore devices, quit.
 // Other modes:  --check   ask for / report the permissions (Accessibility, audio capture)
 //               --selftest  mock audio loop: tap hears a tone; BlackHole loops our audio
 //               --dump      print FaceTime's accessibility tree (debugging the UI)
+//               --route-test  TTS into BlackHole while the default input flips; checks it never hits the speakers
+//               --mic       select BlackHole in FaceTime's Video › Microphone (no call)
 // Log + result: ~/.mission-control/mia/facetime/<id>.log / .json
 import AppKit
 import ApplicationServices
@@ -20,6 +24,7 @@ import AudioToolbox
 import AVFoundation
 import CoreAudio
 import Foundation
+import os
 
 // MARK: - args, log
 var opts: [String: String] = [:]
@@ -32,7 +37,7 @@ do {
 }
 let dir = (NSHomeDirectory() as NSString).appendingPathComponent(".mission-control/mia/facetime")
 try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-let tag = opts["--call"] ?? (flags.contains("--check") ? "check" : flags.contains("--selftest") ? "selftest" : flags.contains("--rehearse") ? "rehearse" : flags.contains("--say-test") ? "say-test" : "run")
+let tag = opts["--call"] ?? (flags.contains("--check") ? "check" : flags.contains("--selftest") ? "selftest" : flags.contains("--rehearse") ? "rehearse" : flags.contains("--say-test") ? "say-test" : flags.contains("--route-test") ? "route-test" : flags.contains("--mic") ? "mic" : "run")
 let logPath = (dir as NSString).appendingPathComponent("\(tag).log")
 FileManager.default.createFile(atPath: logPath, contents: nil)
 let logFH = FileHandle(forWritingAtPath: logPath)
@@ -88,8 +93,13 @@ final class Capture {
     var rms: Float = 0
     private var rate: Double = 48000, channels = 2, interleaved = true
     private var phase: Double = 0, acc = [Int16]()
-    func start(excluding: [AudioObjectID]) -> String? {
-        let desc = CATapDescription(stereoGlobalTapButExcludeProcesses: excluding)
+    var tapped = "everything"
+    /// processes non-empty: a tap on exactly those (FaceTime's call audio, 0630); else
+    /// everything but `excluding`. Taps read process output before the device volume,
+    /// so this works with the Mac's output muted; mutedWhenTapped keeps it off the speakers.
+    func start(excluding: [AudioObjectID], processes: [AudioObjectID] = []) -> String? {
+        let desc = processes.isEmpty ? CATapDescription(stereoGlobalTapButExcludeProcesses: excluding) : CATapDescription(stereoMixdownOfProcesses: processes)
+        tapped = processes.isEmpty ? "all processes but MiaCall" : "\(processes.count) call-audio process(es)"
         desc.uuid = UUID()
         desc.name = "MiaCall"
         desc.isPrivate = true
@@ -119,7 +129,7 @@ final class Capture {
         if st != noErr { return "AudioDeviceCreateIOProcIDWithBlock \(st)" }
         st = AudioDeviceStart(aggID, proc)
         if st != noErr { return "AudioDeviceStart \(st)" }
-        log("capture: tap \(Int(rate)) Hz × \(channels) \(interleaved ? "interleaved" : "planar"), main device \(outUID)")
+        log("capture: tap on \(tapped), \(Int(rate)) Hz × \(channels) \(interleaved ? "interleaved" : "planar"), main device \(outUID)")
         return nil
     }
     private func ingest(_ list: UnsafePointer<AudioBufferList>) {
@@ -161,29 +171,86 @@ final class Capture {
 }
 
 // MARK: - playback: 24 kHz PCM16 → BlackHole (FaceTime's microphone)
+// 0630: an IOProc bound to BlackHole's device ID. The 0621–0629 AVAudioEngine player
+// was re-bound by macOS to the DEFAULT OUTPUT (the speakers) the moment MiaCall set the
+// default input to BlackHole (reproduced locally, no config-change notification): Mia
+// played on the laptop speaker and FaceTime's mic got nothing. A device IOProc can't move.
 final class Player {
-    let engine = AVAudioEngine(), node = AVAudioPlayerNode()
-    let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 24000, channels: 1, interleaved: false)!
+    private(set) var devID = AudioDeviceID(0)
+    private var proc: AudioDeviceIOProcID?
+    private let lock: UnsafeMutablePointer<os_unfair_lock> = { let p = UnsafeMutablePointer<os_unfair_lock>.allocate(capacity: 1); p.initialize(to: os_unfair_lock()); return p }()
+    private var q = [Float](), head = 0, phase = 0.0
+    private var rate = 48000.0
+    private var rateListener: AudioObjectPropertyListenerBlock?
     func start(deviceID: AudioDeviceID) -> String? {
-        guard let au = engine.outputNode.audioUnit else { return "no output unit" }
-        var dev = deviceID
-        let st = AudioUnitSetProperty(au, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &dev, UInt32(MemoryLayout<AudioDeviceID>.size))
-        if st != noErr { return "set output device \(st)" }
-        engine.attach(node)
-        engine.connect(node, to: engine.mainMixerNode, format: fmt)
-        do { try engine.start() } catch { return "engine: \(error.localizedDescription)" }
-        node.play()
+        devID = deviceID
+        var a = prop(kAudioDevicePropertyNominalSampleRate); var r = Float64(0); var sz = UInt32(MemoryLayout<Float64>.size)
+        if AudioObjectGetPropertyData(deviceID, &a, 0, nil, &sz, &r) == noErr, r > 0 { rate = r }
+        let l: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            guard let self = self else { return }
+            var a = prop(kAudioDevicePropertyNominalSampleRate); var r = Float64(0); var sz = UInt32(MemoryLayout<Float64>.size)
+            if AudioObjectGetPropertyData(self.devID, &a, 0, nil, &sz, &r) == noErr, r > 0 { self.rate = r; log("BlackHole sample rate → \(Int(r)) Hz") }
+        }
+        rateListener = l
+        AudioObjectAddPropertyListenerBlock(deviceID, &a, DispatchQueue.global(), l)
+        var st = AudioDeviceCreateIOProcIDWithBlock(&proc, deviceID, DispatchQueue(label: "miacall.play", qos: .userInteractive)) { [weak self] _, _, _, out, _ in
+            self?.render(out)
+        }
+        if st != noErr { return "AudioDeviceCreateIOProcIDWithBlock \(st)" }
+        disableInputStreams()
+        st = AudioDeviceStart(deviceID, proc)
+        if st != noErr { return "AudioDeviceStart \(st)" }
         return nil
+    }
+    /// Output only: we never read BlackHole's input (no mic indicator, not an input client).
+    private func disableInputStreams() {
+        guard let p = proc else { return }
+        var a = prop(kAudioDevicePropertyIOProcStreamUsage, kAudioObjectPropertyScopeInput); var sz: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(devID, &a, 0, nil, &sz) == noErr, sz >= UInt32(MemoryLayout<UnsafeMutableRawPointer>.size + 4) else { return }
+        let raw = UnsafeMutableRawPointer.allocate(byteCount: Int(sz), alignment: 8); defer { raw.deallocate() }
+        raw.storeBytes(of: unsafeBitCast(p, to: UnsafeMutableRawPointer.self), as: UnsafeMutableRawPointer.self)
+        guard AudioObjectGetPropertyData(devID, &a, 0, nil, &sz, raw) == noErr else { return }
+        let n = Int(raw.load(fromByteOffset: MemoryLayout<UnsafeMutableRawPointer>.size, as: UInt32.self))
+        for i in 0..<n { raw.storeBytes(of: UInt32(0), toByteOffset: MemoryLayout<UnsafeMutableRawPointer>.size + 4 + 4 * i, as: UInt32.self) }
+        AudioObjectSetPropertyData(devID, &a, 0, nil, sz, raw)
+    }
+    /// Peak of the samples handed to BlackHole since the last read (proves the voice is written).
+    private var peakOut: Float = 0
+    func takePeak() -> Float { os_unfair_lock_lock(lock); defer { peakOut = 0; os_unfair_lock_unlock(lock) }; return peakOut }
+    private func render(_ out: UnsafeMutablePointer<AudioBufferList>) {
+        let abl = UnsafeMutableAudioBufferListPointer(out)
+        guard let b0 = abl.first, b0.mData != nil else { return }
+        let ch0 = max(1, Int(b0.mNumberChannels)), n = Int(b0.mDataByteSize) / 4 / ch0
+        var mono = [Float](repeating: 0, count: n)
+        let step = 24000 / rate
+        os_unfair_lock_lock(lock)
+        for i in 0..<n {
+            let j = head + Int(phase)
+            if j + 1 >= q.count { if j < q.count { mono[i] = q[j] }; head = q.count; phase = 0; break }
+            let t = Float(phase - Double(Int(phase)))
+            mono[i] = q[j] * (1 - t) + q[j + 1] * t
+            phase += step
+            if phase >= 1 { head += Int(phase); phase -= Double(Int(phase)) }
+        }
+        if head > 48000 { q.removeFirst(head); head = 0 }
+        for v in mono { peakOut = max(peakOut, abs(v)) }
+        os_unfair_lock_unlock(lock)
+        for b in abl {
+            guard let d = b.mData else { continue }
+            let ch = max(1, Int(b.mNumberChannels)), f = d.assumingMemoryBound(to: Float.self)
+            let frames = min(n, Int(b.mDataByteSize) / 4 / ch)
+            for i in 0..<frames { for c in 0..<ch { f[i * ch + c] = mono[i] } }
+        }
     }
     func play(pcm16 d: Data) {
         let n = d.count / 2
-        guard n > 0, let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(n)) else { return }
-        buf.frameLength = AVAudioFrameCount(n)
+        guard n > 0 else { return }
+        var f = [Float](repeating: 0, count: n)
         d.withUnsafeBytes { raw in
             let s = raw.bindMemory(to: Int16.self)
-            for i in 0..<n { buf.floatChannelData![0][i] = Float(Int16(littleEndian: s[i])) / 32768 }
+            for i in 0..<n { f[i] = Float(Int16(littleEndian: s[i])) / 32768 }
         }
-        node.scheduleBuffer(buf, completionHandler: nil)
+        os_unfair_lock_lock(lock); q.append(contentsOf: f); os_unfair_lock_unlock(lock)
     }
     func tone(seconds: Double, hz: Double = 440) {
         let n = Int(24000 * seconds)
@@ -194,8 +261,49 @@ final class Player {
         }
         play(pcm16: d)
     }
-    func clear() { node.stop(); node.play() }
-    func stop() { node.stop(); engine.stop() }
+    /// Seconds of audio still queued.
+    var queued: Double { os_unfair_lock_lock(lock); defer { os_unfair_lock_unlock(lock) }; return Double(q.count - head) / 24000 }
+    func clear() { os_unfair_lock_lock(lock); q.removeAll(); head = 0; phase = 0; os_unfair_lock_unlock(lock) }
+    func stop() {
+        if let p = proc { AudioDeviceStop(devID, p); AudioDeviceDestroyIOProcID(devID, p) }
+        if let l = rateListener { var a = prop(kAudioDevicePropertyNominalSampleRate); AudioObjectRemovePropertyListenerBlock(devID, &a, DispatchQueue.global(), l) }
+        proc = nil; rateListener = nil
+    }
+}
+
+/// Core Audio's view of a process: which devices it is actually playing to / recording from.
+struct AudioClient { let obj: AudioObjectID, pid: pid_t, bundle: String, outs: [String], ins: [String], runningOut: Bool, runningIn: Bool }
+func objectList(_ obj: AudioObjectID, _ sel: AudioObjectPropertySelector, _ scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> [AudioObjectID] {
+    var a = prop(sel, scope); var sz: UInt32 = 0
+    guard AudioObjectGetPropertyDataSize(obj, &a, 0, nil, &sz) == noErr, sz > 0 else { return [] }
+    var v = [AudioObjectID](repeating: 0, count: Int(sz) / MemoryLayout<AudioObjectID>.size)
+    AudioObjectGetPropertyData(obj, &a, 0, nil, &sz, &v); return v
+}
+func objString(_ obj: AudioObjectID, _ sel: AudioObjectPropertySelector) -> String {
+    var a = prop(sel); var s: Unmanaged<CFString>?; var sz = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+    guard AudioObjectGetPropertyData(obj, &a, 0, nil, &sz, &s) == noErr, let v = s else { return "" }
+    return v.takeRetainedValue() as String
+}
+func objU32(_ obj: AudioObjectID, _ sel: AudioObjectPropertySelector) -> UInt32 {
+    var a = prop(sel); var v: UInt32 = 0; var sz = UInt32(4); AudioObjectGetPropertyData(obj, &a, 0, nil, &sz, &v); return v
+}
+func audioClients() -> [AudioClient] {
+    objectList(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyProcessObjectList).map { po in
+        var a = prop(kAudioProcessPropertyPID); var pid: pid_t = 0; var sz = UInt32(4); AudioObjectGetPropertyData(po, &a, 0, nil, &sz, &pid)
+        return AudioClient(obj: po, pid: pid, bundle: objString(po, kAudioProcessPropertyBundleID),
+                           outs: objectList(po, kAudioProcessPropertyDevices, kAudioObjectPropertyScopeOutput).map { objString($0, kAudioObjectPropertyName) },
+                           ins: objectList(po, kAudioProcessPropertyDevices, kAudioObjectPropertyScopeInput).map { objString($0, kAudioObjectPropertyName) },
+                           runningOut: objU32(po, kAudioProcessPropertyIsRunningOutput) != 0, runningIn: objU32(po, kAudioProcessPropertyIsRunningInput) != 0)
+    }
+}
+/// Where MiaCall's own audio is going right now (want exactly ["BlackHole 2ch"]).
+func myOutputDevices() -> [String] { audioClients().first { $0.pid == getpid() }?.outs ?? [] }
+/// The processes that carry FaceTime call audio: avconferenced (FaceTime's audio engine),
+/// callservicesd, FaceTime, plus anyone else recording from BlackHole (= using Mia as its mic).
+let CALL_AUDIO_BUNDLES: Set<String> = ["com.apple.avconferenced", "com.apple.TelephonyUtilities", "com.apple.FaceTime", "com.apple.InCallService"]
+func callAudioClients() -> [AudioClient] {
+    let bhName = device(uid: blackholeUID).map { objString($0, kAudioObjectPropertyName) } ?? "BlackHole 2ch"
+    return audioClients().filter { c in c.pid != getpid() && (CALL_AUDIO_BUNDLES.contains(c.bundle) || (c.runningIn && c.ins.contains(bhName))) }
 }
 
 // MARK: - Accessibility (FaceTime UI)  — task 0624
@@ -400,6 +508,97 @@ func sendReturnToFaceTime() {
     log("sent Return to FaceTime (pid \(app.processIdentifier))")
 }
 
+// MARK: - FaceTime's own microphone choice (Video › Microphone) — task 0630
+// FaceTime keeps its own mic selection and can ignore the system default input, so
+// MiaCall picks "BlackHole 2ch" in FaceTime's menu before dialling and puts the old
+// choice back afterwards. Menu items are read and pressed via AX without opening the
+// menu; if the list is built lazily (empty until shown) the menu is opened via AX once.
+struct MenuItem { let title: String, checked: Bool, enabled: Bool, el: AXUIElement }
+func menuItems(_ menu: AXUIElement) -> [MenuItem] {
+    ((axAttr(menu, kAXChildrenAttribute) as? [AXUIElement]) ?? []).map { e in
+        MenuItem(title: axStr(e, kAXTitleAttribute), checked: !axStr(e, "AXMenuItemMarkChar").isEmpty,
+                 enabled: (axAttr(e, kAXEnabledAttribute) as? Bool) ?? true, el: e)
+    }
+}
+func faceTimeApp(launch: Bool) -> NSRunningApplication? {
+    if let a = NSRunningApplication.runningApplications(withBundleIdentifier: FACETIME).first { return a }
+    guard launch, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: FACETIME) else { return nil }
+    let c = NSWorkspace.OpenConfiguration(); c.activates = false; c.addsToRecentItems = false
+    NSWorkspace.shared.openApplication(at: url, configuration: c, completionHandler: nil)
+    log("FaceTime was not running: launched it (in the background) to set its microphone")
+    for _ in 0..<40 { Thread.sleep(forTimeInterval: 0.2); if let a = NSRunningApplication.runningApplications(withBundleIdentifier: FACETIME).first { return a } }
+    return nil
+}
+/// FaceTime's menu bar menus: [(menu-bar title, menu-bar item, its AXMenu)].
+func faceTimeMenus(_ app: NSRunningApplication) -> [(String, AXUIElement, AXUIElement)] {
+    let ax = AXUIElementCreateApplication(app.processIdentifier); AXUIElementSetMessagingTimeout(ax, 1.0)
+    guard let bar = axAttr(ax, kAXMenuBarAttribute) else { return [] }
+    var out: [(String, AXUIElement, AXUIElement)] = []
+    for item in (axAttr(bar as! AXUIElement, kAXChildrenAttribute) as? [AXUIElement]) ?? [] {
+        if let m = (axAttr(item, kAXChildrenAttribute) as? [AXUIElement])?.first { out.append((axStr(item, kAXTitleAttribute), item, m)) }
+    }
+    return out
+}
+/// The Microphone section: the items after a "Microphone" header up to the next separator/header;
+/// failing that, the run of items around one whose title mentions BlackHole.
+func micSection(_ items: [MenuItem]) -> [MenuItem] {
+    func isBreak(_ m: MenuItem) -> Bool { m.title.isEmpty || !m.enabled }
+    if let h = items.firstIndex(where: { $0.title.trimmingCharacters(in: .whitespaces).lowercased() == "microphone" }) {
+        var sec: [MenuItem] = []
+        for m in items[(h + 1)...] { if isBreak(m) { break }; sec.append(m) }
+        if !sec.isEmpty { return sec }
+    }
+    guard let b = items.firstIndex(where: { $0.title.lowercased().contains("blackhole") }) else { return [] }
+    var lo = b, hi = b
+    while lo > 0 && !isBreak(items[lo - 1]) { lo -= 1 }
+    while hi + 1 < items.count && !isBreak(items[hi + 1]) { hi += 1 }
+    return Array(items[lo...hi])
+}
+func describeMenu(_ items: [MenuItem]) -> String {
+    items.map { $0.title.isEmpty ? "—" : ($0.checked ? "✓" : "") + $0.title + ($0.enabled ? "" : " (header)") }.joined(separator: " | ")
+}
+/// Finds the mic list (any menu; FaceTime puts it under Video). Returns (menu title, all items, mic section, bar item, menu).
+func findMicMenu(_ app: NSRunningApplication, open: Bool) -> (String, [MenuItem], [MenuItem], AXUIElement, AXUIElement)? {
+    let menus = faceTimeMenus(app)
+    let order = menus.filter { $0.0 == "Video" } + menus.filter { $0.0 != "Video" && $0.0 != "Apple" }
+    for (t, item, m) in order {
+        var items = menuItems(m), sec = micSection(items)
+        if sec.isEmpty && open && t == "Video" {
+            // Lazily built menu: open it, read, (the caller presses an item, which closes it).
+            AXUIElementPerformAction(item, kAXPressAction as CFString); Thread.sleep(forTimeInterval: 0.4)
+            items = menuItems(m); sec = micSection(items)
+            if sec.isEmpty { AXUIElementPerformAction(m, kAXCancelAction as CFString) }
+        }
+        if !sec.isEmpty { return (t, items, sec, item, m) }
+    }
+    return nil
+}
+/// Make FaceTime's microphone `want` (substring, case-insensitive). Returns (ok, previously checked title, log line).
+@discardableResult func setFaceTimeMic(_ want: String, launch: Bool = true) -> (ok: Bool, prev: String?, info: String) {
+    guard let app = faceTimeApp(launch: launch) else { return (false, nil, "FaceTime is not running") }
+    var found: (String, [MenuItem], [MenuItem], AXUIElement, AXUIElement)?
+    for i in 0..<25 { // FaceTime's menu bar takes a moment after launch
+        found = findMicMenu(app, open: i == 3 || i == 12)
+        if found != nil { break }
+        Thread.sleep(forTimeInterval: 0.2)
+    }
+    guard let (menuTitle, all, sec, _, _) = found else {
+        let menus = faceTimeMenus(app).map { "\($0.0): " + describeMenu(menuItems($0.2)) }.joined(separator: "\n  ")
+        return (false, nil, "no Microphone list in FaceTime's menus:\n  \(menus)")
+    }
+    let prev = sec.first { $0.checked }?.title
+    let w = want.lowercased()
+    guard let target = sec.first(where: { $0.title.lowercased() == w }) ?? sec.first(where: { $0.title.lowercased().contains(w) }) else {
+        return (false, prev, "\(menuTitle) › Microphone has no \"\(want)\": \(describeMenu(sec))")
+    }
+    if target.checked { return (true, prev, "FaceTime mic already \"\(target.title)\" (\(menuTitle) menu: \(describeMenu(all)))") }
+    let r = AXUIElementPerformAction(target.el, kAXPressAction as CFString)
+    Thread.sleep(forTimeInterval: 0.5)
+    let now = findMicMenu(app, open: false)?.2.first { $0.checked }?.title
+    let ok = now.map { $0.lowercased().contains(w) } ?? (r == .success) // no checkmarks exposed: trust the press
+    return (ok, prev, "FaceTime mic \"\(prev ?? "?")\" → pressed \"\(target.title)\" (\(r.rawValue)); now checked: \"\(now ?? "?")\" (\(menuTitle) menu: \(describeMenu(all)))")
+}
+
 // MARK: - modes
 func checkPermissions(prompt: Bool) -> [String: Any] {
     let ax = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: prompt] as CFDictionary)
@@ -425,12 +624,16 @@ func selftest() -> Int32 {
     let cap = Capture()
     var heard: Float = 0, frames = 0
     cap.onPCM = { d in frames += d.count / 2; d.withUnsafeBytes { r in for s in r.bindMemory(to: Int16.self) { heard = max(heard, abs(Float(s)) / 32768) } } }
-    if let e = cap.start(excluding: me != 0 ? [me] : []) { log("selftest: capture failed: \(e)"); return 1 }
+    // 0630: like a call, tap ONE process (afplay stands in for avconferenced), not everything.
     let tone = Process(); tone.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
-    tone.arguments = ["/System/Library/Sounds/Ping.aiff"]
-    try? tone.run(); tone.waitUntilExit()
+    tone.arguments = ["/System/Library/Sounds/Submarine.aiff"]
+    try? tone.run()
+    var target: AudioObjectID = 0
+    for _ in 0..<20 { Thread.sleep(forTimeInterval: 0.05); target = processObject(pid: tone.processIdentifier); if target != 0 { break } }
+    if let e = cap.start(excluding: me != 0 ? [me] : [], processes: target != 0 ? [target] : []) { log("selftest: capture failed: \(e)"); return 1 }
+    tone.waitUntilExit()
     Thread.sleep(forTimeInterval: 0.3)
-    log(String(format: "selftest: tap → %d frames at 24 kHz, peak %.3f while afplay pinged", frames, heard))
+    log(String(format: "selftest: tap (%@) → %d frames at 24 kHz, peak %.3f while afplay played", cap.tapped, frames, heard))
     if heard < 0.01 { ok = false; log("selftest: FAIL tap heard nothing (audio capture not allowed?)") }
     // 2. our own audio (to BlackHole) is NOT in the tap (no echo into the call)
     heard = 0
@@ -489,7 +692,7 @@ final class Call {
     let id: String, key: String, to: String, relay: URL?
     var ws: URLSessionWebSocketTask?, wsOpen = false, sendErrors = 0
     let player = Player(), cap = Capture()
-    var prevInput = AudioDeviceID(0)
+    var prevInput = AudioDeviceID(0), prevFaceTimeMic: String?, micOK = false
     var state = "starting", answeredAt: Date?, ringingAt: Date?, ended = false
     let launchedAt = Date(), ringSeconds: Double, rehearsal: Bool
     var lastPressAt = Date.distantPast, sawConfirm = false
@@ -561,12 +764,19 @@ final class Call {
         guard let bh = device(uid: blackholeUID) else { return "BlackHole 2ch is not installed" }
         if !AXIsProcessTrusted() { return "MiaCall has no Accessibility permission (System Settings › Privacy & Security › Accessibility)" }
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 1.0)
-        if let e = player.start(deviceID: bh) { return "player: \(e)" }
-        player.tone(seconds: 0.05, hz: 1) // our process object, so the tap can exclude us
         prevInput = defaultDevice(input: true)
         if prevInput == bh, let mic = ProcessInfo.processInfo.environment["MIA_CALL_RESTORE_INPUT"].flatMap({ device(uid: $0) }) ?? device(uid: "BuiltInMicrophoneDevice") { prevInput = mic }
         setDefaultInput(bh)
         log("default input → BlackHole (was \(deviceUID(prevInput))); now \(deviceUID(defaultDevice(input: true)))")
+        if let e = player.start(deviceID: bh) { return "player: \(e)" }
+        player.tone(seconds: 0.05, hz: 1) // our process object, so the tap can exclude us
+        // FaceTime's own Video › Microphone choice wins over the system default: pick BlackHole there.
+        let m = setFaceTimeMic("BlackHole")
+        micOK = m.ok
+        if let p = m.prev, !p.lowercased().contains("blackhole") { prevFaceTimeMic = p }
+        log((m.ok ? "" : "WARNING: FaceTime mic NOT set to BlackHole; Daniel may not hear Mia. ") + m.info)
+        Thread.sleep(forTimeInterval: 0.3)
+        log("Mia's audio goes to: \(myOutputDevices())")
         if let relay = relay {
             var comps = URLComponents(url: relay, resolvingAgainstBaseURL: false)!
             comps.scheme = comps.scheme == "http" ? "ws" : "wss"; comps.path = "/phone/stream"
@@ -605,6 +815,8 @@ final class Call {
             if !ends.isEmpty || timer != nil {
                 go("ringing", confirmPresses == 0 ? "call UI up without a confirmation" : "call UI up after \(confirmPresses) press(es)")
                 ringingAt = Date(); send(["event": "ringing"])
+                let m = setFaceTimeMic("BlackHole", launch: false) // in-call check: FaceTime may reset it per call
+                log("in call: " + (m.ok ? "" : "WARNING ") + m.info)
                 if !broughtForward { bringFaceTimeForward(); broughtForward = true } // so its call window is on this Space
             } else if sawConfirm && confirmPresses > 0 && calls.isEmpty && acts.isEmpty && Date().timeIntervalSince(lastPressAt) > 1.4 {
                 go("ringing", "confirmation gone after \(confirmPresses) press(es); no End button seen yet")
@@ -655,7 +867,9 @@ final class Call {
             }
             if Date().timeIntervalSince(lastStats) >= 5 {
                 lastStats = Date()
-                log(String(format: "live %d s: timer %@, relay audio %d chunks / %.1f s, call audio rms %.4f", Int(inState), timer ?? "-", mediaIn, Double(mediaBytes) / 48000, cap.rms))
+                let outs = myOutputDevices()
+                log(String(format: "live %d s: timer %@, relay audio %d chunks / %.1f s, call audio rms %.4f, Mia → %@", Int(inState), timer ?? "-", mediaIn, Double(mediaBytes) / 48000, cap.rms, outs.description))
+                if outs.contains(where: { !$0.lowercased().contains("blackhole") }) { log("WARNING: Mia's audio is reaching \(outs), not only BlackHole") }
             }
             if rehearsal && inState > 10 { return finish("completed", "rehearsal done") }
             if inState > 330 { return finish("completed", "time cap (Mac)") }
@@ -667,7 +881,14 @@ final class Call {
         go("live", why); answeredAt = Date(); log("answered (\(why))")
         let me = processObject(pid: getpid())
         cap.onPCM = { [weak self] d in self?.send(["event": "media", "media": ["payload": d.base64EncodedString()]]) }
-        if let e = cap.start(excluding: me != 0 ? [me] : []) { log("capture failed: \(e)"); return finish("failed", "no audio capture permission") }
+        // Daniel's side = FaceTime's call output (process tap), never a microphone.
+        let callers = ProcessInfo.processInfo.environment["MIA_CALL_TAP"] == "global" ? [] : callAudioClients()
+        log("call-audio processes: " + (callers.isEmpty ? "none found → tapping everything but MiaCall" : callers.map { "\($0.bundle.isEmpty ? "pid \($0.pid)" : $0.bundle) out=\($0.outs) in=\($0.ins)" }.joined(separator: "; ")))
+        if let e = cap.start(excluding: me != 0 ? [me] : [], processes: callers.map { $0.obj }) { log("capture failed: \(e)"); return finish("failed", "no audio capture permission") }
+        axq.asyncAfter(deadline: .now() + 3) {
+            let playing = audioClients().filter { $0.runningOut && $0.pid != getpid() }.map { "\($0.bundle.isEmpty ? "pid \($0.pid)" : $0.bundle)→\($0.outs)" }
+            log("+3 s: processes playing audio: \(playing); Mia → \(myOutputDevices())")
+        }
         send(["event": "answered"])
         if rehearsal { speakFallback("This is Mia's rehearsal call.") }
         axq.asyncAfter(deadline: .now() + 0.7) { self.tick() }
@@ -702,6 +923,7 @@ final class Call {
             axq.asyncAfter(deadline: .now() + 0.6) {
                 self.player.stop()
                 if self.prevInput != 0 { setDefaultInput(self.prevInput); log("default input restored → \(deviceUID(defaultDevice(input: true)))") }
+                if let p = self.prevFaceTimeMic { log("restore: " + setFaceTimeMic(p, launch: false).info) }
                 self.wsOpen = false
                 self.ws?.cancel(with: .normalClosure, reason: nil)
                 writeResult(["id": self.id, "reason": reason, "detail": detail, "seconds": self.answeredAt.map { Int(Date().timeIntervalSince($0)) } ?? 0, "state": self.state])
@@ -715,11 +937,43 @@ final class Call {
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 if flags.contains("--check") {
-    let r = checkPermissions(prompt: true)
+    var r = checkPermissions(prompt: true)
+    if (r["accessibility"] as? Bool) == true {
+        // 0630: can MiaCall switch FaceTime's own mic? Select BlackHole, then put the old one back.
+        let m = setFaceTimeMic("BlackHole")
+        r["faceTimeMic"] = m.ok; log("check: " + m.info)
+        if let p = m.prev, !p.lowercased().contains("blackhole") { log("check: restore: " + setFaceTimeMic(p, launch: false).info) }
+    }
     log("check: \(r)"); writeResult(r)
     exit(((r["accessibility"] as? Bool) == true && (r["audioCapture"] as? Bool) == true && (r["blackhole"] as? Bool) == true) ? 0 : 1)
 }
 if flags.contains("--selftest") { exit(selftest()) }
+if flags.contains("--mic") {
+    // FaceTime's Video › Microphone: show it and select BlackHole (or MIA_CALL_MIC), no call.
+    AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 1.0)
+    let r = setFaceTimeMic(ProcessInfo.processInfo.environment["MIA_CALL_MIC"] ?? "BlackHole")
+    log("mic: ok=\(r.ok) prev=\(r.prev ?? "-") \(r.info)"); exit(r.ok ? 0 : 1)
+}
+if flags.contains("--route-test") {
+    // The 0630 bug, no call: start the player, then switch the default input to BlackHole
+    // (what broke the AVAudioEngine player), play TTS and check where Core Audio sends it.
+    guard let bh = device(uid: blackholeUID) else { log("route-test: no BlackHole"); exit(2) }
+    let prev = defaultDevice(input: true)
+    let p = Player(); if let e = p.start(deviceID: bh) { log("route-test: \(e)"); exit(1) }
+    guard let d = sayPCM16("Hi Daniel, it's Mia. This should only go into BlackHole.") else { log("route-test: say failed"); exit(1) }
+    p.play(pcm16: d)
+    var bad = false
+    for i in 0..<8 {
+        if i == 2 { setDefaultInput(bh); log("route-test: default input → \(deviceUID(defaultDevice(input: true)))") }
+        Thread.sleep(forTimeInterval: 0.4)
+        let o = myOutputDevices(); let pk = p.takePeak()
+        log("route-test: t+\(String(format: "%.1f", Double(i + 1) * 0.4)) s Mia → \(o), written peak \(String(format: "%.3f", pk)), queued \(String(format: "%.1f", p.queued)) s")
+        if i < 6 && pk < 0.01 { bad = true }
+        if o.isEmpty || o.contains(where: { !$0.lowercased().contains("blackhole") }) { bad = true }
+    }
+    setDefaultInput(prev); log("route-test: default input restored → \(deviceUID(defaultDevice(input: true)))")
+    p.stop(); log("route-test: \(bad ? "FAIL" : "PASS") (Mia's audio only in BlackHole)"); exit(bad ? 1 : 0)
+}
 if flags.contains("--dump") {
     AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 1.0)
     exploreAll = flags.contains("--all")
@@ -744,7 +998,7 @@ if flags.contains("--rehearse") {
     app.run()
 }
 guard let id = opts["--call"], let key = opts["--key"], let to = opts["--to"], let r = opts["--relay"], let relay = URL(string: r) else {
-    log("usage: MiaCall --call <id> --key <k> --to <+27…> --relay <url> | --check | --selftest | --dump [--all] | --say-test | --rehearse [--to N]"); exit(2)
+    log("usage: MiaCall --call <id> --key <k> --to <+27…> --relay <url> | --check | --selftest | --dump [--all] | --say-test | --route-test | --mic | --rehearse [--to N]"); exit(2)
 }
 let call = Call(id: id, key: key, to: to, relay: relay, rehearsal: false)
 axq.async { if let e = call.start() { log("cannot call: \(e)"); writeResult(["id": id, "reason": "failed", "detail": e]); exit(1) } }
