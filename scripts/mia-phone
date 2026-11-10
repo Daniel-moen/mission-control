@@ -9,6 +9,11 @@
                                    "(phone) …" message); --hangup: then say goodbye
   mia call-hangup <call_id>        end the call now
   mia call-status [--json]         configured?, live call, recent calls, limits
+  mia-phone incoming --from "<caller as FaceTime shows it>"
+                                   (used by MiaCall --listen, task 0636) Daniel is FaceTiming
+                                   Mia: checks the caller, opens the call on the relay and
+                                   prints JSON {ok,id,key,relay} | {ok:false,ignore:true} (let
+                                   it ring) | {ok:false,line:"…"} (answer, say it, hang up)
 
 The call: Daniel's iPhone rings with a FaceTime Audio call from Mia's Apple ID
 (MiaCall.app on this Mac dials it; the Mac must be awake). Log per call:
@@ -26,6 +31,7 @@ Remote settings.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -33,6 +39,9 @@ import urllib.request
 
 MIA_DIR = os.path.abspath(os.path.expanduser(os.environ.get("MIA_DIR") or "~/.mission-control/mia"))
 PHONE_FILE = os.path.join(MIA_DIR, "phone.txt")
+# Who may phone Mia (task 0636): phone.txt's number plus this file's lines: numbers
+# (+27…), Apple ID emails, or "name:<contact name exactly as FaceTime shows it>".
+CALLERS_FILE = os.path.join(MIA_DIR, "phone-callers.txt")
 
 
 def die(msg, code=1):
@@ -158,6 +167,82 @@ def cmd_call(args):
     print("ringing Daniel; his words arrive as \"(phone) …\" messages — answer with: mia call-say %s \"…\"" % data["id"], file=sys.stderr)
 
 
+def allowed_callers():
+    nums, emails, names = set(), set(), set()
+    lines = []
+    for f in (PHONE_FILE, CALLERS_FILE):
+        try:
+            lines += open(f).read().splitlines()
+        except Exception:
+            pass
+    for raw in lines:
+        l = raw.split("#", 1)[0].strip()
+        if not l:
+            continue
+        if l.lower().startswith("name:"):
+            n = l[5:].strip().lower()
+            if n:
+                names.add(n)
+        elif "@" in l:
+            emails.add(l.lower())
+        else:
+            d = re.sub(r"\D", "", l)
+            if len(d) >= 9:
+                nums.add(d[-9:])
+    return nums, emails, names
+
+
+BIDI = re.compile("[\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+
+
+def caller_matches(label):
+    """Is this caller (the text of FaceTime's incoming-call notification) Daniel?
+    Numbers match on their last 9 digits, emails exactly, names as a whole comma part."""
+    nums, emails, names = allowed_callers()
+    t = BIDI.sub("", label or "")
+    email_rx = r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+"
+    for e in re.findall(email_rx, t):
+        if e.lower() in emails:
+            return True
+    t = re.sub(email_rx, " ", t)  # digits inside someone's email are not his number
+    for m in re.findall(r"\+?\d[\d\s().-]{7,}\d", t):
+        d = re.sub(r"\D", "", m)
+        if len(d) >= 9 and d[-9:] in nums:
+            return True
+    parts = [p.strip().lower() for p in re.split(r"[,\n]", t)]
+    return any(p in names for p in parts if p)
+
+
+def cmd_incoming(args):
+    """MiaCall --listen saw an incoming FaceTime call. Always prints one JSON line."""
+    _, o = flags(args, {"--from="})
+    label = o.get("--from") or ""
+    def out(obj, code=0):
+        print(json.dumps(obj))
+        sys.exit(code)
+    if not caller_matches(label):
+        out({"ok": False, "ignore": True, "reason": "not Daniel"}, 4)
+    try:
+        url, _ = relay()
+    except SystemExit:
+        out({"ok": False, "error": "no relay configured", "line": "Sorry Daniel, my voice line is down right now. Text me instead."}, 1)
+    try:
+        status, data = call_api("POST", "/phone/incoming", {"from": "Daniel", "via": "facetime"})
+    except SystemExit:
+        out({"ok": False, "error": "relay unreachable", "line": "Sorry Daniel, my voice line is down right now. Text me instead."}, 1)
+    if status == 200 and data.get("ok"):
+        out({"ok": True, "id": data["id"], "key": data["key"], "relay": url})
+    if data.get("configured") is False:
+        data.setdefault("line", "Sorry Daniel, my voice line isn't set up. Text me instead.")
+    res = {"ok": False, "status": status, "error": data.get("error") or ("HTTP %d" % status)}
+    for k in ("line", "ignore", "voice", "id"):
+        if k in data:
+            res[k] = data[k]
+    if "line" not in res and not res.get("ignore"):
+        res["line"] = "Sorry Daniel, my voice line isn't working right now. Text me instead."
+    out(res, 3)
+
+
 def cmd_say(args):
     pos, o = flags(args, {"--hangup"})
     if len(pos) < 2:
@@ -204,7 +289,7 @@ def main(argv):
         print(__doc__.strip())
         return
     table = {"call": cmd_call, "say": cmd_say, "call-say": cmd_say, "hangup": cmd_hangup, "call-hangup": cmd_hangup,
-             "status": cmd_status, "call-status": cmd_status}
+             "status": cmd_status, "call-status": cmd_status, "incoming": cmd_incoming, "call-incoming": cmd_incoming}
     if argv[0] not in table:
         die("unknown command %s (try: mia-phone help)" % argv[0], 2)
     table[argv[0]](argv[1:])

@@ -586,6 +586,81 @@ try {
   h2.ws.close();
   await stop(relay);
 
+  // =================================================================== incoming (task 0636: Daniel FaceTimes Mia)
+  console.log('incoming');
+  relay = boot({ OPENAI_API_KEY: 'sk-test', OPENAI_BASE_URL: `http://127.0.0.1:${MOCK_PORT}`, PHONE_PER_HOUR: '1', PHONE_IN_PER_HOUR: '3', PHONE_QUIET: '0-23:59' }, 'incoming');
+  await up();
+  h2 = await connectHost();
+  const PHONE_CLI = path.join(DIR, '..', '..', 'scripts', 'mia-phone');
+  const inEnv = { ...process.env, MIA_DIR: path.join(TMP, 'mia'), MC_RELAY_URL: PUBLIC, MC_TOKEN: TOKEN, MC_DOC_NO_DEFAULTS: '1' };
+  ok((await api('POST', '/phone/incoming', {}, 'nope')).status === 401, 'POST /phone/incoming without the token → 401');
+  const nIn = h2.frames.length;
+  let ic = await runAsync('python3', [PHONE_CLI, 'incoming', '--from', '‪+27 (83) 561-5106‬, FaceTime Audio'], inEnv);
+  let icj = JSON.parse(ic.stdout.trim().split('\n').pop() || '{}');
+  ok(ic.status === 0 && icj.ok === true && /^c_/.test(icj.id) && /^[0-9a-f]{32}$/.test(icj.key) && icj.relay === PUBLIC, 'mia-phone incoming (Daniel\'s number) → call id + stream key + relay for MiaCall');
+  ok(await waitFor(() => h2.frames.slice(nIn).some((f) => f.type === 'miaSend' && f.text.startsWith(`(phone) [incoming call ${icj.id} from Daniel`))), 'Mia is told "(phone) [incoming call c_… from Daniel]"');
+  const callsNow = (await api('GET', '/phone')).json;
+  ok(callsNow.calls.find((c) => c.id === icj.id)?.inbound === true && callsNow.live.includes(icj.id), 'logged as an inbound live call');
+  ok((await api('POST', '/phone/incoming', {})).json.ignore === true, 'a second incoming call while one is live → ignore (let it ring)');
+  const stranger = await runAsync('python3', [PHONE_CLI, 'incoming', '--from', '+27 (82) 111-2222, FaceTime Audio'], inEnv);
+  ok(stranger.status === 4 && /"ignore": true/.test(stranger.stdout), 'a stranger → ignore, exit 4');
+  const fi = { got: [] };
+  fi.ws = new WebSocket(`ws://127.0.0.1:${PORT}/phone/stream`);
+  await new Promise((r) => fi.ws.once('open', r));
+  fi.ws.on('message', (d) => fi.got.push(JSON.parse(d.toString())));
+  const si = mock.sockets.length;
+  fi.ws.send(JSON.stringify({ event: 'start', start: { streamSid: 'fi1', customParameters: { call: icj.id, key: icj.key, format: 'pcm16', wait: '1' } } }));
+  await sleep(200);
+  ok(mock.sockets.length === si, 'no voice before MiaCall has picked up');
+  fi.ws.send(JSON.stringify({ event: 'answered' }));
+  ok(await waitFor(() => mock.sockets.length > si && mock.sockets.at(-1).got.some((e) => e.type === 'session.update')), 'picked up → Realtime session');
+  const isock = mock.sockets.at(-1);
+  const isu = isock.got.find((e) => e.type === 'session.update').session;
+  ok(isu.instructions.includes('Yes, Daniel?') && isu.instructions.includes('He rang you') && !isu.instructions.includes('You rang him') && !isu.instructions.includes('Why you are calling'), 'inbound persona: he rang her; greeting "Yes, Daniel?"');
+  ok(isu.audio.input.format.rate === 24000 && isock.got.some((e) => e.type === 'response.create'), '24 kHz PCM16, and she speaks first (the greeting)');
+  const nIn2 = h2.frames.length;
+  isock.ws.send(JSON.stringify({ type: 'input_audio_buffer.speech_started' }));
+  isock.ws.send(JSON.stringify(toolCall('send_to_mia', { text: 'Remind me to call the bank at three.' })));
+  ok(await waitFor(() => h2.frames.slice(nIn2).some((f) => f.type === 'miaSend' && f.text.startsWith('(phone) Remind me to call the bank at three.') && f.text.includes(`mia call-say ${icj.id}`))), 'his words reach Mia as "(phone) …"');
+  ok((await api('POST', '/phone/say', { id: icj.id, text: 'Done, three o\'clock.' })).status === 200, 'mia call-say works in an incoming call');
+  fi.ws.send(JSON.stringify({ event: 'stop', stop: { reason: 'completed', detail: 'Daniel hung up' } }));
+  ok(await waitFor(() => h2.frames.slice(nIn2).some((f) => f.type === 'miaSend' && f.text.startsWith(`(phone) [incoming call ${icj.id} ended`))), 'Mia hears "(phone) [incoming call … ended]"');
+  const out1 = await api('POST', '/phone/call', { to: DANIEL, message: 'outbound after inbound', urgent: true });
+  ok(out1.status === 200, 'incoming calls ignore quiet hours and do not count against the outbound cap (PHONE_PER_HOUR=1 still free)');
+  await api('POST', '/phone/hangup', { id: out1.json.id });
+  ok(await waitFor(async () => !(await api('GET', '/phone')).json.live.length), 'outbound test call ended');
+  // the inbound cap: 3/h here (10/h by default)
+  for (let i = 0; i < 2; i += 1) {
+    const r = await api('POST', '/phone/incoming', {});
+    ok(r.status === 200, `incoming #${i + 2} within the cap`);
+    const w = new WebSocket(`ws://127.0.0.1:${PORT}/phone/stream`);
+    await new Promise((r2) => w.once('open', r2));
+    w.send(JSON.stringify({ event: 'start', start: { streamSid: 'x', customParameters: { call: r.json.id, key: r.json.key, format: 'pcm16', wait: '1' } } }));
+    await sleep(100);
+    w.close();
+    await waitFor(async () => !(await api('GET', '/phone')).json.live.length);
+  }
+  const capped = await api('POST', '/phone/incoming', {});
+  ok(capped.status === 429 && /3 incoming calls an hour/.test(capped.json.error) && /text me/i.test(capped.json.line || ''), 'over the inbound cap → 429 with a local line to say');
+  const capCli = await runAsync('python3', [PHONE_CLI, 'incoming', '--from', DANIEL], inEnv);
+  ok(capCli.status === 3 && /"line": "Sorry Daniel/.test(capCli.stdout), 'mia-phone incoming over the cap → {line} for MiaCall, exit 3');
+  ok((await (await fetch(`${PUBLIC}/health`)).json()).phone.limits.inPerHour === 3, '/health shows the inbound cap');
+  h2.ws.close();
+  await stop(relay);
+  // no credit: answer, say the line, hang up
+  mock.noCredits = true;
+  relay = boot({ OPENAI_API_KEY: 'sk-test', OPENAI_BASE_URL: `http://127.0.0.1:${MOCK_PORT}` }, 'incoming-nocredit');
+  await up();
+  h2 = await connectHost();
+  ic = await runAsync('python3', [PHONE_CLI, 'incoming', '--from', 'Daniel Moen'], { ...inEnv, MIA_DIR: (() => { const d = path.join(TMP, 'mia-names'); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, 'phone.txt'), `${DANIEL}\n`); fs.writeFileSync(path.join(d, 'phone-callers.txt'), 'name:Daniel Moen\n'); return d; })() });
+  icj = JSON.parse(ic.stdout.trim().split('\n').pop() || '{}');
+  ok(icj.ok === false && icj.voice === false && icj.line === 'Sorry Daniel, my voice line is out of credit. Text me instead.', 'no OpenAI credit → MiaCall gets the "out of credit, text me instead" line (caller matched by contact name)');
+  ok(await waitFor(() => h2.frames.some((f) => f.type === 'miaSend' && /Daniel phoned.*out of credit/.test(f.text))), 'Mia is told Daniel phoned but the voice had no credit');
+  ok((await api('GET', '/phone')).json.calls.some((c) => c.inbound && c.status === 'failed' && /credit/.test(c.why || '')), 'logged (counts toward the inbound cap)');
+  mock.noCredits = false;
+  h2.ws.close();
+  await stop(relay);
+
   // =================================================================== voice probe (task 0629)
   console.log('voice probe');
   mock.noCredits = true;
